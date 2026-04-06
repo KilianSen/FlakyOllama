@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -22,6 +23,7 @@ type Balancer struct {
 	Config          *config.Config
 	PendingRequests map[string]int       // model_name -> count
 	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
+	Queue           *RequestQueue
 	Mu              sync.RWMutex
 }
 
@@ -42,12 +44,35 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		Config:          cfg,
 		PendingRequests: make(map[string]int),
 		ModelLastUsed:   make(map[string]time.Time),
+		Queue:           NewRequestQueue(),
 	}, nil
 }
 
 func (b *Balancer) StartBackgroundTasks() {
 	b.StartPoller()
 	b.StartKeepAliveCleaner()
+	b.StartWorkerPool(10) // 10 workers for routing
+}
+
+func (b *Balancer) StartWorkerPool(workers int) {
+	for i := 0; i < workers; i++ {
+		go b.worker()
+	}
+}
+
+func (b *Balancer) worker() {
+	for {
+		select {
+		case <-b.Queue.Wait():
+			req := b.Queue.Pop()
+			if req == nil {
+				continue
+			}
+			
+			id, addr, err := b.Route(req.Request)
+			req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
+		}
+	}
 }
 
 func (b *Balancer) StartKeepAliveCleaner() {
@@ -95,6 +120,7 @@ func (b *Balancer) Register(req models.RegisterRequest) {
 	b.Agents[req.ID] = &models.NodeStatus{
 		ID:      req.ID,
 		Address: req.Address,
+		State:   models.StateHealthy,
 	}
 	log.Printf("Registered agent: %s at %s", req.ID, req.Address)
 }
@@ -123,6 +149,7 @@ func (b *Balancer) pollAgents() {
 			resp, err := http.Get("http://" + a.Address + "/telemetry")
 			if err != nil {
 				log.Printf("Failed to poll agent %s: %v", a.ID, err)
+				b.recordError(a.ID)
 				return
 			}
 			defer resp.Body.Close()
@@ -130,6 +157,9 @@ func (b *Balancer) pollAgents() {
 			var status models.NodeStatus
 			if err := json.NewDecoder(resp.Body).Decode(&status); err == nil {
 				b.Mu.Lock()
+				// Preserving internal state while updating telemetry
+				status.State = b.Agents[a.ID].State
+				status.Errors = b.Agents[a.ID].Errors
 				b.Agents[a.ID] = &status
 				b.Mu.Unlock()
 			}
@@ -155,7 +185,7 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 
 	foundLoaded := false
 	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second {
+		if time.Since(a.LastSeen) > time.Second || a.State == models.StateBroken {
 			continue
 		}
 		if a.VRAMTotal < minVRAM {
@@ -163,12 +193,20 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 		}
 
 		perf, _ := b.Storage.GetPerformance(a.ID, req.Model)
-		score := (1.0 - (a.CPUUsage / 100.0))
+		
+		// Advanced Scoring Engine
+		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
+		
 		if perf.SuccessRate > 0 {
-			score *= perf.SuccessRate
+			score *= (perf.SuccessRate * b.Config.Weights.SuccessRateWeight)
 		}
 		if perf.AvgLatency > 0 {
-			score *= (1.0 / perf.AvgLatency)
+			score *= ((1.0 / perf.AvgLatency) * b.Config.Weights.LatencyWeight)
+		}
+
+		// Degradation Penalty
+		if a.State == models.StateDegraded {
+			score *= 0.5
 		}
 
 		hasModel := false
@@ -181,7 +219,7 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 		}
 
 		if hasModel {
-			score *= 2.0
+			score *= b.Config.Weights.LoadedModelBonus
 		}
 
 		if score > bestScore {
@@ -208,7 +246,7 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	defer b.Mu.RUnlock()
 
 	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second || a.VRAMTotal < minVRAM {
+		if time.Since(a.LastSeen) > time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken {
 			continue
 		}
 		hasModel := false
@@ -232,10 +270,12 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/register", b.HandleRegister)
 	mux.HandleFunc("/api/generate", b.HandleGenerate)
+	mux.HandleFunc("/api/chat", b.HandleChat)
+	mux.HandleFunc("/api/tags", b.HandleTags)
+	mux.HandleFunc("/status", b.HandleStatus)
 	return mux
 }
 
-// Serve starts the Balancer HTTP server.
 func (b *Balancer) Serve() error {
 	log.Printf("Balancer listening on %s", b.Address)
 	return http.ListenAndServe(b.Address, b.NewMux())
@@ -251,6 +291,54 @@ func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (b *Balancer) HandleTags(w http.ResponseWriter, r *http.Request) {
+	b.Mu.RLock()
+	defer b.Mu.RUnlock()
+
+	modelMap := make(map[string]bool)
+	for _, agent := range b.Agents {
+		for _, model := range agent.ActiveModels {
+			modelMap[model] = true
+		}
+	}
+
+	var modelList []models.ModelInfo
+	for m := range modelMap {
+		modelList = append(modelList, models.ModelInfo{
+			Name:       m,
+			ModifiedAt: time.Now(),
+		})
+	}
+
+	json.NewEncoder(w).Encode(models.TagsResponse{Models: modelList})
+}
+
+func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
+	var req models.ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	b.Mu.Lock()
+	b.PendingRequests[req.Model]++
+	b.Mu.Unlock()
+	defer func() {
+		b.Mu.Lock()
+		b.PendingRequests[req.Model]--
+		b.Mu.Unlock()
+	}()
+
+	resCh := b.Queue.Push(models.InferenceRequest{Model: req.Model, Stream: req.Stream}, 1)
+	res := <-resCh
+	if res.Err != nil {
+		http.Error(w, res.Err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	b.proxyStream(w, res.AgentID, res.AgentAddr, "/chat", req)
+}
+
 func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	var req models.InferenceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -261,54 +349,71 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	b.Mu.Lock()
 	b.PendingRequests[req.Model]++
 	b.Mu.Unlock()
-	
 	defer func() {
 		b.Mu.Lock()
 		b.PendingRequests[req.Model]--
 		b.Mu.Unlock()
 	}()
 
-	maxRetries := 3
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		agentID, agentAddr, err := b.Route(req)
-		if err != nil {
-			lastErr = err
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		start := time.Now()
-		body, _ := json.Marshal(req)
-		resp, err := http.Post("http://"+agentAddr+"/inference", "application/json", bytes.NewBuffer(body))
-		
-		success := err == nil && resp != nil && resp.StatusCode == http.StatusOK
-		latency := time.Since(start)
-		
-		go b.Storage.RecordMetric(agentID, req.Model, latency, success)
-
-		if !success {
-			if resp != nil {
-				resp.Body.Close()
-			}
-			lastErr = fmt.Errorf("agent %s failed (err: %v)", agentID, err)
-			continue
-		}
-		defer resp.Body.Close()
-
-		b.Mu.Lock()
-		b.ModelLastUsed[agentID+":"+req.Model] = time.Now()
-		b.Mu.Unlock()
-
-		var result models.InferenceResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			lastErr = err
-			continue
-		}
-
-		json.NewEncoder(w).Encode(result)
+	resCh := b.Queue.Push(req, 1)
+	res := <-resCh
+	if res.Err != nil {
+		http.Error(w, res.Err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 
-	http.Error(w, fmt.Sprintf("failed after %d retries: %v", maxRetries, lastErr), http.StatusServiceUnavailable)
+	b.proxyStream(w, res.AgentID, res.AgentAddr, "/inference", req)
+}
+
+func (b *Balancer) proxyStream(w http.ResponseWriter, agentID, agentAddr, path string, req interface{}) {
+	body, _ := json.Marshal(req)
+	resp, err := http.Post("http://"+agentAddr+path, "application/json", bytes.NewBuffer(body))
+	
+	if err != nil || resp.StatusCode != http.StatusOK {
+		b.recordError(agentID)
+		http.Error(w, "agent failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	b.recordSuccess(agentID)
+	
+	// Update last used for keep-alive
+	modelName := ""
+	if r, ok := req.(models.InferenceRequest); ok { modelName = r.Model }
+	if r, ok := req.(models.ChatRequest); ok { modelName = r.Model }
+	
+	if modelName != "" {
+		b.Mu.Lock()
+		b.ModelLastUsed[agentID+":"+modelName] = time.Now()
+		b.Mu.Unlock()
+	}
+
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func (b *Balancer) recordError(id string) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if a, ok := b.Agents[id]; ok {
+		a.Errors++
+		if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
+			a.State = models.StateBroken
+		} else {
+			a.State = models.StateDegraded
+		}
+	}
+}
+
+func (b *Balancer) recordSuccess(id string) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if a, ok := b.Agents[id]; ok {
+		a.Errors = 0
+		a.State = models.StateHealthy
+	}
 }

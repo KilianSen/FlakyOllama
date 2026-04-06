@@ -1,0 +1,32 @@
+# Build stage
+FROM golang:1.26-alpine AS builder
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=1 GOOS=linux go build -o flakyollama main.go
+
+# Final stage
+FROM ollama/ollama:latest
+
+# Install curl for entrypoint healthcheck
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /root/
+
+# Copy the binary from the builder
+COPY --from=builder /app/flakyollama .
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+# Default environment variables for Agent role
+ENV ROLE=agent
+ENV AGENT_ID=agent-1
+ENV AGENT_ADDR=0.0.0.0:8081
+ENV BALANCER_URL=http://balancer:8080
+ENV OLLAMA_URL=http://localhost:11434
+
+EXPOSE 8081 11434
+
+ENTRYPOINT ["./entrypoint.sh"]

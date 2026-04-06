@@ -23,6 +23,12 @@ func NewMonitor() *Monitor {
 func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 	var status models.NodeStatus
 
+	// Get CPU cores
+	count, err := cpu.Counts(true)
+	if err == nil {
+		status.CPUCores = count
+	}
+
 	// Get CPU usage
 	cpuPercent, err := cpu.Percent(time.Millisecond*50, false)
 	if err == nil && len(cpuPercent) > 0 {
@@ -39,8 +45,9 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 	err = m.collectGPUMetrics(&status)
 	if err != nil {
 		// Mocking GPU if nvidia-smi fails
-		status.VRAMTotal = 8 * 1024 * 1024 * 1024 // 8GB
-		status.VRAMUsed = uint64(rand.Intn(4 * 1024 * 1024 * 1024))
+		status.GPUModel = "Mock GPU (NVIDIA RTX 4090)"
+		status.VRAMTotal = 24 * 1024 * 1024 * 1024 // 24GB
+		status.VRAMUsed = uint64(rand.Intn(8 * 1024 * 1024 * 1024))
 		status.GPUTemperature = 40.0 + rand.Float64()*20.0
 	}
 
@@ -48,7 +55,7 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 }
 
 func (m *Monitor) collectGPUMetrics(status *models.NodeStatus) error {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=memory.total,memory.used,temperature.gpu", "--format=csv,noheader,nounits")
+	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.total,memory.used,temperature.gpu", "--format=csv,noheader,nounits")
 	output, err := cmd.Output()
 	if err != nil {
 		return err
@@ -61,13 +68,14 @@ func (m *Monitor) collectGPUMetrics(status *models.NodeStatus) error {
 
 	// Just take the first GPU for now
 	parts := strings.Split(lines[0], ",")
-	if len(parts) < 3 {
+	if len(parts) < 4 {
 		return nil
 	}
 
-	total, _ := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 64)
-	used, _ := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
-	temp, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+	status.GPUModel = strings.TrimSpace(parts[0])
+	total, _ := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
+	used, _ := strconv.ParseUint(strings.TrimSpace(parts[2]), 10, 64)
+	temp, _ := strconv.ParseFloat(strings.TrimSpace(parts[3]), 64)
 
 	status.VRAMTotal = total * 1024 * 1024 // nvidia-smi returns MiB
 	status.VRAMUsed = used * 1024 * 1024

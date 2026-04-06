@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -57,6 +58,7 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/telemetry", a.HandleTelemetry)
 	mux.HandleFunc("/inference", a.HandleInference)
+	mux.HandleFunc("/chat", a.HandleChat)
 	mux.HandleFunc("/models/pull", a.HandlePull)
 	mux.HandleFunc("/models/unload", a.HandleUnload)
 	return mux
@@ -117,11 +119,33 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	resp, err := a.Ollama.Generate(req)
+	stream, code, err := a.Ollama.GenerateStream(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer stream.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream)
+}
+
+func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
+	var req models.ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	
-	json.NewEncoder(w).Encode(resp)
+	stream, code, err := a.Ollama.ChatStream(req)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer stream.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream)
 }

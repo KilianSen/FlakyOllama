@@ -18,33 +18,46 @@ func NewClient(baseURL string) *Client {
 	return &Client{BaseURL: baseURL}
 }
 
-// Generate sends an inference request to Ollama.
-func (c *Client) Generate(req models.InferenceRequest) (models.InferenceResponse, error) {
+// GenerateStream sends an inference request and returns the streaming response body.
+func (c *Client) GenerateStream(req models.InferenceRequest) (io.ReadCloser, int, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return models.InferenceResponse{}, err
+		return nil, 0, err
 	}
 
 	resp, err := http.Post(c.BaseURL+"/api/generate", "application/json", bytes.NewBuffer(body))
 	if err != nil {
-		return models.InferenceResponse{}, err
+		return nil, 0, err
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return models.InferenceResponse{}, fmt.Errorf("ollama error: %s", string(respBody))
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("ollama error: %s", string(respBody))
 	}
 
-	// For simplicity, we assume non-streaming for now, but in reality we'd handle both.
-	var result struct {
-		Response string `json:"response"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return models.InferenceResponse{}, err
+	return resp.Body, resp.StatusCode, nil
+}
+
+// ChatStream sends a chat request and returns the streaming response body.
+func (c *Client) ChatStream(req models.ChatRequest) (io.ReadCloser, int, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	return models.InferenceResponse{Response: result.Response}, nil
+	resp, err := http.Post(c.BaseURL+"/api/chat", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("ollama error: %s", string(respBody))
+	}
+
+	return resp.Body, resp.StatusCode, nil
 }
 
 // GetLoadedModels returns the list of models currently loaded.

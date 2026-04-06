@@ -55,10 +55,9 @@ func TestIntegration(t *testing.T) {
 		t.Fatalf("Failed to register agent: %v", err)
 	}
 
-	// 5. Manually trigger a poll to update agent status in balancer
-	// (Since poller is async and uses time.Sleep, we'll wait a bit or call it manually)
-	b.StartPoller()
-	time.Sleep(200 * time.Millisecond) // Wait for at least one poll
+	// 5. Start background tasks (poller, workers, etc.)
+	b.StartBackgroundTasks()
+	time.Sleep(1000 * time.Millisecond) // Wait for at least one poll
 
 	// 6. Send an inference request to the Balancer
 	req := models.InferenceRequest{

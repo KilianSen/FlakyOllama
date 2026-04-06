@@ -7,10 +7,24 @@ import (
 
 // Config represents the application configuration.
 type Config struct {
-	KeepAliveDurationSec int     `json:"keep_alive_duration_sec"`
-	StaleThreshold       int     `json:"stale_threshold"` // Pending requests per model
-	LoadThreshold        float64 `json:"load_threshold"`  // CPU Load percentage
-	PollIntervalMs       int     `json:"poll_interval_ms"`
+	KeepAliveDurationSec int            `json:"keep_alive_duration_sec"`
+	StaleThreshold       int            `json:"stale_threshold"` // Pending requests per model
+	LoadThreshold        float64        `json:"load_threshold"`  // CPU Load percentage
+	PollIntervalMs       int            `json:"poll_interval_ms"`
+	Weights              RoutingWeights `json:"weights"`
+	CircuitBreaker       CBConfig       `json:"circuit_breaker"`
+}
+
+type RoutingWeights struct {
+	CPULoadWeight     float64 `json:"cpu_load_weight"`
+	LatencyWeight     float64 `json:"latency_weight"`
+	SuccessRateWeight float64 `json:"success_rate_weight"`
+	LoadedModelBonus  float64 `json:"loaded_model_bonus"`
+}
+
+type CBConfig struct {
+	ErrorThreshold int `json:"error_threshold"` // Consecutive errors before breaking
+	CooloffSec     int `json:"cooloff_sec"`     // Seconds to wait before trying again
 }
 
 func DefaultConfig() *Config {
@@ -19,6 +33,16 @@ func DefaultConfig() *Config {
 		StaleThreshold:       5,
 		LoadThreshold:        80.0,
 		PollIntervalMs:       100, // 10Hz
+		Weights: RoutingWeights{
+			CPULoadWeight:     1.0,
+			LatencyWeight:     1.0,
+			SuccessRateWeight: 1.0,
+			LoadedModelBonus:  2.0,
+		},
+		CircuitBreaker: CBConfig{
+			ErrorThreshold: 3,
+			CooloffSec:     60,
+		},
 	}
 }
 
