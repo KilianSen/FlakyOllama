@@ -3,6 +3,7 @@ package main
 import (
 	"FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/balancer"
+	"FlakyOllama/pkg/config"
 	"log"
 	"os"
 	"time"
@@ -12,6 +13,13 @@ func main() {
 	role := os.Getenv("ROLE")
 	if role == "" {
 		role = "balancer" // Default role
+	}
+
+	cfgPath := os.Getenv("CONFIG_PATH")
+	cfg, err := config.LoadConfig(cfgPath)
+	if err != nil {
+		log.Printf("Failed to load config, using defaults: %v", err)
+		cfg = config.DefaultConfig()
 	}
 
 	switch role {
@@ -24,11 +32,11 @@ func main() {
 		if dbPath == "" {
 			dbPath = "flakyollama.db"
 		}
-		b, err := balancer.NewBalancer(addr, dbPath)
+		b, err := balancer.NewBalancer(addr, dbPath, cfg)
 		if err != nil {
 			log.Fatalf("Failed to initialize balancer: %v", err)
 		}
-		b.StartPoller()
+		b.StartBackgroundTasks()
 		if err := b.Serve(); err != nil {
 			log.Fatalf("Balancer failed: %v", err)
 		}

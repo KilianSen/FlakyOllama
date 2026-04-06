@@ -7,7 +7,7 @@ import (
 )
 
 func TestBalancer_Route(t *testing.T) {
-	b, _ := NewBalancer(":8080", ":memory:")
+	b, _ := NewBalancer(":8080", ":memory:", nil)
 	
 	// Test case 1: No agents
 	_, _, err := b.Route(models.InferenceRequest{Model: "llama2"})

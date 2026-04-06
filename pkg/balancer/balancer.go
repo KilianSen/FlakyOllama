@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/config"
 	"FlakyOllama/pkg/models"
 	"FlakyOllama/pkg/storage"
 	"bytes"
@@ -15,26 +16,76 @@ import (
 
 // Balancer manages multiple agents and routes requests.
 type Balancer struct {
-	Address string
-	Agents  map[string]*models.NodeStatus
-	Storage *storage.SQLiteStorage
-	Mu      sync.RWMutex
+	Address         string
+	Agents          map[string]*models.NodeStatus
+	Storage         *storage.SQLiteStorage
+	Config          *config.Config
+	PendingRequests map[string]int       // model_name -> count
+	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
+	Mu              sync.RWMutex
 }
 
-func NewBalancer(address string, dbPath string) (*Balancer, error) {
+func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
 	s, err := storage.NewSQLiteStorage(dbPath)
 	if err != nil {
 		return nil, err
 	}
 
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+
 	return &Balancer{
-		Address: address,
-		Agents:  make(map[string]*models.NodeStatus),
-		Storage: s,
+		Address:         address,
+		Agents:          make(map[string]*models.NodeStatus),
+		Storage:         s,
+		Config:          cfg,
+		PendingRequests: make(map[string]int),
+		ModelLastUsed:   make(map[string]time.Time),
 	}, nil
 }
 
-// ... rest of the file ...
+func (b *Balancer) StartBackgroundTasks() {
+	b.StartPoller()
+	b.StartKeepAliveCleaner()
+}
+
+func (b *Balancer) StartKeepAliveCleaner() {
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		for range ticker.C {
+			b.cleanStaleModels()
+		}
+	}()
+}
+
+func (b *Balancer) cleanStaleModels() {
+	b.Mu.Lock()
+	now := time.Now()
+	keepAlive := time.Duration(b.Config.KeepAliveDurationSec) * time.Second
+	
+	toUnload := make([]struct{ nodeID, addr, model string }, 0)
+	for key, lastTime := range b.ModelLastUsed {
+		if now.Sub(lastTime) > keepAlive {
+			parts := strings.Split(key, ":")
+			if len(parts) != 2 {
+				continue
+			}
+			nodeID, modelName := parts[0], parts[1]
+			if agent, ok := b.Agents[nodeID]; ok {
+				toUnload = append(toUnload, struct{ nodeID, addr, model string }{nodeID, agent.Address, modelName})
+			}
+			delete(b.ModelLastUsed, key)
+		}
+	}
+	b.Mu.Unlock()
+
+	for _, item := range toUnload {
+		log.Printf("Unloading stale model %s from agent %s", item.model, item.nodeID)
+		body, _ := json.Marshal(map[string]string{"model": item.model})
+		http.Post("http://"+item.addr+"/models/unload", "application/json", bytes.NewBuffer(body))
+	}
+}
 
 // Register registers a new agent.
 func (b *Balancer) Register(req models.RegisterRequest) {
@@ -48,9 +99,10 @@ func (b *Balancer) Register(req models.RegisterRequest) {
 	log.Printf("Registered agent: %s at %s", req.ID, req.Address)
 }
 
-// StartPoller polls registered agents at 10Hz.
+// StartPoller polls registered agents at the configured frequency.
 func (b *Balancer) StartPoller() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	interval := time.Duration(b.Config.PollIntervalMs) * time.Millisecond
+	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
 			b.pollAgents()
@@ -88,8 +140,8 @@ func (b *Balancer) pollAgents() {
 // Route finds the best agent for an inference request.
 func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
+	pending := b.PendingRequests[req.Model]
+	
 	var bestAgent *models.NodeStatus
 	var bestScore float64 = -1.0
 
@@ -101,6 +153,7 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 		minVRAM = 40 * 1024 * 1024 * 1024 // 40GB
 	}
 
+	foundLoaded := false
 	for _, a := range b.Agents {
 		if time.Since(a.LastSeen) > time.Second {
 			continue
@@ -109,9 +162,7 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 			continue
 		}
 
-		// Calculate score: (1 - CPUUsage/100) * HistoricalSuccessRate * (1/AvgLatency)
 		perf, _ := b.Storage.GetPerformance(a.ID, req.Model)
-		
 		score := (1.0 - (a.CPUUsage / 100.0))
 		if perf.SuccessRate > 0 {
 			score *= perf.SuccessRate
@@ -120,12 +171,17 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 			score *= (1.0 / perf.AvgLatency)
 		}
 
-		// Boost score if model is already loaded
+		hasModel := false
 		for _, m := range a.ActiveModels {
 			if m == req.Model {
-				score *= 2.0
+				hasModel = true
+				foundLoaded = true
 				break
 			}
+		}
+
+		if hasModel {
+			score *= 2.0
 		}
 
 		if score > bestScore {
@@ -133,12 +189,42 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 			bestAgent = a
 		}
 	}
+	b.Mu.RUnlock()
+
+	// Auto-allocation logic: trigger if model not loaded or queue is too deep
+	if !foundLoaded || pending > b.Config.StaleThreshold {
+		b.triggerAllocation(req.Model, minVRAM)
+	}
 
 	if bestAgent == nil {
 		return "", "", fmt.Errorf("no available agents with sufficient capabilities")
 	}
 
 	return bestAgent.ID, bestAgent.Address, nil
+}
+
+func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
+	b.Mu.RLock()
+	defer b.Mu.RUnlock()
+
+	for _, a := range b.Agents {
+		if time.Since(a.LastSeen) > time.Second || a.VRAMTotal < minVRAM {
+			continue
+		}
+		hasModel := false
+		for _, m := range a.ActiveModels {
+			if m == model {
+				hasModel = true
+				break
+			}
+		}
+		if !hasModel {
+			log.Printf("Triggering auto-allocation of model %s to agent %s", model, a.ID)
+			body, _ := json.Marshal(map[string]string{"model": model})
+			go http.Post("http://"+a.Address+"/models/pull", "application/json", bytes.NewBuffer(body))
+			return
+		}
+	}
 }
 
 // NewMux returns a mux with the balancer's handlers registered.
@@ -172,7 +258,16 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retry logic
+	b.Mu.Lock()
+	b.PendingRequests[req.Model]++
+	b.Mu.Unlock()
+	
+	defer func() {
+		b.Mu.Lock()
+		b.PendingRequests[req.Model]--
+		b.Mu.Unlock()
+	}()
+
 	maxRetries := 3
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
@@ -190,7 +285,6 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		success := err == nil && resp != nil && resp.StatusCode == http.StatusOK
 		latency := time.Since(start)
 		
-		// Record metric asynchronously
 		go b.Storage.RecordMetric(agentID, req.Model, latency, success)
 
 		if !success {
@@ -201,6 +295,10 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		defer resp.Body.Close()
+
+		b.Mu.Lock()
+		b.ModelLastUsed[agentID+":"+req.Model] = time.Now()
+		b.Mu.Unlock()
 
 		var result models.InferenceResponse
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
