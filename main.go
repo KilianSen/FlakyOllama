@@ -20,7 +20,14 @@ func main() {
 		if addr == "" {
 			addr = "0.0.0.0:8080"
 		}
-		b := balancer.NewBalancer(addr)
+		dbPath := os.Getenv("DB_PATH")
+		if dbPath == "" {
+			dbPath = "flakyollama.db"
+		}
+		b, err := balancer.NewBalancer(addr, dbPath)
+		if err != nil {
+			log.Fatalf("Failed to initialize balancer: %v", err)
+		}
 		b.StartPoller()
 		if err := b.Serve(); err != nil {
 			log.Fatalf("Balancer failed: %v", err)

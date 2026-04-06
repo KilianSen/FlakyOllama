@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/models"
+	"FlakyOllama/pkg/storage"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -16,15 +17,24 @@ import (
 type Balancer struct {
 	Address string
 	Agents  map[string]*models.NodeStatus
+	Storage *storage.SQLiteStorage
 	Mu      sync.RWMutex
 }
 
-func NewBalancer(address string) *Balancer {
+func NewBalancer(address string, dbPath string) (*Balancer, error) {
+	s, err := storage.NewSQLiteStorage(dbPath)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Balancer{
 		Address: address,
 		Agents:  make(map[string]*models.NodeStatus),
-	}
+		Storage: s,
+	}, nil
 }
+
+// ... rest of the file ...
 
 // Register registers a new agent.
 func (b *Balancer) Register(req models.RegisterRequest) {
@@ -76,12 +86,12 @@ func (b *Balancer) pollAgents() {
 }
 
 // Route finds the best agent for an inference request.
-func (b *Balancer) Route(req models.InferenceRequest) (string, error) {
+func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
 	var bestAgent *models.NodeStatus
-	var minLoad float64 = 101.0 // CPU usage is 0-100
+	var bestScore float64 = -1.0
 
 	// Get model requirements (mocked for now)
 	minVRAM := uint64(0)
@@ -91,58 +101,44 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, error) {
 		minVRAM = 40 * 1024 * 1024 * 1024 // 40GB
 	}
 
-	// Very simple load balancing for now: find agent with lowest CPU usage
-	// and that has the model loaded (or can load it).
 	for _, a := range b.Agents {
-		// Basic health check (last seen < 1s ago)
 		if time.Since(a.LastSeen) > time.Second {
 			continue
 		}
-
-		// Capability check: VRAM
 		if a.VRAMTotal < minVRAM {
 			continue
 		}
 
-		// Prefer agents that already have the model loaded
-		hasModel := false
+		// Calculate score: (1 - CPUUsage/100) * HistoricalSuccessRate * (1/AvgLatency)
+		perf, _ := b.Storage.GetPerformance(a.ID, req.Model)
+		
+		score := (1.0 - (a.CPUUsage / 100.0))
+		if perf.SuccessRate > 0 {
+			score *= perf.SuccessRate
+		}
+		if perf.AvgLatency > 0 {
+			score *= (1.0 / perf.AvgLatency)
+		}
+
+		// Boost score if model is already loaded
 		for _, m := range a.ActiveModels {
 			if m == req.Model {
-				hasModel = true
+				score *= 2.0
 				break
 			}
 		}
 
-		if hasModel {
-			if a.CPUUsage < minLoad {
-				minLoad = a.CPUUsage
-				bestAgent = a
-			}
-		}
-	}
-
-	// If no agent has the model loaded, pick the one with lowest load overall
-	if bestAgent == nil {
-		for _, a := range b.Agents {
-			if time.Since(a.LastSeen) > time.Second {
-				continue
-			}
-			// Capability check: VRAM
-			if a.VRAMTotal < minVRAM {
-				continue
-			}
-			if a.CPUUsage < minLoad {
-				minLoad = a.CPUUsage
-				bestAgent = a
-			}
+		if score > bestScore {
+			bestScore = score
+			bestAgent = a
 		}
 	}
 
 	if bestAgent == nil {
-		return "", fmt.Errorf("no available agents with sufficient capabilities")
+		return "", "", fmt.Errorf("no available agents with sufficient capabilities")
 	}
 
-	return bestAgent.Address, nil
+	return bestAgent.ID, bestAgent.Address, nil
 }
 
 // NewMux returns a mux with the balancer's handlers registered.
@@ -180,26 +176,31 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	maxRetries := 3
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
-		agentAddr, err := b.Route(req)
+		agentID, agentAddr, err := b.Route(req)
 		if err != nil {
 			lastErr = err
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 
+		start := time.Now()
 		body, _ := json.Marshal(req)
 		resp, err := http.Post("http://"+agentAddr+"/inference", "application/json", bytes.NewBuffer(body))
-		if err != nil {
-			log.Printf("Agent %s failed, retrying... (%v)", agentAddr, err)
-			lastErr = err
+		
+		success := err == nil && resp != nil && resp.StatusCode == http.StatusOK
+		latency := time.Since(start)
+		
+		// Record metric asynchronously
+		go b.Storage.RecordMetric(agentID, req.Model, latency, success)
+
+		if !success {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			lastErr = fmt.Errorf("agent %s failed (err: %v)", agentID, err)
 			continue
 		}
 		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("agent returned status %d", resp.StatusCode)
-			continue
-		}
 
 		var result models.InferenceResponse
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

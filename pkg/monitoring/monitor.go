@@ -5,6 +5,9 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"math/rand"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -32,11 +35,43 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 		status.MemoryUsage = vm.UsedPercent
 	}
 
-	// Mocking GPU for now (as it's hardware dependent)
-	// In a real implementation, we'd use NVML or parse nvidia-smi.
-	status.VRAMTotal = 8 * 1024 * 1024 * 1024 // 8GB
-	status.VRAMUsed = uint64(rand.Intn(4 * 1024 * 1024 * 1024))
-	status.GPUTemperature = 40.0 + rand.Float64()*20.0
+	// Real GPU monitoring via nvidia-smi
+	err = m.collectGPUMetrics(&status)
+	if err != nil {
+		// Mocking GPU if nvidia-smi fails
+		status.VRAMTotal = 8 * 1024 * 1024 * 1024 // 8GB
+		status.VRAMUsed = uint64(rand.Intn(4 * 1024 * 1024 * 1024))
+		status.GPUTemperature = 40.0 + rand.Float64()*20.0
+	}
 
 	return status, nil
+}
+
+func (m *Monitor) collectGPUMetrics(status *models.NodeStatus) error {
+	cmd := exec.Command("nvidia-smi", "--query-gpu=memory.total,memory.used,temperature.gpu", "--format=csv,noheader,nounits")
+	output, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+
+	// Just take the first GPU for now
+	parts := strings.Split(lines[0], ",")
+	if len(parts) < 3 {
+		return nil
+	}
+
+	total, _ := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 64)
+	used, _ := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
+	temp, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+
+	status.VRAMTotal = total * 1024 * 1024 // nvidia-smi returns MiB
+	status.VRAMUsed = used * 1024 * 1024
+	status.GPUTemperature = temp
+
+	return nil
 }

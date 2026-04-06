@@ -57,6 +57,8 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/telemetry", a.HandleTelemetry)
 	mux.HandleFunc("/inference", a.HandleInference)
+	mux.HandleFunc("/models/pull", a.HandlePull)
+	mux.HandleFunc("/models/unload", a.HandleUnload)
 	return mux
 }
 
@@ -83,6 +85,29 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	json.NewEncoder(w).Encode(status)
+}
+
+func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Model string `json:"model"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	go a.Ollama.Pull(req.Model) // Async pull
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Model string `json:"model"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.Ollama.Unload(req.Model); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
