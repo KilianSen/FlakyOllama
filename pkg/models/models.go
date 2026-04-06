@@ -39,6 +39,7 @@ type NodeStatus struct {
 	LastSeen       time.Time `json:"last_seen"`
 	State          NodeState `json:"state"`
 	Errors         int       `json:"errors"` // Consecutive errors
+	Draining       bool      `json:"draining"`
 }
 
 // ModelRequirement defines the hardware needs for a model.

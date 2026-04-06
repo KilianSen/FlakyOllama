@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"FlakyOllama/pkg/auth"
 	"FlakyOllama/pkg/models"
 	"FlakyOllama/pkg/monitoring"
 	"FlakyOllama/pkg/ollama"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -40,7 +42,13 @@ func (a *Agent) Register() error {
 	}
 	body, _ := json.Marshal(req)
 	
-	resp, err := http.Post(a.BalancerURL+"/register", "application/json", bytes.NewBuffer(body))
+	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
+	agentReq.Header.Set("Content-Type", "application/json")
+	if token := os.Getenv("BALANCER_TOKEN"); token != "" {
+		agentReq.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(agentReq)
 	if err != nil {
 		return err
 	}
@@ -55,12 +63,15 @@ func (a *Agent) Register() error {
 
 // NewMux returns a mux with the agent's handlers registered.
 func (a *Agent) NewMux() *http.ServeMux {
+	token := os.Getenv("AGENT_TOKEN")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/telemetry", a.HandleTelemetry)
-	mux.HandleFunc("/inference", a.HandleInference)
-	mux.HandleFunc("/chat", a.HandleChat)
-	mux.HandleFunc("/models/pull", a.HandlePull)
-	mux.HandleFunc("/models/unload", a.HandleUnload)
+	
+	mux.HandleFunc("/telemetry", auth.Middleware(token, a.HandleTelemetry))
+	mux.HandleFunc("/inference", auth.Middleware(token, a.HandleInference))
+	mux.HandleFunc("/chat", auth.Middleware(token, a.HandleChat))
+	mux.HandleFunc("/models/pull", auth.Middleware(token, a.HandlePull))
+	mux.HandleFunc("/models/unload", auth.Middleware(token, a.HandleUnload))
+	
 	return mux
 }
 
@@ -119,6 +130,7 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Propagation of context for cancellation
 	stream, code, err := a.Ollama.GenerateStream(req)
 	if err != nil {
 		http.Error(w, err.Error(), code)
@@ -128,7 +140,20 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, stream)
+	
+	// Create a pipe to detect client disconnects during streaming
+	done := make(chan struct{})
+	go func() {
+		io.Copy(w, stream)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Completed successfully
+	case <-r.Context().Done():
+		log.Printf("Inference cancelled by Balancer for model %s", req.Model)
+	}
 }
 
 func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
@@ -147,5 +172,16 @@ func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
 	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, stream)
+	
+	done := make(chan struct{})
+	go func() {
+		io.Copy(w, stream)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-r.Context().Done():
+		log.Printf("Chat cancelled by Balancer for model %s", req.Model)
+	}
 }

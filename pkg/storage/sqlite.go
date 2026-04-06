@@ -26,21 +26,51 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 	}
 
 	// Create tables
-	query := `
-	CREATE TABLE IF NOT EXISTS metrics (
-		node_id TEXT,
-		model_name TEXT,
-		latency REAL,
-		success INTEGER,
-		timestamp DATETIME,
-		PRIMARY KEY (node_id, model_name, timestamp)
-	);`
-	_, err = db.Exec(query)
-	if err != nil {
-		return nil, err
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS metrics (
+			node_id TEXT,
+			model_name TEXT,
+			latency REAL,
+			success INTEGER,
+			timestamp DATETIME,
+			PRIMARY KEY (node_id, model_name, timestamp)
+		);`,
+		`CREATE TABLE IF NOT EXISTS model_metadata (
+			model_name TEXT PRIMARY KEY,
+			min_vram uint64,
+			updated_at DATETIME
+		);`,
+	}
+	for _, q := range queries {
+		if _, err = db.Exec(q); err != nil {
+			return nil, err
+		}
 	}
 
 	return &SQLiteStorage{db: db}, nil
+}
+
+func (s *SQLiteStorage) UpdateModelVRAM(modelName string, minVRAM uint64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO model_metadata (model_name, min_vram, updated_at) 
+		VALUES (?, ?, ?)
+		ON CONFLICT(model_name) DO UPDATE SET 
+			min_vram = MAX(min_vram, excluded.min_vram),
+			updated_at = excluded.updated_at`,
+		modelName, minVRAM, time.Now())
+	return err
+}
+
+func (s *SQLiteStorage) GetModelVRAM(modelName string) (uint64, error) {
+	var minVRAM uint64
+	err := s.db.QueryRow("SELECT min_vram FROM model_metadata WHERE model_name = ?", modelName).Scan(&minVRAM)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return minVRAM, nil
 }
 
 func (s *SQLiteStorage) RecordMetric(nodeID, modelName string, latency time.Duration, success bool) error {

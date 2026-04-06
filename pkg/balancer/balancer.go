@@ -1,18 +1,24 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/auth"
 	"FlakyOllama/pkg/config"
+	"FlakyOllama/pkg/metrics"
 	"FlakyOllama/pkg/models"
 	"FlakyOllama/pkg/storage"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Balancer manages multiple agents and routes requests.
@@ -108,8 +114,17 @@ func (b *Balancer) cleanStaleModels() {
 	for _, item := range toUnload {
 		log.Printf("Unloading stale model %s from agent %s", item.model, item.nodeID)
 		body, _ := json.Marshal(map[string]string{"model": item.model})
-		http.Post("http://"+item.addr+"/models/unload", "application/json", bytes.NewBuffer(body))
+		b.sendToAgent(item.addr, "/models/unload", body)
 	}
+}
+
+func (b *Balancer) sendToAgent(addr, path string, body []byte) (*http.Response, error) {
+	req, _ := http.NewRequest("POST", "http://"+addr+path, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token := os.Getenv("AGENT_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return http.DefaultClient.Do(req)
 }
 
 // Register registers a new agent.
@@ -132,6 +147,7 @@ func (b *Balancer) StartPoller() {
 	go func() {
 		for range ticker.C {
 			b.pollAgents()
+			metrics.QueueDepth.Set(float64(b.Queue.pq.Len()))
 		}
 	}()
 }
@@ -146,7 +162,11 @@ func (b *Balancer) pollAgents() {
 
 	for _, agent := range agents {
 		go func(a *models.NodeStatus) {
-			resp, err := http.Get("http://" + a.Address + "/telemetry")
+			req, _ := http.NewRequest("GET", "http://"+a.Address+"/telemetry", nil)
+			if token := os.Getenv("AGENT_TOKEN"); token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				log.Printf("Failed to poll agent %s: %v", a.ID, err)
 				b.recordError(a.ID)
@@ -160,7 +180,25 @@ func (b *Balancer) pollAgents() {
 				// Preserving internal state while updating telemetry
 				status.State = b.Agents[a.ID].State
 				status.Errors = b.Agents[a.ID].Errors
+				status.Draining = b.Agents[a.ID].Draining
 				b.Agents[a.ID] = &status
+				
+				// Update learned VRAM
+				for _, m := range status.ActiveModels {
+					if len(status.ActiveModels) == 1 {
+						// Heuristic: if only one model is loaded, VRAMUsed is a good estimate
+						b.Storage.UpdateModelVRAM(m, status.VRAMUsed)
+					}
+				}
+
+				// Update metrics
+				healthVal := 0.0
+				switch status.State {
+				case models.StateHealthy: healthVal = 2.0
+				case models.StateDegraded: healthVal = 1.0
+				}
+				metrics.NodeHealthStatus.WithLabelValues(a.ID).Set(healthVal)
+
 				b.Mu.Unlock()
 			}
 		}(agent)
@@ -175,17 +213,20 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	var bestAgent *models.NodeStatus
 	var bestScore float64 = -1.0
 
-	// Get model requirements (mocked for now)
-	minVRAM := uint64(0)
-	if strings.Contains(req.Model, "7b") {
-		minVRAM = 4 * 1024 * 1024 * 1024 // 4GB
-	} else if strings.Contains(req.Model, "70b") {
-		minVRAM = 40 * 1024 * 1024 * 1024 // 40GB
+	// Get model requirements from learned metadata
+	minVRAM, _ := b.Storage.GetModelVRAM(req.Model)
+	if minVRAM == 0 {
+		// Fallback for unknown models
+		if strings.Contains(req.Model, "7b") {
+			minVRAM = 4 * 1024 * 1024 * 1024
+		} else if strings.Contains(req.Model, "70b") {
+			minVRAM = 40 * 1024 * 1024 * 1024
+		}
 	}
 
 	foundLoaded := false
 	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second || a.State == models.StateBroken {
+		if time.Since(a.LastSeen) > time.Second || a.State == models.StateBroken || a.Draining {
 			continue
 		}
 		if a.VRAMTotal < minVRAM {
@@ -229,7 +270,7 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	}
 	b.Mu.RUnlock()
 
-	// Auto-allocation logic: trigger if model not loaded or queue is too deep
+	// Auto-allocation logic
 	if !foundLoaded || pending > b.Config.StaleThreshold {
 		b.triggerAllocation(req.Model, minVRAM)
 	}
@@ -246,7 +287,7 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	defer b.Mu.RUnlock()
 
 	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken {
+		if time.Since(a.LastSeen) > time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken || a.Draining {
 			continue
 		}
 		hasModel := false
@@ -259,7 +300,7 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 		if !hasModel {
 			log.Printf("Triggering auto-allocation of model %s to agent %s", model, a.ID)
 			body, _ := json.Marshal(map[string]string{"model": model})
-			go http.Post("http://"+a.Address+"/models/pull", "application/json", bytes.NewBuffer(body))
+			go b.sendToAgent(a.Address, "/models/pull", body)
 			return
 		}
 	}
@@ -267,13 +308,43 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 
 // NewMux returns a mux with the balancer's handlers registered.
 func (b *Balancer) NewMux() *http.ServeMux {
+	token := os.Getenv("BALANCER_TOKEN")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/register", b.HandleRegister)
-	mux.HandleFunc("/api/generate", b.HandleGenerate)
-	mux.HandleFunc("/api/chat", b.HandleChat)
-	mux.HandleFunc("/api/tags", b.HandleTags)
+	
+	mux.HandleFunc("/register", b.HandleRegister) // Register doesn't need auth usually or use a different secret
+	mux.HandleFunc("/api/generate", auth.Middleware(token, b.HandleGenerate))
+	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
+	mux.HandleFunc("/api/tags", auth.Middleware(token, b.HandleTags))
 	mux.HandleFunc("/status", b.HandleStatus)
+	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
+	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
+	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
+	
 	return mux
+}
+
+func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if a, ok := b.Agents[id]; ok {
+		a.Draining = true
+		w.WriteHeader(http.StatusOK)
+	} else {
+		http.Error(w, "Node not found", http.StatusNotFound)
+	}
+}
+
+func (b *Balancer) HandleNodeUndrain(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if a, ok := b.Agents[id]; ok {
+		a.Draining = false
+		w.WriteHeader(http.StatusOK)
+	} else {
+		http.Error(w, "Node not found", http.StatusNotFound)
+	}
 }
 
 func (b *Balancer) Serve() error {
@@ -336,7 +407,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.proxyStream(w, res.AgentID, res.AgentAddr, "/chat", req)
+	b.proxyStream(w, r.Context(), res.AgentID, res.AgentAddr, "/chat", req)
 }
 
 func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
@@ -362,26 +433,44 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.proxyStream(w, res.AgentID, res.AgentAddr, "/inference", req)
+	b.proxyStream(w, r.Context(), res.AgentID, res.AgentAddr, "/inference", req)
 }
 
-func (b *Balancer) proxyStream(w http.ResponseWriter, agentID, agentAddr, path string, req interface{}) {
+func (b *Balancer) proxyStream(w http.ResponseWriter, ctx context.Context, agentID, agentAddr, path string, req interface{}) {
+	modelName := ""
+	if r, ok := req.(models.InferenceRequest); ok { modelName = r.Model }
+	if r, ok := req.(models.ChatRequest); ok { modelName = r.Model }
+
 	body, _ := json.Marshal(req)
-	resp, err := http.Post("http://"+agentAddr+path, "application/json", bytes.NewBuffer(body))
 	
+	// Create request with context for cancellation propagation
+	agentReq, _ := http.NewRequestWithContext(ctx, "POST", "http://"+agentAddr+path, bytes.NewBuffer(body))
+	agentReq.Header.Set("Content-Type", "application/json")
+	if token := os.Getenv("AGENT_TOKEN"); token != "" {
+		agentReq.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(agentReq)
+	
+	status := "success"
 	if err != nil || resp.StatusCode != http.StatusOK {
+		status = "error"
 		b.recordError(agentID)
+		if err != nil {
+			log.Printf("Proxy error to %s: %v", agentID, err)
+		}
 		http.Error(w, "agent failed", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
 	b.recordSuccess(agentID)
+	latency := time.Since(start)
 	
-	// Update last used for keep-alive
-	modelName := ""
-	if r, ok := req.(models.InferenceRequest); ok { modelName = r.Model }
-	if r, ok := req.(models.ChatRequest); ok { modelName = r.Model }
+	// Update metrics
+	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, status).Inc()
+	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
 	
 	if modelName != "" {
 		b.Mu.Lock()
