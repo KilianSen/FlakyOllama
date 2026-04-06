@@ -329,6 +329,11 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
 	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
 	
+	// OpenAI compatibility layer
+	mux.HandleFunc("/v1/chat/completions", auth.Middleware(token, b.HandleOpenAIChat))
+	mux.HandleFunc("/v1/completions", auth.Middleware(token, b.HandleOpenAICompletions))
+	mux.HandleFunc("/v1/models", auth.Middleware(token, b.HandleOpenAIModels))
+	
 	return mux
 }
 
