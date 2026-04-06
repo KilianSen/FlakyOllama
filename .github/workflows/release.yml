@@ -1,0 +1,62 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Balancer
+        id: meta-balancer
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-balancer
+
+      - name: Build and push Balancer image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-balancer:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-balancer:${{ github.sha }}
+          labels: ${{ steps.meta-balancer.outputs.labels }}
+
+      - name: Extract metadata (tags, labels) for Integrated Agent
+        id: meta-integrated
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-integrated
+
+      - name: Build and push Integrated Agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.integrated
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-integrated:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-integrated:${{ github.sha }}
+          labels: ${{ steps.meta-integrated.outputs.labels }}

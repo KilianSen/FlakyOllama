@@ -1,0 +1,50 @@
+services:
+  balancer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ROLE=balancer
+      - BALANCER_ADDR=0.0.0.0:8080
+      - DB_PATH=/data/flakyollama.db
+      - BALANCER_TOKEN=your-secret-balancer-token
+      - AGENT_TOKEN=your-secret-agent-token
+    volumes:
+      - balancer_data:/data
+    restart: always
+
+  agent-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.integrated
+    environment:
+      - ROLE=agent
+      - AGENT_ID=gpu-node-1
+      - BALANCER_URL=http://balancer:8080
+      - AGENT_TOKEN=your-secret-agent-token
+      - BALANCER_TOKEN=your-secret-balancer-token
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: always
+
+  agent-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.integrated
+    environment:
+      - ROLE=agent
+      - AGENT_ID=cpu-node-2
+      - BALANCER_URL=http://balancer:8080
+      - AGENT_TOKEN=your-secret-agent-token
+      - BALANCER_TOKEN=your-secret-balancer-token
+    restart: always
+
+volumes:
+  balancer_data:

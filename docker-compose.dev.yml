@@ -1,0 +1,30 @@
+services:
+  balancer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ROLE=balancer
+      - BALANCER_ADDR=0.0.0.0:8080
+      - DB_PATH=/data/flakyollama_dev.db
+      - BALANCER_TOKEN=dev-token
+      - AGENT_TOKEN=dev-token
+    volumes:
+      - ./dev_data:/data
+
+  agent-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.integrated
+    ports:
+      - "8081:8081"
+      - "11434:11434"
+    environment:
+      - ROLE=agent
+      - AGENT_ID=dev-node
+      - BALANCER_URL=http://balancer:8080
+      - AGENT_TOKEN=dev-token
+      - BALANCER_TOKEN=dev-token
+      - AGENT_ADDR=0.0.0.0:8081
