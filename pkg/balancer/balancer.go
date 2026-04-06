@@ -7,8 +7,8 @@ import (
 	"FlakyOllama/pkg/models"
 	"FlakyOllama/pkg/storage"
 	"bytes"
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -238,6 +238,14 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 		// Advanced Scoring Engine
 		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
 		
+		// Thermal Protection
+		if a.GPUTemperature > 80.0 {
+			score *= 0.5 // Heavy penalty above 80C
+		}
+		if a.GPUTemperature > 90.0 {
+			continue // Skip node if above 90C
+		}
+
 		if perf.SuccessRate > 0 {
 			score *= (perf.SuccessRate * b.Config.Weights.SuccessRateWeight)
 		}
@@ -314,6 +322,7 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/register", b.HandleRegister) // Register doesn't need auth usually or use a different secret
 	mux.HandleFunc("/api/generate", auth.Middleware(token, b.HandleGenerate))
 	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
+	mux.HandleFunc("/api/show", auth.Middleware(token, b.HandleShow))
 	mux.HandleFunc("/api/tags", auth.Middleware(token, b.HandleTags))
 	mux.HandleFunc("/status", b.HandleStatus)
 	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
@@ -384,6 +393,28 @@ func (b *Balancer) HandleTags(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(models.TagsResponse{Models: modelList})
 }
 
+func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Model string `json:"model"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	body, _ := json.Marshal(req)
+	resp, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
 func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	var req models.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -400,14 +431,15 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		b.Mu.Unlock()
 	}()
 
-	resCh := b.Queue.Push(models.InferenceRequest{Model: req.Model, Stream: req.Stream}, 1)
-	res := <-resCh
-	if res.Err != nil {
-		http.Error(w, res.Err.Error(), http.StatusServiceUnavailable)
+	body, _ := json.Marshal(req)
+	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	defer resp.Body.Close()
 
-	b.proxyStream(w, r.Context(), res.AgentID, res.AgentAddr, "/chat", req)
+	b.finalizeProxy(w, resp, agentID, req.Model)
 }
 
 func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
@@ -426,63 +458,48 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		b.Mu.Unlock()
 	}()
 
-	resCh := b.Queue.Push(req, 1)
-	res := <-resCh
-	if res.Err != nil {
-		http.Error(w, res.Err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-
-	b.proxyStream(w, r.Context(), res.AgentID, res.AgentAddr, "/inference", req)
-}
-
-func (b *Balancer) proxyStream(w http.ResponseWriter, ctx context.Context, agentID, agentAddr, path string, req interface{}) {
-	modelName := ""
-	if r, ok := req.(models.InferenceRequest); ok { modelName = r.Model }
-	if r, ok := req.(models.ChatRequest); ok { modelName = r.Model }
-
 	body, _ := json.Marshal(req)
-	
-	// Create request with context for cancellation propagation
-	agentReq, _ := http.NewRequestWithContext(ctx, "POST", "http://"+agentAddr+path, bytes.NewBuffer(body))
-	agentReq.Header.Set("Content-Type", "application/json")
-	if token := os.Getenv("AGENT_TOKEN"); token != "" {
-		agentReq.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	start := time.Now()
-	resp, err := http.DefaultClient.Do(agentReq)
-	
-	status := "success"
-	if err != nil || resp.StatusCode != http.StatusOK {
-		status = "error"
-		b.recordError(agentID)
-		if err != nil {
-			log.Printf("Proxy error to %s: %v", agentID, err)
-		}
-		http.Error(w, "agent failed", http.StatusBadGateway)
+	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
 
-	b.recordSuccess(agentID)
-	latency := time.Since(start)
-	
-	// Update metrics
-	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, status).Inc()
-	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
-	
-	if modelName != "" {
-		b.Mu.Lock()
-		b.ModelLastUsed[agentID+":"+modelName] = time.Now()
-		b.Mu.Unlock()
-	}
+	b.finalizeProxy(w, resp, agentID, req.Model)
+}
+
+func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentID, modelName string) {
+	start := time.Now()
+	// Wrap with Stall Protection
+	stallTimeout := time.Duration(b.Config.StallTimeoutSec) * time.Second
+	reader := NewIdleTimeoutReader(resp.Body, stallTimeout)
+	defer reader.Close()
 
 	for k, v := range resp.Header {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	_, err := io.Copy(w, reader)
+	if err != nil {
+		b.recordError(agentID)
+		if errors.Is(err, ErrStalled) {
+			log.Printf("Agent %s stalled during stream for model %s", agentID, modelName)
+		} else {
+			log.Printf("Stream error from %s: %v", agentID, err)
+		}
+		return
+	}
+
+	b.recordSuccess(agentID)
+	latency := time.Since(start)
+	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
+	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
+
+	b.Mu.Lock()
+	b.ModelLastUsed[agentID+":"+modelName] = time.Now()
+	b.Mu.Unlock()
 }
 
 func (b *Balancer) recordError(id string) {

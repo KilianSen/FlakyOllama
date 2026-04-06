@@ -69,6 +69,7 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux.HandleFunc("/telemetry", auth.Middleware(token, a.HandleTelemetry))
 	mux.HandleFunc("/inference", auth.Middleware(token, a.HandleInference))
 	mux.HandleFunc("/chat", auth.Middleware(token, a.HandleChat))
+	mux.HandleFunc("/show", auth.Middleware(token, a.HandleShow))
 	mux.HandleFunc("/models/pull", auth.Middleware(token, a.HandlePull))
 	mux.HandleFunc("/models/unload", auth.Middleware(token, a.HandleUnload))
 	
@@ -121,6 +122,20 @@ func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (a *Agent) HandleShow(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Model string `json:"model"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := a.Ollama.Show(req.Model)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(result)
 }
 
 func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {

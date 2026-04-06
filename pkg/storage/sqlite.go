@@ -105,3 +105,35 @@ func (s *SQLiteStorage) GetPerformance(nodeID, modelName string) (PerformanceMet
 		LastUpdated: time.Now(),
 	}, nil
 }
+
+func (s *SQLiteStorage) GetP90Latency(modelName string) (time.Duration, error) {
+	query := `
+	SELECT latency FROM metrics 
+	WHERE model_name = ? AND success = 1 AND timestamp > ?
+	ORDER BY latency ASC LIMIT 100`
+	
+	rows, err := s.db.Query(query, modelName, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var latencies []float64
+	for rows.Next() {
+		var l float64
+		if err := rows.Scan(&l); err == nil {
+			latencies = append(latencies, l)
+		}
+	}
+
+	if len(latencies) == 0 {
+		return 0, nil
+	}
+
+	index := int(float64(len(latencies)) * 0.9)
+	if index >= len(latencies) {
+		index = len(latencies) - 1
+	}
+
+	return time.Duration(latencies[index] * float64(time.Second)), nil
+}

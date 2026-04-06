@@ -58,7 +58,8 @@ const dashboardTemplate = `
                     </div>
                     <div style="margin-top: 5px;">
                         <small><strong>GPU:</strong> {{.GPUModel}}</small><br>
-                        <small><strong>VRAM:</strong> {{printf "%.1f" (Divide .VRAMUsed 1073741824)}} / {{printf "%.1f" (Divide .VRAMTotal 1073741824)}} GB</small>
+                        <small><strong>VRAM:</strong> {{printf "%.1f" (Divide .VRAMUsed 1073741824)}} / {{printf "%.1f" (Divide .VRAMTotal 1073741824)}} GB</small><br>
+                        <small><strong>Temp:</strong> <span style="color: {{if gt .GPUTemperature 80.0}}red{{else if gt .GPUTemperature 70.0}}orange{{else}}green{{end}};">{{printf "%.1f" .GPUTemperature}}°C</span></small>
                     </div>
                 </td>
                 <td>

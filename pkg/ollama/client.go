@@ -101,7 +101,6 @@ func (c *Client) Pull(model string) error {
 
 // Unload unloads a model from memory.
 func (c *Client) Unload(model string) error {
-	// To unload, we send a generate request with keep_alive: 0
 	req := map[string]interface{}{
 		"model":      model,
 		"prompt":     "",
@@ -114,4 +113,18 @@ func (c *Client) Unload(model string) error {
 	}
 	defer resp.Body.Close()
 	return nil
+}
+
+// Show returns metadata for a model.
+func (c *Client) Show(model string) (map[string]interface{}, error) {
+	body, _ := json.Marshal(map[string]string{"name": model})
+	resp, err := http.Post(c.BaseURL+"/api/show", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result, nil
 }

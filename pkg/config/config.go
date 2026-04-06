@@ -13,6 +13,8 @@ type Config struct {
 	PollIntervalMs       int            `json:"poll_interval_ms"`
 	Weights              RoutingWeights `json:"weights"`
 	CircuitBreaker       CBConfig       `json:"circuit_breaker"`
+	StallTimeoutSec      int            `json:"stall_timeout_sec"`
+	HedgingPercentile    float64        `json:"hedging_percentile"`
 }
 
 type RoutingWeights struct {
@@ -43,6 +45,8 @@ func DefaultConfig() *Config {
 			ErrorThreshold: 3,
 			CooloffSec:     60,
 		},
+		StallTimeoutSec:   15,
+		HedgingPercentile: 0.95,
 	}
 }
 
