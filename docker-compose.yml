@@ -1,8 +1,6 @@
 services:
   balancer:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/kiliansen/flakyollama-balancer:latest
     ports:
       - "8080:8080"
     environment:
@@ -16,9 +14,7 @@ services:
     restart: always
 
   agent-1:
-    build:
-      context: .
-      dockerfile: Dockerfile.integrated
+    image: ghcr.io/kiliansen/flakyollama-integrated:latest
     environment:
       - ROLE=agent
       - AGENT_ID=gpu-node-1
@@ -35,9 +31,7 @@ services:
     restart: always
 
   agent-2:
-    build:
-      context: .
-      dockerfile: Dockerfile.integrated
+    image: ghcr.io/kiliansen/flakyollama-integrated:latest
     environment:
       - ROLE=agent
       - AGENT_ID=cpu-node-2
