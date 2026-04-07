@@ -1,6 +1,6 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache gcc musl-dev
+FROM golang:1.26-bookworm AS builder
+RUN apt-get update && apt-get install -y gcc libc6-dev
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -10,8 +10,8 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o flakyollama main.go
 # Final stage
 FROM ollama/ollama:latest
 
-# Install curl for entrypoint healthcheck
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install curl for entrypoint healthcheck and libsqlite3 for the binary
+RUN apt-get update && apt-get install -y curl libsqlite3-0 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /root/
 
