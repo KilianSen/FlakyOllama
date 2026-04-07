@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -74,7 +75,7 @@ func (b *Balancer) worker() {
 			if req == nil {
 				continue
 			}
-			
+
 			id, addr, err := b.Route(req.Request)
 			req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
 		}
@@ -94,7 +95,7 @@ func (b *Balancer) cleanStaleModels() {
 	b.Mu.Lock()
 	now := time.Now()
 	keepAlive := time.Duration(b.Config.KeepAliveDurationSec) * time.Second
-	
+
 	toUnload := make([]struct{ nodeID, addr, model string }, 0)
 	for key, lastTime := range b.ModelLastUsed {
 		if now.Sub(lastTime) > keepAlive {
@@ -131,7 +132,7 @@ func (b *Balancer) sendToAgent(addr, path string, body []byte) (*http.Response, 
 func (b *Balancer) Register(req models.RegisterRequest) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	
+
 	b.Agents[req.ID] = &models.NodeStatus{
 		ID:      req.ID,
 		Address: req.Address,
@@ -182,7 +183,7 @@ func (b *Balancer) pollAgents() {
 				status.Errors = b.Agents[a.ID].Errors
 				status.Draining = b.Agents[a.ID].Draining
 				b.Agents[a.ID] = &status
-				
+
 				// Update learned VRAM
 				for _, m := range status.ActiveModels {
 					if len(status.ActiveModels) == 1 {
@@ -194,8 +195,10 @@ func (b *Balancer) pollAgents() {
 				// Update metrics
 				healthVal := 0.0
 				switch status.State {
-				case models.StateHealthy: healthVal = 2.0
-				case models.StateDegraded: healthVal = 1.0
+				case models.StateHealthy:
+					healthVal = 2.0
+				case models.StateDegraded:
+					healthVal = 1.0
 				}
 				metrics.NodeHealthStatus.WithLabelValues(a.ID).Set(healthVal)
 
@@ -209,7 +212,7 @@ func (b *Balancer) pollAgents() {
 func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	b.Mu.RLock()
 	pending := b.PendingRequests[req.Model]
-	
+
 	var bestAgent *models.NodeStatus
 	var bestScore float64 = -1.0
 
@@ -234,10 +237,10 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 		}
 
 		perf, _ := b.Storage.GetPerformance(a.ID, req.Model)
-		
+
 		// Advanced Scoring Engine
 		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
-		
+
 		// Thermal Protection
 		if a.GPUTemperature > 80.0 {
 			score *= 0.5 // Heavy penalty above 80C
@@ -318,7 +321,7 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 func (b *Balancer) NewMux() *http.ServeMux {
 	token := os.Getenv("BALANCER_TOKEN")
 	mux := http.NewServeMux()
-	
+
 	mux.HandleFunc("/register", b.HandleRegister) // Register doesn't need auth usually or use a different secret
 	mux.HandleFunc("/api/generate", auth.Middleware(token, b.HandleGenerate))
 	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
@@ -328,12 +331,12 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
 	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
 	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
-	
+
 	// OpenAI compatibility layer
 	mux.HandleFunc("/v1/chat/completions", auth.Middleware(token, b.HandleOpenAIChat))
 	mux.HandleFunc("/v1/completions", auth.Middleware(token, b.HandleOpenAICompletions))
 	mux.HandleFunc("/v1/models", auth.Middleware(token, b.HandleOpenAIModels))
-	
+
 	return mux
 }
 
@@ -372,6 +375,14 @@ func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Address fix for agents registering with 0.0.0.0 or empty address
+	if strings.HasPrefix(req.Address, "0.0.0.0:") || strings.HasPrefix(req.Address, ":") {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		_, port, _ := net.SplitHostPort(req.Address)
+		req.Address = net.JoinHostPort(host, port)
+	}
+
 	b.Register(req)
 	w.WriteHeader(http.StatusOK)
 }
@@ -399,7 +410,9 @@ func (b *Balancer) HandleTags(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Model string `json:"model"` }
+	var req struct {
+		Model string `json:"model"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

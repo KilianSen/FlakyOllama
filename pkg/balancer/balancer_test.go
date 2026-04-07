@@ -2,13 +2,16 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/models"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestBalancer_Route(t *testing.T) {
 	b, _ := NewBalancer(":8080", ":memory:", nil)
-	
+
 	// Test case 1: No agents
 	_, _, err := b.Route(models.InferenceRequest{Model: "llama2"})
 	if err == nil {
@@ -23,7 +26,7 @@ func TestBalancer_Route(t *testing.T) {
 		LastSeen:     time.Now(),
 		ActiveModels: []string{},
 	}
-	
+
 	id, addr, err := b.Route(models.InferenceRequest{Model: "llama2"})
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
@@ -43,7 +46,7 @@ func TestBalancer_Route(t *testing.T) {
 		LastSeen:     time.Now(),
 		ActiveModels: []string{"llama2"},
 	}
-	
+
 	id, addr, err = b.Route(models.InferenceRequest{Model: "llama2"})
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
@@ -61,5 +64,34 @@ func TestBalancer_Route(t *testing.T) {
 	}
 	if addr != "localhost:8081" {
 		t.Errorf("Expected route to agent-1 (localhost:8081) due to lower CPU, got %s", addr)
+	}
+}
+
+func TestBalancer_HandleRegister(t *testing.T) {
+	b, _ := NewBalancer(":8080", ":memory:", nil)
+
+	// Mock registration request from an agent with 0.0.0.0
+	regBody := `{"id": "agent-0", "address": "0.0.0.0:8081"}`
+	req, _ := http.NewRequest("POST", "/register", strings.NewReader(regBody))
+	req.RemoteAddr = "192.168.1.50:54321" // Simulated remote address
+
+	rr := httptest.NewRecorder()
+	b.NewMux().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", rr.Code)
+	}
+
+	b.Mu.RLock()
+	agent, ok := b.Agents["agent-0"]
+	b.Mu.RUnlock()
+
+	if !ok {
+		t.Fatalf("Agent agent-0 not registered")
+	}
+
+	expectedAddr := "192.168.1.50:8081"
+	if agent.Address != expectedAddr {
+		t.Errorf("Expected address %s, got %s", expectedAddr, agent.Address)
 	}
 }
