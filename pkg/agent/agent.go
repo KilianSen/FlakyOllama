@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -36,12 +38,24 @@ func NewAgent(id, address, balancerURL, ollamaURL string) *Agent {
 
 // Register registers the agent with the balancer.
 func (a *Agent) Register() error {
+	address := a.Address
+	if strings.HasPrefix(address, "0.0.0.0:") || strings.HasPrefix(address, ":") {
+		// If listening on all interfaces, register with the hostname
+		// In Docker, the hostname is usually the container ID which is resolvable
+		hostname, err := os.Hostname()
+		if err == nil {
+			_, port, _ := net.SplitHostPort(address)
+			address = net.JoinHostPort(hostname, port)
+		}
+	}
+
 	req := models.RegisterRequest{
 		ID:      a.ID,
-		Address: a.Address,
+		Address: address,
 	}
+	log.Printf("Registering agent %s with address %s", a.ID, address)
 	body, _ := json.Marshal(req)
-	
+
 	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
 	agentReq.Header.Set("Content-Type", "application/json")
 	if token := os.Getenv("BALANCER_TOKEN"); token != "" {
@@ -53,11 +67,11 @@ func (a *Agent) Register() error {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to register with balancer: status %d", resp.StatusCode)
 	}
-	
+
 	return nil
 }
 
@@ -65,14 +79,14 @@ func (a *Agent) Register() error {
 func (a *Agent) NewMux() *http.ServeMux {
 	token := os.Getenv("AGENT_TOKEN")
 	mux := http.NewServeMux()
-	
+
 	mux.HandleFunc("/telemetry", auth.Middleware(token, a.HandleTelemetry))
 	mux.HandleFunc("/inference", auth.Middleware(token, a.HandleInference))
 	mux.HandleFunc("/chat", auth.Middleware(token, a.HandleChat))
 	mux.HandleFunc("/show", auth.Middleware(token, a.HandleShow))
 	mux.HandleFunc("/models/pull", auth.Middleware(token, a.HandlePull))
 	mux.HandleFunc("/models/unload", auth.Middleware(token, a.HandleUnload))
-	
+
 	return mux
 }
 
@@ -88,21 +102,23 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	status.ID = a.ID
 	status.Address = a.Address
 	status.LastSeen = time.Now()
-	
+
 	models, err := a.Ollama.GetLoadedModels()
 	if err == nil {
 		status.ActiveModels = models
 	}
-	
+
 	json.NewEncoder(w).Encode(status)
 }
 
 func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Model string `json:"model"` }
+	var req struct {
+		Model string `json:"model"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -112,7 +128,9 @@ func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Model string `json:"model"` }
+	var req struct {
+		Model string `json:"model"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -125,7 +143,9 @@ func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) HandleShow(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Model string `json:"model"` }
+	var req struct {
+		Model string `json:"model"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -144,7 +164,7 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	// Propagation of context for cancellation
 	stream, code, err := a.Ollama.GenerateStream(req)
 	if err != nil {
@@ -152,10 +172,10 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer stream.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	// Create a pipe to detect client disconnects during streaming
 	done := make(chan struct{})
 	go func() {
@@ -177,17 +197,17 @@ func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	stream, code, err := a.Ollama.ChatStream(req)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
 	}
 	defer stream.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	done := make(chan struct{})
 	go func() {
 		io.Copy(w, stream)
