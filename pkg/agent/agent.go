@@ -87,6 +87,8 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux.HandleFunc("/inference", auth.Middleware(token, a.HandleInference))
 	mux.HandleFunc("/chat", auth.Middleware(token, a.HandleChat))
 	mux.HandleFunc("/show", auth.Middleware(token, a.HandleShow))
+	mux.HandleFunc("/embed", auth.Middleware(token, a.HandleEmbed))
+	mux.HandleFunc("/embeddings", auth.Middleware(token, a.HandleEmbeddings))
 	mux.HandleFunc("/models/pull", auth.Middleware(token, a.HandlePull))
 	mux.HandleFunc("/models/unload", auth.Middleware(token, a.HandleUnload))
 
@@ -191,6 +193,44 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 		log.Printf("Inference cancelled by Balancer for model %s", req.Model)
 	}
+}
+
+func (a *Agent) HandleEmbed(w http.ResponseWriter, r *http.Request) {
+	var req models.EmbedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	stream, code, err := a.Ollama.Embed(req)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream)
+}
+
+func (a *Agent) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	var req models.EmbeddingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	stream, code, err := a.Ollama.Embeddings(req)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream)
 }
 
 func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {

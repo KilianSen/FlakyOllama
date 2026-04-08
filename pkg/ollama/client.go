@@ -115,6 +115,48 @@ func (c *Client) Unload(model string) error {
 	return nil
 }
 
+// Embed generates embeddings using the new /api/embed endpoint (Ollama >= 0.5).
+func (c *Client) Embed(req models.EmbedRequest) (io.ReadCloser, int, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	resp, err := http.Post(c.BaseURL+"/api/embed", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("ollama error: %s", string(respBody))
+	}
+
+	return resp.Body, resp.StatusCode, nil
+}
+
+// Embeddings generates embeddings using the legacy /api/embeddings endpoint.
+func (c *Client) Embeddings(req models.EmbeddingsRequest) (io.ReadCloser, int, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	resp, err := http.Post(c.BaseURL+"/api/embeddings", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("ollama error: %s", string(respBody))
+	}
+
+	return resp.Body, resp.StatusCode, nil
+}
+
 // Show returns metadata for a model.
 func (c *Client) Show(model string) (map[string]interface{}, error) {
 	body, _ := json.Marshal(map[string]string{"name": model})

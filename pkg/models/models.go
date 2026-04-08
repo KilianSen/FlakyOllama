@@ -92,3 +92,17 @@ type RegisterRequest struct {
 	ID      string `json:"id"`
 	Address string `json:"address"`
 }
+
+// EmbedRequest is a request to generate embeddings (Ollama >= 0.5 API).
+type EmbedRequest struct {
+	Model   string      `json:"model"`
+	Input   interface{} `json:"input"`             // string or []string
+	Options interface{} `json:"options,omitempty"` // optional model parameters
+}
+
+// EmbeddingsRequest is a request to generate embeddings (legacy Ollama API).
+type EmbeddingsRequest struct {
+	Model   string      `json:"model"`
+	Prompt  string      `json:"prompt"`
+	Options interface{} `json:"options,omitempty"` // optional model parameters
+}

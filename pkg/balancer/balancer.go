@@ -336,6 +336,8 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
 	mux.HandleFunc("/api/show", auth.Middleware(token, b.HandleShow))
 	mux.HandleFunc("/api/tags", auth.Middleware(token, b.HandleTags))
+	mux.HandleFunc("/api/embed", auth.Middleware(token, b.HandleEmbed))
+	mux.HandleFunc("/api/embeddings", auth.Middleware(token, b.HandleEmbeddings))
 	mux.HandleFunc("/status", b.HandleStatus)
 	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
 	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
@@ -429,6 +431,50 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := json.Marshal(req)
 	resp, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func (b *Balancer) HandleEmbed(w http.ResponseWriter, r *http.Request) {
+	var req models.EmbedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	body, _ := json.Marshal(req)
+	resp, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/embed", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func (b *Balancer) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	var req models.EmbeddingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	body, _ := json.Marshal(req)
+	resp, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/embeddings", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
