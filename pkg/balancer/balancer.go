@@ -137,8 +137,9 @@ func (b *Balancer) Register(req models.RegisterRequest) {
 		ID:      req.ID,
 		Address: req.Address,
 		State:   models.StateHealthy,
+		Errors:  0,
 	}
-	log.Printf("Registered agent: %s at %s", req.ID, req.Address)
+	log.Printf("Registered agent: %s at %s (resetting health)", req.ID, req.Address)
 }
 
 // StartPoller polls registered agents at the configured frequency.
@@ -178,10 +179,18 @@ func (b *Balancer) pollAgents() {
 			var status models.NodeStatus
 			if err := json.NewDecoder(resp.Body).Decode(&status); err == nil {
 				b.Mu.Lock()
-				// Preserving internal state while updating telemetry
+				// Preserving some internal state, but resetting errors on successful poll
 				status.State = b.Agents[a.ID].State
 				status.Errors = b.Agents[a.ID].Errors
 				status.Draining = b.Agents[a.ID].Draining
+
+				// If we successfully polled but it was broken, consider it healthy again
+				if status.State == models.StateBroken || status.State == models.StateDegraded {
+					log.Printf("Agent %s recovered via successful poll", a.ID)
+					status.State = models.StateHealthy
+					status.Errors = 0
+				}
+
 				b.Agents[a.ID] = &status
 
 				// Update learned VRAM

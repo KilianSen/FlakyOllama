@@ -19,20 +19,22 @@ import (
 
 // Agent handles local telemetry and proxies requests to Ollama.
 type Agent struct {
-	ID          string
-	Address     string
-	BalancerURL string
-	Monitor     *monitoring.Monitor
-	Ollama      *ollama.Client
+	ID               string
+	Address          string
+	EffectiveAddress string
+	BalancerURL      string
+	Monitor          *monitoring.Monitor
+	Ollama           *ollama.Client
 }
 
 func NewAgent(id, address, balancerURL, ollamaURL string) *Agent {
 	return &Agent{
-		ID:          id,
-		Address:     address,
-		BalancerURL: balancerURL,
-		Monitor:     monitoring.NewMonitor(),
-		Ollama:      ollama.NewClient(ollamaURL),
+		ID:               id,
+		Address:          address,
+		EffectiveAddress: address, // Default to listening address
+		BalancerURL:      balancerURL,
+		Monitor:          monitoring.NewMonitor(),
+		Ollama:           ollama.NewClient(ollamaURL),
 	}
 }
 
@@ -48,12 +50,13 @@ func (a *Agent) Register() error {
 			address = net.JoinHostPort(hostname, port)
 		}
 	}
+	a.EffectiveAddress = address
 
 	req := models.RegisterRequest{
 		ID:      a.ID,
-		Address: address,
+		Address: a.EffectiveAddress,
 	}
-	log.Printf("Registering agent %s with address %s", a.ID, address)
+	log.Printf("Registering agent %s with address %s", a.ID, a.EffectiveAddress)
 	body, _ := json.Marshal(req)
 
 	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
@@ -104,9 +107,8 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status.ID = a.ID
-	status.Address = a.Address
+	status.Address = a.EffectiveAddress
 	status.LastSeen = time.Now()
-
 	models, err := a.Ollama.GetLoadedModels()
 	if err == nil {
 		status.ActiveModels = models
