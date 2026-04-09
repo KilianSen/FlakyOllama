@@ -89,6 +89,7 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux.HandleFunc("/show", auth.Middleware(token, a.HandleShow))
 	mux.HandleFunc("/models/pull", auth.Middleware(token, a.HandlePull))
 	mux.HandleFunc("/models/unload", auth.Middleware(token, a.HandleUnload))
+	mux.HandleFunc("/models/delete", auth.Middleware(token, a.HandleDelete))
 
 	return mux
 }
@@ -109,9 +110,15 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	status.ID = a.ID
 	status.Address = a.EffectiveAddress
 	status.LastSeen = time.Now()
-	models, err := a.Ollama.GetLoadedModels()
-	if err == nil {
+
+	// Get currently loaded models
+	if models, err := a.Ollama.GetLoadedModels(); err == nil {
 		status.ActiveModels = models
+	}
+
+	// Get all models on disk
+	if local, err := a.Ollama.ListLocalModels(); err == nil {
+		status.LocalModels = local
 	}
 
 	json.NewEncoder(w).Encode(status)
@@ -138,6 +145,21 @@ func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.Ollama.Unload(req.Model); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (a *Agent) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.Ollama.Delete(req.Model); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

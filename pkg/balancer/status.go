@@ -24,6 +24,9 @@ const dashboardTemplate = `
         body { font-family: 'Inter', sans-serif; }
         .progress-bar-bg { background-color: #e5e7eb; border-radius: 9999px; height: 0.5rem; overflow: hidden; }
         .progress-bar-fill { height: 100%; transition: width 0.5s ease-out; }
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator { display: inline; }
+        .htmx-request.htmx-indicator { display: inline; }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen">
@@ -61,60 +64,91 @@ const dashboardTemplate = `
         <!-- Playground & Global Models -->
         <div class="mt-12 grid grid-cols-1 lg:grid-cols-3 gap-8">
             <!-- Test Section -->
-            <div class="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
-                    <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                        Cluster Playground
-                    </h2>
-                </div>
-                <div class="p-6">
-                    <form hx-post="/api/manage/test" hx-target="#test-result" hx-indicator="#test-spinner" class="space-y-4">
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Target Model</label>
-                                <select name="model" class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-                                    {{range .AllModels}}
-                                    <option value="{{.}}">{{.}}</option>
-                                    {{else}}
-                                    <option disabled>No models available</option>
-                                    {{end}}
-                                </select>
+            <div class="lg:col-span-2 space-y-8">
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
+                        <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                            <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            Cluster Playground
+                        </h2>
+                    </div>
+                    <div class="p-6">
+                        <form hx-post="/api/manage/test" hx-target="#test-result" hx-indicator="#test-spinner" class="space-y-4">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Target Model</label>
+                                    <select name="model" class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                        {{range .AllModels}}
+                                        <option value="{{.}}">{{.}}</option>
+                                        {{else}}
+                                        <option disabled>No models available</option>
+                                        {{end}}
+                                    </select>
+                                </div>
                             </div>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Test Prompt</label>
-                            <textarea name="prompt" rows="3" class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" placeholder="Ask something to test the cluster routing..."></textarea>
-                        </div>
-                        <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
-                            Run Inference Test
-                            <svg id="test-spinner" class="animate-spin ml-2 h-4 w-4 text-white htmx-indicator" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                        </button>
-                    </form>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Test Prompt</label>
+                                <textarea name="prompt" rows="3" class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" placeholder="Ask something to test the cluster routing..."></textarea>
+                            </div>
+                            <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
+                                Run Inference Test
+                                <svg id="test-spinner" class="animate-spin ml-2 h-4 w-4 text-white htmx-indicator" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            </button>
+                        </form>
 
-                    <div id="test-result" class="mt-6">
-                        <div class="text-xs text-gray-400 italic">Results will appear here...</div>
+                        <div id="test-result" class="mt-6">
+                            <div class="text-xs text-gray-400 italic">Results will appear here...</div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Global Models Section -->
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
-                    <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
-                        Global Model Catalog
-                    </h2>
-                </div>
-                <div class="divide-y divide-gray-100">
-                    {{range .AllModels}}
-                    <div class="px-6 py-3 flex justify-between items-center hover:bg-gray-50/50">
-                        <span class="text-sm font-medium text-gray-700">{{.}}</span>
-                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 uppercase">Available</span>
+            <!-- Model Management Sidebar -->
+            <div class="space-y-8">
+                <!-- Pull New Model -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                        <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                            <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path></svg>
+                            Pull New Model
+                        </h2>
                     </div>
-                    {{else}}
-                    <div class="p-6 text-center text-gray-400 italic text-sm">No models registered in the cluster.</div>
-                    {{end}}
+                    <div class="p-6">
+                        <form hx-post="/api/manage/model/pull" hx-target="#pull-status" hx-indicator="#pull-spinner" class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                                <input type="text" name="model" placeholder="e.g. llama3, mistral" class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                <p class="mt-1 text-xs text-gray-500 italic">This will trigger a pull on all active nodes.</p>
+                            </div>
+                            <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
+                                Pull to Cluster
+                                <svg id="pull-spinner" class="animate-spin ml-2 h-4 w-4 text-white htmx-indicator" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            </button>
+                        </form>
+                        <div id="pull-status" class="mt-4"></div>
+                    </div>
+                </div>
+
+                <!-- Global Model Catalog -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                        <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                            <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                            Global Model Catalog
+                        </h2>
+                    </div>
+                    <div class="divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
+                        {{range .AllModels}}
+                        <div class="px-6 py-3 flex justify-between items-center hover:bg-gray-50/50">
+                            <div>
+                                <div class="text-sm font-medium text-gray-700">{{.}}</div>
+                            </div>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 uppercase">Available</span>
+                        </div>
+                        {{else}}
+                        <div class="p-6 text-center text-gray-400 italic text-sm">No models registered in the cluster.</div>
+                        {{end}}
+                    </div>
                 </div>
             </div>
         </div>
@@ -166,18 +200,18 @@ const partialTemplate = `
                         <th class="px-6 py-4 font-semibold">Node Identity</th>
                         <th class="px-6 py-4 font-semibold">Health & Status</th>
                         <th class="px-6 py-4 font-semibold">Hardware Utilization</th>
-                        <th class="px-6 py-4 font-semibold">Loaded Models</th>
+                        <th class="px-6 py-4 font-semibold">Loaded / Stored Models</th>
                         <th class="px-6 py-4 font-semibold">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
                     {{range .Nodes}}
                     <tr class="hover:bg-gray-50/50 transition-colors">
-                        <td class="px-6 py-4">
+                        <td class="px-6 py-4 align-top">
                             <div class="font-bold text-gray-900">{{.ID}}</div>
                             <div class="text-sm text-gray-500 font-mono">{{.Address}}</div>
                         </td>
-                        <td class="px-6 py-4">
+                        <td class="px-6 py-4 align-top">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full {{if eq .State.String "Healthy"}}bg-green-500{{else if eq .State.String "Degraded"}}bg-amber-500{{else}}bg-red-500{{end}}"></span>
                                 <span class="font-medium {{if eq .State.String "Healthy"}}text-green-700{{else if eq .State.String "Degraded"}}text-amber-700{{else}}text-red-700{{end}}">
@@ -192,7 +226,7 @@ const partialTemplate = `
                             </span>
                             {{end}}
                         </td>
-                        <td class="px-6 py-4 min-w-[200px]">
+                        <td class="px-6 py-4 align-top min-w-[200px]">
                             <!-- CPU -->
                             <div class="mb-3">
                                 <div class="flex justify-between text-xs mb-1">
@@ -221,31 +255,57 @@ const partialTemplate = `
                                 </span>
                             </div>
                         </td>
-                        <td class="px-6 py-4">
-                            <div class="flex flex-wrap gap-1.5 max-w-[200px]">
-                                {{range .ActiveModels}}
-                                <div class="group relative inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-800 border border-gray-200">
-                                    {{.}}
-                                    <button hx-post="/api/manage/model/unload?id={{$.ID}}&model={{.}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="ml-1 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
-                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                                    </button>
+                        <td class="px-6 py-4 align-top">
+                            <div class="space-y-4">
+                                <!-- Loaded Models (In Memory) -->
+                                <div>
+                                    <p class="text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">In Memory</p>
+                                    <div class="flex flex-wrap gap-1.5 max-w-[250px]">
+                                        {{range .ActiveModels}}
+                                        <div class="group relative inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                            {{.}}
+                                            <button hx-post="/api/manage/model/unload?id={{$.ID}}&model={{.}}" hx-target="#dashboard-content" hx-swap="innerHTML" title="Unload from memory" class="ml-1 text-indigo-400 hover:text-red-500 transition-colors">
+                                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                            </button>
+                                        </div>
+                                        {{else}}
+                                        <span class="text-[10px] text-gray-400 italic">None</span>
+                                        {{end}}
+                                    </div>
                                 </div>
-                                {{else}}
-                                <span class="text-xs text-gray-400 italic">No models loaded</span>
-                                {{end}}
+                                <!-- Local Models (On Disk) -->
+                                <div>
+                                    <p class="text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">On Disk</p>
+                                    <div class="flex flex-wrap gap-1.5 max-w-[250px]">
+                                        {{range .LocalModels}}
+                                        <div class="group relative inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-800 border border-gray-200">
+                                            {{.Name}}
+                                            <button hx-post="/api/manage/model/delete?id={{$.ID}}&model={{.Name}}" hx-confirm="Are you sure you want to delete '{{.Name}}' from this node's disk?" hx-target="#dashboard-content" hx-swap="innerHTML" title="Delete from disk" class="ml-1 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
+                                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                            </button>
+                                        </div>
+                                        {{else}}
+                                        <span class="text-[10px] text-gray-400 italic">None</span>
+                                        {{end}}
+                                    </div>
+                                </div>
                             </div>
                         </td>
-                        <td class="px-6 py-4 text-sm">
-                            <div class="flex gap-2">
+                        <td class="px-6 py-4 align-top text-sm">
+                            <div class="flex flex-col gap-2">
                                 {{if .Draining}}
-                                <button hx-post="/api/manage/node/undrain?id={{.ID}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="px-3 py-1.5 font-semibold rounded-md bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 transition-colors">
+                                <button hx-post="/api/manage/node/undrain?id={{.ID}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="w-full px-3 py-1.5 font-semibold rounded-md bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 transition-colors">
                                     Undrain
                                 </button>
                                 {{else}}
-                                <button hx-post="/api/manage/node/drain?id={{.ID}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="px-3 py-1.5 font-semibold rounded-md bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors">
+                                <button hx-post="/api/manage/node/drain?id={{.ID}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="w-full px-3 py-1.5 font-semibold rounded-md bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors">
                                     Drain
                                 </button>
                                 {{end}}
+                                <button hx-post="/api/manage/model/pull?id={{.ID}}" hx-prompt="Enter model name to pull to this node:" hx-target="#pull-status-{{.ID}}" class="w-full px-3 py-1.5 text-xs font-semibold rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors">
+                                    Pull Model
+                                </button>
+                                <div id="pull-status-{{.ID}}" class="mt-1"></div>
                             </div>
                         </td>
                     </tr>
@@ -324,6 +384,9 @@ func (b *Balancer) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 	modelMap := make(map[string]bool)
 	for _, agent := range b.Agents {
+		for _, model := range agent.LocalModels {
+			modelMap[model.Name] = true
+		}
 		for _, model := range agent.ActiveModels {
 			modelMap[model] = true
 		}

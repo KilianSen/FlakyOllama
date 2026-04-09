@@ -85,6 +85,38 @@ func (c *Client) GetLoadedModels() ([]string, error) {
 	return names, nil
 }
 
+// ListLocalModels returns all models available on disk.
+func (c *Client) ListLocalModels() ([]models.ModelInfo, error) {
+	resp, err := http.Get(c.BaseURL + "/api/tags")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []models.ModelInfo `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Models, nil
+}
+
+// Delete removes a model from disk.
+func (c *Client) Delete(model string) error {
+	req, _ := http.NewRequest("DELETE", c.BaseURL+"/api/delete", bytes.NewBuffer([]byte(fmt.Sprintf(`{"name":"%s"}`, model))))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("delete failed: %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // Pull triggers a model download in Ollama.
 func (c *Client) Pull(model string) error {
 	body, _ := json.Marshal(map[string]string{"name": model})
@@ -123,7 +155,7 @@ func (c *Client) Show(model string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
 	return result, nil

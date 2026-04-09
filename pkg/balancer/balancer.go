@@ -351,6 +351,8 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
 	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
 	mux.HandleFunc("/api/manage/model/unload", auth.Middleware(token, b.HandleModelUnload))
+	mux.HandleFunc("/api/manage/model/pull", auth.Middleware(token, b.HandleModelPull))
+	mux.HandleFunc("/api/manage/model/delete", auth.Middleware(token, b.HandleModelDelete))
 	mux.HandleFunc("/api/manage/test", auth.Middleware(token, b.HandleTestInference))
 
 	// OpenAI compatibility layer
@@ -413,6 +415,75 @@ func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 	_, err := b.sendToAgent(agent.Address, "/models/unload", body)
 	if err != nil {
 		http.Error(w, "Failed to unload model", http.StatusInternalServerError)
+		return
+	}
+
+	if r.Header.Get("HX-Request") == "true" {
+		b.HandleStatus(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("id")
+	model := r.FormValue("model")
+	if model == "" {
+		model = r.URL.Query().Get("model")
+	}
+
+	if model == "" {
+		http.Error(w, "Model name required", http.StatusBadRequest)
+		return
+	}
+
+	b.Mu.RLock()
+	defer b.Mu.RUnlock()
+
+	if nodeID != "" {
+		// Single node pull
+		if agent, ok := b.Agents[nodeID]; ok {
+			log.Printf("Pulling model %s on agent %s", model, nodeID)
+			body, _ := json.Marshal(map[string]string{"model": model})
+			go b.sendToAgent(agent.Address, "/models/pull", body)
+		}
+	} else {
+		// Cluster-wide pull
+		log.Printf("Pulling model %s cluster-wide", model)
+		body, _ := json.Marshal(map[string]string{"model": model})
+		for _, agent := range b.Agents {
+			if !agent.Draining && agent.State != models.StateBroken {
+				go b.sendToAgent(agent.Address, "/models/pull", body)
+			}
+		}
+	}
+
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, "<div class='bg-green-50 text-green-700 p-2 rounded text-xs animate-pulse'>Pull triggered for %s</div>", model)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("id")
+	model := r.URL.Query().Get("model")
+
+	b.Mu.RLock()
+	agent, ok := b.Agents[nodeID]
+	b.Mu.RUnlock()
+
+	if !ok {
+		http.Error(w, "Node not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("Deleting model %s from disk on agent %s", model, nodeID)
+	body, _ := json.Marshal(map[string]string{"model": model})
+	_, err := b.sendToAgent(agent.Address, "/models/delete", body)
+	if err != nil {
+		http.Error(w, "Failed to delete model", http.StatusInternalServerError)
 		return
 	}
 
