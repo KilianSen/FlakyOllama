@@ -179,10 +179,16 @@ func (b *Balancer) pollAgents() {
 			var status models.NodeStatus
 			if err := json.NewDecoder(resp.Body).Decode(&status); err == nil {
 				b.Mu.Lock()
+				currentAgent, ok := b.Agents[a.ID]
+				if !ok {
+					b.Mu.Unlock()
+					return
+				}
+
 				// Preserving some internal state, but resetting errors on successful poll
-				status.State = b.Agents[a.ID].State
-				status.Errors = b.Agents[a.ID].Errors
-				status.Draining = b.Agents[a.ID].Draining
+				status.State = currentAgent.State
+				status.Errors = currentAgent.Errors
+				status.Draining = currentAgent.Draining
 
 				// If we successfully polled but it was broken, consider it healthy again
 				if status.State == models.StateBroken || status.State == models.StateDegraded {
@@ -190,6 +196,8 @@ func (b *Balancer) pollAgents() {
 					status.State = models.StateHealthy
 					status.Errors = 0
 				}
+
+				status.LastSeen = time.Now()
 
 				b.Agents[a.ID] = &status
 
@@ -212,6 +220,8 @@ func (b *Balancer) pollAgents() {
 				metrics.NodeHealthStatus.WithLabelValues(a.ID).Set(healthVal)
 
 				b.Mu.Unlock()
+			} else {
+				log.Printf("Failed to decode telemetry for agent %s: %v", a.ID, err)
 			}
 		}(agent)
 	}
@@ -509,8 +519,10 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	w.WriteHeader(resp.StatusCode)
 
 	_, err := io.Copy(w, reader)
+	latency := time.Since(start)
 	if err != nil {
 		b.recordError(agentID)
+		b.Storage.RecordMetric(agentID, modelName, latency, false)
 		if errors.Is(err, ErrStalled) {
 			log.Printf("Agent %s stalled during stream for model %s", agentID, modelName)
 		} else {
@@ -520,7 +532,7 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	}
 
 	b.recordSuccess(agentID)
-	latency := time.Since(start)
+	b.Storage.RecordMetric(agentID, modelName, latency, true)
 	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
 	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
 

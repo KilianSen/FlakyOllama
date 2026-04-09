@@ -2,13 +2,14 @@ package monitoring
 
 import (
 	"FlakyOllama/pkg/models"
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/mem"
 	"math/rand"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 // Monitor collects hardware metrics.
@@ -45,8 +46,8 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 	err = m.collectGPUMetrics(&status)
 	if err != nil {
 		// Mocking GPU if nvidia-smi fails
-		status.GPUModel = "Mock GPU (NVIDIA RTX 4090)"
-		status.VRAMTotal = 24 * 1024 * 1024 * 1024 // 24GB
+		status.GPUModel = "CPU"
+		status.VRAMTotal = 16 * 1024 * 1024 * 1024 // 16GB
 		status.VRAMUsed = uint64(rand.Intn(8 * 1024 * 1024 * 1024))
 		status.GPUTemperature = 40.0 + rand.Float64()*20.0
 	}

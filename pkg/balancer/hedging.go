@@ -4,10 +4,10 @@ import (
 	"FlakyOllama/pkg/models"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -31,52 +31,58 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var wg sync.WaitGroup
-
 	// First attempt
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		b.singleAttempt(ctx, modelName, path, body, results)
-	}()
+	go b.singleAttempt(ctx, modelName, path, body, results)
 
 	// Timer for second attempt
 	timer := time.NewTimer(p90)
 	defer timer.Stop()
 
-	secondStarted := false
-	
-	// Wait for first result or timer
+	var firstErr error
+	var secondStarted bool
+
 	for i := 0; i < 2; i++ {
 		select {
 		case res := <-results:
-			if res.Err == nil && res.Resp.StatusCode == http.StatusOK {
-				// Success! return and cancel others.
+			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
 				return res.Resp, res.AgentID, nil
 			}
-			// If it failed and we haven't started the second one yet, start it now.
-			if !secondStarted && i == 0 {
+
+			if res.Err != nil {
+				firstErr = res.Err
+			} else if res.Resp != nil {
+				firstErr = fmt.Errorf("agent %s returned status %d", res.AgentID, res.Resp.StatusCode)
+				res.Resp.Body.Close()
+			}
+
+			// If this was the first result and it failed, and we haven't started the second one, start it now.
+			if !secondStarted {
 				secondStarted = true
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					b.singleAttempt(ctx, modelName, path, body, results)
-				}()
+				timer.Stop() // No need to wait for timer anymore
+				go b.singleAttempt(ctx, modelName, path, body, results)
+			} else if i == 1 {
+				// This was the second result (either second attempt finished, or first finished after second started)
+				// and it also failed.
+				if firstErr != nil {
+					return nil, "", firstErr
+				}
+				return nil, "", fmt.Errorf("all attempts failed")
 			}
 		case <-timer.C:
 			if !secondStarted {
 				secondStarted = true
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					b.singleAttempt(ctx, modelName, path, body, results)
-				}()
+				go b.singleAttempt(ctx, modelName, path, body, results)
 			}
+			// Don't increment i here, we still want to wait for 2 results if possible
+			i--
 		case <-ctx.Done():
 			return nil, "", ctx.Err()
 		}
 	}
 
+	if firstErr != nil {
+		return nil, "", firstErr
+	}
 	return nil, "", io.EOF
 }
 
@@ -95,5 +101,9 @@ func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, bo
 	}
 
 	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		b.recordError(id)
+		b.Storage.RecordMetric(id, modelName, 0, false)
+	}
 	results <- HedgedResult{Resp: resp, AgentID: id, Err: err}
 }
