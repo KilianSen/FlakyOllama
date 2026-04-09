@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -29,7 +30,7 @@ const dashboardTemplate = `
         .htmx-request.htmx-indicator { display: inline; }
     </style>
 </head>
-<body class="bg-gray-50 text-gray-900 min-h-screen">
+<body class="bg-gray-50 text-gray-900 min-h-screen" {{if .Token}}hx-headers='{"Authorization": "Bearer {{.Token}}"}'{{end}}>
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <!-- Header -->
         <header class="flex flex-col md:flex-row md:items-center md:justify-between mb-8 gap-4">
@@ -50,7 +51,7 @@ const dashboardTemplate = `
                         <p class="text-lg font-bold text-gray-900" id="queue-depth-val">{{.QueueDepth}}</p>
                     </div>
                 </div>
-                <button hx-get="/status" hx-target="body" class="p-2 text-gray-500 hover:text-indigo-600 transition-colors">
+                <button hx-get="/status" hx-target="body" hx-push-url="true" class="p-2 text-gray-500 hover:text-indigo-600 transition-colors">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                 </button>
             </div>
@@ -403,12 +404,14 @@ func (b *Balancer) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		QueueDepth      int
 		ActiveWorkloads int
 		AllModels       []string
+		Token           string
 	}{
 		Nodes:           b.Agents,
 		Pending:         b.PendingRequests,
 		QueueDepth:      b.Queue.pq.Len(),
 		ActiveWorkloads: totalWorkloads,
 		AllModels:       allModels,
+		Token:           os.Getenv("BALANCER_TOKEN"),
 	}
 
 	w.Header().Set("Content-Type", "text/html")
