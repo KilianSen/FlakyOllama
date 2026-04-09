@@ -350,6 +350,8 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
 	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
 	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
+	mux.HandleFunc("/api/manage/model/unload", auth.Middleware(token, b.HandleModelUnload))
+	mux.HandleFunc("/api/manage/test", auth.Middleware(token, b.HandleTestInference))
 
 	// OpenAI compatibility layer
 	mux.HandleFunc("/v1/chat/completions", auth.Middleware(token, b.HandleOpenAIChat))
@@ -362,11 +364,16 @@ func (b *Balancer) NewMux() *http.ServeMux {
 func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	b.Mu.Lock()
-	defer b.Mu.Unlock()
 	if a, ok := b.Agents[id]; ok {
 		a.Draining = true
+		b.Mu.Unlock()
+		if r.Header.Get("HX-Request") == "true" {
+			b.HandleStatus(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	} else {
+		b.Mu.Unlock()
 		http.Error(w, "Node not found", http.StatusNotFound)
 	}
 }
@@ -374,13 +381,95 @@ func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) HandleNodeUndrain(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	b.Mu.Lock()
-	defer b.Mu.Unlock()
 	if a, ok := b.Agents[id]; ok {
 		a.Draining = false
+		b.Mu.Unlock()
+		if r.Header.Get("HX-Request") == "true" {
+			b.HandleStatus(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	} else {
+		b.Mu.Unlock()
 		http.Error(w, "Node not found", http.StatusNotFound)
 	}
+}
+
+func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("id")
+	model := r.URL.Query().Get("model")
+
+	b.Mu.RLock()
+	agent, ok := b.Agents[nodeID]
+	b.Mu.RUnlock()
+
+	if !ok {
+		http.Error(w, "Node not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("Unloading model %s from agent %s", model, nodeID)
+	body, _ := json.Marshal(map[string]string{"model": model})
+	_, err := b.sendToAgent(agent.Address, "/models/unload", body)
+	if err != nil {
+		http.Error(w, "Failed to unload model", http.StatusInternalServerError)
+		return
+	}
+
+	if r.Header.Get("HX-Request") == "true" {
+		b.HandleStatus(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
+	model := r.FormValue("model")
+	prompt := r.FormValue("prompt")
+
+	if model == "" || prompt == "" {
+		fmt.Fprintf(w, "<div class='bg-red-50 text-red-700 p-4 rounded-lg'>Error: Model and Prompt are required.</div>")
+		return
+	}
+
+	req := models.InferenceRequest{
+		Model:  model,
+		Prompt: prompt,
+		Stream: false,
+	}
+
+	b.Mu.Lock()
+	b.PendingRequests[req.Model]++
+	b.Mu.Unlock()
+	defer func() {
+		b.Mu.Lock()
+		b.PendingRequests[req.Model]--
+		b.Mu.Unlock()
+	}()
+
+	body, _ := json.Marshal(req)
+	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	if err != nil {
+		fmt.Fprintf(w, "<div class='bg-red-50 text-red-700 p-4 rounded-lg'>Error: %v</div>", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result models.InferenceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Fprintf(w, "<div class='bg-red-50 text-red-700 p-4 rounded-lg'>Error: Failed to decode response.</div>")
+		return
+	}
+
+	fmt.Fprintf(w, `
+		<div class='bg-indigo-50 border border-indigo-100 p-4 rounded-xl shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300'>
+			<div class='flex justify-between items-center mb-2'>
+				<span class='text-xs font-bold text-indigo-700 uppercase'>Response from %s</span>
+				<span class='text-xs text-indigo-400'>%s</span>
+			</div>
+			<div class='text-gray-800 whitespace-pre-wrap leading-relaxed'>%s</div>
+		</div>
+	`, agentID, time.Now().Format("15:04:05"), result.Response)
 }
 
 func (b *Balancer) Serve() error {
