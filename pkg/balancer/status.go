@@ -415,7 +415,8 @@ func (b *Balancer) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html")
-	if r.URL.Query().Get("partial") == "true" {
+	// If it's an HTMX request targeting dashboard-content OR explicit partial query param
+	if r.Header.Get("HX-Target") == "dashboard-content" || r.URL.Query().Get("partial") == "true" {
 		tmpl.ExecuteTemplate(w, "partial", data)
 	} else {
 		tmpl.Execute(w, data)
