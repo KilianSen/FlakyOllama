@@ -306,9 +306,11 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	}
 
 	if bestAgent == nil {
+		log.Printf("Routing failed: No suitable agent found for model %s (pending: %d)", req.Model, pending)
 		return "", "", fmt.Errorf("no available agents with sufficient capabilities")
 	}
 
+	log.Printf("Routed model %s to agent %s (score: %.2f, pending: %d)", req.Model, bestAgent.ID, bestScore, pending)
 	return bestAgent.ID, bestAgent.Address, nil
 }
 
@@ -430,6 +432,9 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 	model := r.FormValue("model")
 	if model == "" {
 		model = r.URL.Query().Get("model")
+	}
+	if model == "" {
+		model = r.Header.Get("HX-Prompt")
 	}
 
 	if model == "" {
@@ -619,6 +624,8 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
+
 	b.Mu.Lock()
 	b.PendingRequests[req.Model]++
 	b.Mu.Unlock()
@@ -646,6 +653,8 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
+
 	b.Mu.Lock()
 	b.PendingRequests[req.Model]++
 	b.Mu.Unlock()
@@ -658,6 +667,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(req)
 	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
 	if err != nil {
+		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -706,10 +716,14 @@ func (b *Balancer) recordError(id string) {
 	defer b.Mu.Unlock()
 	if a, ok := b.Agents[id]; ok {
 		a.Errors++
+		oldState := a.State
 		if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
 			a.State = models.StateBroken
 		} else {
 			a.State = models.StateDegraded
+		}
+		if oldState != a.State {
+			log.Printf("Node %s state changed: %s -> %s (errors: %d)", id, oldState.String(), a.State.String(), a.Errors)
 		}
 	}
 }
@@ -718,6 +732,9 @@ func (b *Balancer) recordSuccess(id string) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 	if a, ok := b.Agents[id]; ok {
+		if a.State != models.StateHealthy {
+			log.Printf("Node %s recovered to Healthy state", id)
+		}
 		a.Errors = 0
 		a.State = models.StateHealthy
 	}

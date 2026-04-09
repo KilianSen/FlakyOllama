@@ -128,6 +128,10 @@ func (c *Client) Pull(model string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("pull failed: %d", resp.StatusCode)
 	}
+
+	// Ollama /api/pull is a stream. We must consume it to let the pull finish.
+	// We'll discard the status updates for now to keep things simple.
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 

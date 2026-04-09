@@ -132,7 +132,13 @@ func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	go a.Ollama.Pull(req.Model) // Async pull
+	go func() {
+		if err := a.Ollama.Pull(req.Model); err != nil {
+			log.Printf("Pull failed for model %s: %v", req.Model, err)
+		} else {
+			log.Printf("Pull finished for model %s", req.Model)
+		}
+	}()
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -144,6 +150,7 @@ func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	log.Printf("Unloading model %s", req.Model)
 	if err := a.Ollama.Unload(req.Model); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -159,6 +166,7 @@ func (a *Agent) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	log.Printf("Deleting model %s from disk", req.Model)
 	if err := a.Ollama.Delete(req.Model); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -188,6 +196,8 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("Starting inference for model %s", req.Model)
 
 	// Propagation of context for cancellation
 	stream, code, err := a.Ollama.GenerateStream(req)
@@ -221,6 +231,8 @@ func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("Starting chat completion for model %s", req.Model)
 
 	stream, code, err := a.Ollama.ChatStream(req)
 	if err != nil {
