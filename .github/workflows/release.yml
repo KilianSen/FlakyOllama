@@ -62,3 +62,20 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-integrated:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-integrated:${{ github.sha }}
           labels: ${{ steps.meta-integrated.outputs.labels }}
+
+      - name: Extract metadata (tags, labels) for Frontend
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend
+
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}

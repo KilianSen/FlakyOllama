@@ -22,8 +22,6 @@ services:
     environment:
       - VITE_API_URL=http://localhost:8080
       - VITE_BALANCER_TOKEN=your-secret-balancer-token
-      - TAILSCALE_AUTHKEY=${TAILSCALE_AUTHKEY:-}
-      - TAILSCALE_HOSTNAME=flakyollama-ui
     restart: always
 
   agent-1:
