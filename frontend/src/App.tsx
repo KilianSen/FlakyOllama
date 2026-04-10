@@ -1,18 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { api, ClusterStatus, NodeStatus } from './api';
+import { api } from './api';
+import type { ClusterStatus } from './api';
 import { 
   Server, 
-  Cpu, 
   Database, 
   Thermometer, 
-  Activity, 
-  Shield, 
-  PlusCircle, 
   Trash2, 
   XCircle,
   Play,
   Layers,
-  Search,
   RefreshCw
 } from 'lucide-react';
 
