@@ -10,11 +10,13 @@ RUN npm run build
 FROM nginx:alpine
 RUN apk add --no-cache ca-certificates
 
-WORKDIR /usr/share/nginx/html
-COPY --from=builder /app/dist .
+WORKDIR /
 COPY frontend/nginx.conf /etc/nginx/nginx.conf
 COPY frontend/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+WORKDIR /usr/share/nginx/html
+COPY --from=builder /app/dist .
 
 EXPOSE 80
 ENTRYPOINT ["/entrypoint.sh"]
