@@ -20,7 +20,7 @@ services:
     ports:
       - "3000:80"
     environment:
-      - VITE_API_URL=http://localhost:8080
+      - BACKEND_URL=http://balancer:8080
       - VITE_BALANCER_TOKEN=your-secret-balancer-token
     restart: always
 
