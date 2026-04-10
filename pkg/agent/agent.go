@@ -83,6 +83,7 @@ func (a *Agent) NewMux() *http.ServeMux {
 	token := os.Getenv("AGENT_TOKEN")
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/telemetry", auth.Middleware(token, a.HandleTelemetry))
 	mux.HandleFunc("/inference", auth.Middleware(token, a.HandleInference))
 	mux.HandleFunc("/chat", auth.Middleware(token, a.HandleChat))

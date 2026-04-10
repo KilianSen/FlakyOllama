@@ -343,6 +343,7 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	token := os.Getenv("BALANCER_TOKEN")
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/register", b.HandleRegister) // Register doesn't need auth usually or use a different secret
 	mux.HandleFunc("/api/generate", auth.Middleware(token, b.HandleGenerate))
 	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
@@ -575,21 +576,29 @@ func (b *Balancer) HandleTags(w http.ResponseWriter, r *http.Request) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
-	modelMap := make(map[string]bool)
+	modelMap := make(map[string]models.ModelInfo)
 	for _, agent := range b.Agents {
-		for _, model := range agent.ActiveModels {
-			modelMap[model] = true
+		// Include active models (running)
+		for _, mName := range agent.ActiveModels {
+			if _, ok := modelMap[mName]; !ok {
+				modelMap[mName] = models.ModelInfo{
+					Name:       mName,
+					ModifiedAt: time.Now(),
+				}
+			}
+		}
+		// Include local models (on disk)
+		for _, mInfo := range agent.LocalModels {
+			modelMap[mInfo.Name] = mInfo
 		}
 	}
 
 	var modelList []models.ModelInfo
-	for m := range modelMap {
-		modelList = append(modelList, models.ModelInfo{
-			Name:       m,
-			ModifiedAt: time.Now(),
-		})
+	for _, m := range modelMap {
+		modelList = append(modelList, m)
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models.TagsResponse{Models: modelList})
 }
 
