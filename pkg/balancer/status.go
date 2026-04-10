@@ -173,7 +173,7 @@ const partialTemplate = `
                                         {{range .ActiveModels}}
                                         <div class="group relative inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
                                             {{.}}
-                                            <button hx-post="/api/manage/model/unload?id={{$.ID}}&model={{.}}" hx-target="#dashboard-content" hx-swap="innerHTML" title="Unload from memory" class="ml-1 text-indigo-400 hover:text-red-500 transition-colors">
+                                            <button hx-post="/api/manage/model/unload?addr={{$.Address}}&model={{.}}" hx-target="#dashboard-content" hx-swap="innerHTML" title="Unload from memory" class="ml-1 text-indigo-400 hover:text-red-500 transition-colors">
                                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                                             </button>
                                         </div>
@@ -189,7 +189,7 @@ const partialTemplate = `
                                         {{range .LocalModels}}
                                         <div class="group relative inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-800 border border-gray-200">
                                             {{.Name}}
-                                            <button hx-post="/api/manage/model/delete?id={{$.ID}}&model={{.Name}}" hx-confirm="Are you sure you want to delete '{{.Name}}' from this node's disk?" hx-target="#dashboard-content" hx-swap="innerHTML" title="Delete from disk" class="ml-1 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
+                                            <button hx-post="/api/manage/model/delete?addr={{$.Address}}&model={{.Name}}" hx-confirm="Are you sure you want to delete '{{.Name}}' from this node's disk?" hx-target="#dashboard-content" hx-swap="innerHTML" title="Delete from disk" class="ml-1 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
                                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                                             </button>
                                         </div>
@@ -203,18 +203,18 @@ const partialTemplate = `
                         <td class="px-6 py-4 align-top text-sm">
                             <div class="flex flex-col gap-2">
                                 {{if .Draining}}
-                                <button hx-post="/api/manage/node/undrain?id={{.ID}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="w-full px-3 py-1.5 font-semibold rounded-md bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 transition-colors">
+                                <button hx-post="/api/manage/node/undrain?addr={{.Address}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="w-full px-3 py-1.5 font-semibold rounded-md bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 transition-colors">
                                     Undrain
                                 </button>
                                 {{else}}
-                                <button hx-post="/api/manage/node/drain?id={{.ID}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="w-full px-3 py-1.5 font-semibold rounded-md bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors">
+                                <button hx-post="/api/manage/node/drain?addr={{.Address}}" hx-target="#dashboard-content" hx-swap="innerHTML" class="w-full px-3 py-1.5 font-semibold rounded-md bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors">
                                     Drain
                                 </button>
                                 {{end}}
-                                <button hx-post="/api/manage/model/pull?id={{.ID}}" hx-prompt="Enter model name to pull to this node:" hx-target="#pull-status-{{.ID}}" class="w-full px-3 py-1.5 text-xs font-semibold rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors">
+                                <button hx-post="/api/manage/model/pull?addr={{.Address}}" hx-prompt="Enter model name to pull to this node:" hx-target="#pull-status-{{ReplaceAll .Address ":" "-"}}" class="w-full px-3 py-1.5 text-xs font-semibold rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors">
                                     Pull Model
                                 </button>
-                                <div id="pull-status-{{.ID}}" class="mt-1"></div>
+                                <div id="pull-status-{{ReplaceAll .Address ":" "-"}}" class="mt-1"></div>
                             </div>
                         </td>
                     </tr>
@@ -361,7 +361,8 @@ func (b *Balancer) HandleStatus(w http.ResponseWriter, r *http.Request) {
 			}
 			return fmt.Sprintf("%v", d.Round(time.Minute))
 		},
-		"now": func() string { return time.Now().Format("15:04:05") },
+		"now":        func() string { return time.Now().Format("15:04:05") },
+		"ReplaceAll": func(s, old, new string) string { return strings.ReplaceAll(s, old, new) },
 	})
 
 	var err error

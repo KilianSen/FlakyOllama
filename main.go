@@ -44,7 +44,12 @@ func main() {
 	case "agent":
 		id := os.Getenv("AGENT_ID")
 		if id == "" {
-			id = "agent-1"
+			hostname, _ := os.Hostname()
+			if hostname != "" {
+				id = hostname
+			} else {
+				id = "agent-1"
+			}
 		}
 		addr := os.Getenv("AGENT_ADDR")
 		if addr == "" {

@@ -20,7 +20,7 @@ var (
 	NodeHealthStatus = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "flakyollama_node_health_status",
 		Help: "Health status of the node (0=broken, 1=degraded, 2=healthy)",
-	}, []string{"node"})
+	}, []string{"node", "address"})
 
 	QueueDepth = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "flakyollama_queue_depth",

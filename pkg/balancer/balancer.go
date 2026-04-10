@@ -133,7 +133,7 @@ func (b *Balancer) Register(req models.RegisterRequest) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 
-	b.Agents[req.ID] = &models.NodeStatus{
+	b.Agents[req.Address] = &models.NodeStatus{
 		ID:      req.ID,
 		Address: req.Address,
 		State:   models.StateHealthy,
@@ -170,8 +170,8 @@ func (b *Balancer) pollAgents() {
 			}
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				log.Printf("Failed to poll agent %s: %v", a.ID, err)
-				b.recordError(a.ID)
+				log.Printf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
+				b.recordError(a.Address)
 				return
 			}
 			defer resp.Body.Close()
@@ -179,7 +179,7 @@ func (b *Balancer) pollAgents() {
 			var status models.NodeStatus
 			if err := json.NewDecoder(resp.Body).Decode(&status); err == nil {
 				b.Mu.Lock()
-				currentAgent, ok := b.Agents[a.ID]
+				currentAgent, ok := b.Agents[a.Address]
 				if !ok {
 					b.Mu.Unlock()
 					return
@@ -192,14 +192,14 @@ func (b *Balancer) pollAgents() {
 
 				// If we successfully polled but it was broken, consider it healthy again
 				if status.State == models.StateBroken || status.State == models.StateDegraded {
-					log.Printf("Agent %s recovered via successful poll", a.ID)
+					log.Printf("Agent %s (%s) recovered via successful poll", a.ID, a.Address)
 					status.State = models.StateHealthy
 					status.Errors = 0
 				}
 
 				status.LastSeen = time.Now()
 
-				b.Agents[a.ID] = &status
+				b.Agents[a.Address] = &status
 
 				// Update learned VRAM
 				for _, m := range status.ActiveModels {
@@ -217,11 +217,11 @@ func (b *Balancer) pollAgents() {
 				case models.StateDegraded:
 					healthVal = 1.0
 				}
-				metrics.NodeHealthStatus.WithLabelValues(a.ID).Set(healthVal)
+				metrics.NodeHealthStatus.WithLabelValues(a.ID, a.Address).Set(healthVal)
 
 				b.Mu.Unlock()
 			} else {
-				log.Printf("Failed to decode telemetry for agent %s: %v", a.ID, err)
+				log.Printf("Failed to decode telemetry for agent %s (%s): %v", a.ID, a.Address, err)
 			}
 		}(agent)
 	}
@@ -368,57 +368,84 @@ func (b *Balancer) NewMux() *http.ServeMux {
 
 func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
+	addr := r.URL.Query().Get("addr")
 	b.Mu.Lock()
-	if a, ok := b.Agents[id]; ok {
-		a.Draining = true
-		b.Mu.Unlock()
+	found := false
+	for _, a := range b.Agents {
+		if (addr != "" && a.Address == addr) || (id != "" && a.ID == id) {
+			a.Draining = true
+			found = true
+			if addr != "" {
+				break
+			}
+		}
+	}
+	b.Mu.Unlock()
+
+	if found {
 		if r.Header.Get("HX-Request") == "true" {
 			b.HandleStatus(w, r)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	} else {
-		b.Mu.Unlock()
 		http.Error(w, "Node not found", http.StatusNotFound)
 	}
 }
 
 func (b *Balancer) HandleNodeUndrain(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
+	addr := r.URL.Query().Get("addr")
 	b.Mu.Lock()
-	if a, ok := b.Agents[id]; ok {
-		a.Draining = false
-		b.Mu.Unlock()
+	found := false
+	for _, a := range b.Agents {
+		if (addr != "" && a.Address == addr) || (id != "" && a.ID == id) {
+			a.Draining = false
+			found = true
+			if addr != "" {
+				break
+			}
+		}
+	}
+	b.Mu.Unlock()
+
+	if found {
 		if r.Header.Get("HX-Request") == "true" {
 			b.HandleStatus(w, r)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	} else {
-		b.Mu.Unlock()
 		http.Error(w, "Node not found", http.StatusNotFound)
 	}
 }
 
 func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.URL.Query().Get("id")
+	nodeAddr := r.URL.Query().Get("addr")
 	model := r.URL.Query().Get("model")
 
 	b.Mu.RLock()
-	agent, ok := b.Agents[nodeID]
+	var targets []*models.NodeStatus
+	for _, a := range b.Agents {
+		if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
+			targets = append(targets, a)
+			if nodeAddr != "" {
+				break
+			}
+		}
+	}
 	b.Mu.RUnlock()
 
-	if !ok {
+	if len(targets) == 0 {
 		http.Error(w, "Node not found", http.StatusNotFound)
 		return
 	}
 
-	log.Printf("Unloading model %s from agent %s", model, nodeID)
 	body, _ := json.Marshal(map[string]string{"model": model})
-	_, err := b.sendToAgent(agent.Address, "/models/unload", body)
-	if err != nil {
-		http.Error(w, "Failed to unload model", http.StatusInternalServerError)
-		return
+	for _, agent := range targets {
+		log.Printf("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
+		b.sendToAgent(agent.Address, "/models/unload", body)
 	}
 
 	if r.Header.Get("HX-Request") == "true" {
@@ -430,6 +457,7 @@ func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.URL.Query().Get("id")
+	nodeAddr := r.URL.Query().Get("addr")
 	model := r.FormValue("model")
 	if model == "" {
 		model = r.URL.Query().Get("model")
@@ -446,12 +474,17 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
-	if nodeID != "" {
-		// Single node pull
-		if agent, ok := b.Agents[nodeID]; ok {
-			log.Printf("Pulling model %s on agent %s", model, nodeID)
-			body, _ := json.Marshal(map[string]string{"model": model})
-			go b.sendToAgent(agent.Address, "/models/pull", body)
+	if nodeID != "" || nodeAddr != "" {
+		// Single node or group pull
+		for _, agent := range b.Agents {
+			if (nodeAddr != "" && agent.Address == nodeAddr) || (nodeID != "" && agent.ID == nodeID) {
+				log.Printf("Pulling model %s on agent %s (%s)", model, agent.ID, agent.Address)
+				body, _ := json.Marshal(map[string]string{"model": model})
+				go b.sendToAgent(agent.Address, "/models/pull", body)
+				if nodeAddr != "" {
+					break
+				}
+			}
 		}
 	} else {
 		// Cluster-wide pull
@@ -474,23 +507,30 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.URL.Query().Get("id")
+	nodeAddr := r.URL.Query().Get("addr")
 	model := r.URL.Query().Get("model")
 
 	b.Mu.RLock()
-	agent, ok := b.Agents[nodeID]
+	var targets []*models.NodeStatus
+	for _, a := range b.Agents {
+		if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
+			targets = append(targets, a)
+			if nodeAddr != "" {
+				break
+			}
+		}
+	}
 	b.Mu.RUnlock()
 
-	if !ok {
+	if len(targets) == 0 {
 		http.Error(w, "Node not found", http.StatusNotFound)
 		return
 	}
 
-	log.Printf("Deleting model %s from disk on agent %s", model, nodeID)
 	body, _ := json.Marshal(map[string]string{"model": model})
-	_, err := b.sendToAgent(agent.Address, "/models/delete", body)
-	if err != nil {
-		http.Error(w, "Failed to delete model", http.StatusInternalServerError)
-		return
+	for _, agent := range targets {
+		log.Printf("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
+		b.sendToAgent(agent.Address, "/models/delete", body)
 	}
 
 	if r.Header.Get("HX-Request") == "true" {
@@ -685,7 +725,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	b.finalizeProxy(w, resp, agentID, req.Model)
 }
 
-func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentID, modelName string) {
+func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string) {
 	start := time.Now()
 	// Wrap with Stall Protection
 	stallTimeout := time.Duration(b.Config.StallTimeoutSec) * time.Second
@@ -700,30 +740,39 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	_, err := io.Copy(w, reader)
 	latency := time.Since(start)
 	if err != nil {
-		b.recordError(agentID)
-		b.Storage.RecordMetric(agentID, modelName, latency, false)
+		b.recordError(agentAddr)
+		b.Storage.RecordMetric(agentAddr, modelName, latency, false)
 		if errors.Is(err, ErrStalled) {
-			log.Printf("Agent %s stalled during stream for model %s", agentID, modelName)
+			log.Printf("Agent %s stalled during stream for model %s", agentAddr, modelName)
 		} else {
-			log.Printf("Stream error from %s: %v", agentID, err)
+			log.Printf("Stream error from %s: %v", agentAddr, err)
 		}
 		return
 	}
 
-	b.recordSuccess(agentID)
-	b.Storage.RecordMetric(agentID, modelName, latency, true)
+	b.recordSuccess(agentAddr)
+	b.Storage.RecordMetric(agentAddr, modelName, latency, true)
+	// We still use ID for some metrics if we want to aggregate by "name",
+	// but here we should probably use Address or ID:Address
+	agentID := agentAddr
+	b.Mu.RLock()
+	if a, ok := b.Agents[agentAddr]; ok {
+		agentID = a.ID
+	}
+	b.Mu.RUnlock()
+
 	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
 	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
 
 	b.Mu.Lock()
-	b.ModelLastUsed[agentID+":"+modelName] = time.Now()
+	b.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
 	b.Mu.Unlock()
 }
 
-func (b *Balancer) recordError(id string) {
+func (b *Balancer) recordError(addr string) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	if a, ok := b.Agents[id]; ok {
+	if a, ok := b.Agents[addr]; ok {
 		a.Errors++
 		oldState := a.State
 		if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
@@ -732,17 +781,17 @@ func (b *Balancer) recordError(id string) {
 			a.State = models.StateDegraded
 		}
 		if oldState != a.State {
-			log.Printf("Node %s state changed: %s -> %s (errors: %d)", id, oldState.String(), a.State.String(), a.Errors)
+			log.Printf("Node %s (%s) state changed: %s -> %s (errors: %d)", a.ID, addr, oldState.String(), a.State.String(), a.Errors)
 		}
 	}
 }
 
-func (b *Balancer) recordSuccess(id string) {
+func (b *Balancer) recordSuccess(addr string) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	if a, ok := b.Agents[id]; ok {
+	if a, ok := b.Agents[addr]; ok {
 		if a.State != models.StateHealthy {
-			log.Printf("Node %s recovered to Healthy state", id)
+			log.Printf("Node %s (%s) recovered to Healthy state", a.ID, addr)
 		}
 		a.Errors = 0
 		a.State = models.StateHealthy
