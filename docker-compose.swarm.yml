@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  balancer:
+    image: ghcr.io/kiliansen/flakyollama-balancer:latest
+    ports:
+      - target: 8080
+        published: 14210
+        protocol: tcp
+        mode: ingress
+    environment:
+      - ROLE=balancer
+      - BALANCER_ADDR=0.0.0.0:8080
+      - DB_PATH=/data/flakyollama.db
+      - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+      - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
+    volumes:
+      - balancer_data:/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          # Pin the balancer to a specific node to maintain database state
+          - node.labels.role == balancer
+      restart_policy:
+        condition: on-failure
+
+  frontend:
+    # Swarm requires an image instead of a build context
+    image: ghcr.io/kiliansen/flakyollama-frontend:latest
+    ports:
+      - target: 80
+        published: 28540
+        protocol: tcp
+        mode: ingress
+    environment:
+      - BACKEND_URL=http://balancer:8080
+      - VITE_BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+    deploy:
+      replicas: 2 # Frontend can easily be scaled across the cluster
+      restart_policy:
+        condition: any
+
+  agent-1:
+    image: ghcr.io/kiliansen/flakyollama-integrated:latest
+    environment:
+      - ROLE=agent
+      - AGENT_ID=gpu-node-1
+      - BALANCER_URL=http://balancer:8080
+      - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
+      - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+      # Depending on how the NVIDIA driver is configured on the swarm node,
+      # you may need to pass the runtime through daemon.json or environment variables.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - agent1_data:/data
+      - agent1_ollama:/root/.ollama
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          # Schedule only on nodes explicitly labeled as having a GPU
+          - node.labels.gpu == true
+      restart_policy:
+        condition: any
+
+  agent-2:
+    image: ghcr.io/kiliansen/flakyollama-integrated:latest
+    environment:
+      - ROLE=agent
+      - AGENT_ID=cpu-node-2
+      - BALANCER_URL=http://balancer:8080
+      - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
+      - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+    volumes:
+      - agent2_data:/data
+      - agent2_ollama:/root/.ollama
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          # Schedule on a node designated for CPU workloads
+          - node.labels.role == worker-cpu
+      restart_policy:
+        condition: any
+
+volumes:
+  balancer_data:
+  agent1_data:
+  agent1_ollama:
+  agent2_data:
+  agent2_ollama:
