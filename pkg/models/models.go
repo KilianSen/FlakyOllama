@@ -93,3 +93,12 @@ type RegisterRequest struct {
 	ID      string `json:"id"`
 	Address string `json:"address"`
 }
+
+// ClusterStatus represents the complete state of the cluster for the dashboard.
+type ClusterStatus struct {
+	Nodes           map[string]*NodeStatus `json:"nodes"`
+	PendingRequests map[string]int         `json:"pending_requests"`
+	QueueDepth      int                    `json:"queue_depth"`
+	ActiveWorkloads int                    `json:"active_workloads"`
+	AllModels       []string               `json:"all_models"`
+}

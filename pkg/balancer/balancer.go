@@ -338,6 +338,55 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	}
 }
 
+func (b *Balancer) CORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, r *http.Request) {
+	b.Mu.RLock()
+	defer b.Mu.RUnlock()
+
+	totalWorkloads := 0
+	for _, count := range b.PendingRequests {
+		totalWorkloads += count
+	}
+
+	modelMap := make(map[string]bool)
+	for _, agent := range b.Agents {
+		for _, model := range agent.LocalModels {
+			modelMap[model.Name] = true
+		}
+		for _, model := range agent.ActiveModels {
+			modelMap[model] = true
+		}
+	}
+	allModels := make([]string, 0, len(modelMap))
+	for m := range modelMap {
+		allModels = append(allModels, m)
+	}
+	sort.Strings(allModels)
+
+	status := models.ClusterStatus{
+		Nodes:           b.Agents,
+		PendingRequests: b.PendingRequests,
+		QueueDepth:      b.Queue.pq.Len(),
+		ActiveWorkloads: totalWorkloads,
+		AllModels:       allModels,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
+}
+
 // NewMux returns a mux with the balancer's handlers registered.
 func (b *Balancer) NewMux() *http.ServeMux {
 	token := os.Getenv("BALANCER_TOKEN")
@@ -349,7 +398,7 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
 	mux.HandleFunc("/api/show", auth.Middleware(token, b.HandleShow))
 	mux.HandleFunc("/api/tags", auth.Middleware(token, b.HandleTags))
-	mux.HandleFunc("/status", b.HandleStatus)
+	mux.HandleFunc("/api/status", auth.Middleware(token, b.HandleAPIStatus))
 	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
 	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
 	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
@@ -383,11 +432,8 @@ func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
 	b.Mu.Unlock()
 
 	if found {
-		if r.Header.Get("HX-Request") == "true" {
-			b.HandleStatus(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	} else {
 		http.Error(w, "Node not found", http.StatusNotFound)
 	}
@@ -410,11 +456,8 @@ func (b *Balancer) HandleNodeUndrain(w http.ResponseWriter, r *http.Request) {
 	b.Mu.Unlock()
 
 	if found {
-		if r.Header.Get("HX-Request") == "true" {
-			b.HandleStatus(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	} else {
 		http.Error(w, "Node not found", http.StatusNotFound)
 	}
@@ -448,11 +491,8 @@ func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 		b.sendToAgent(agent.Address, "/models/unload", body)
 	}
 
-	if r.Header.Get("HX-Request") == "true" {
-		b.HandleStatus(w, r)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
@@ -463,7 +503,12 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 		model = r.URL.Query().Get("model")
 	}
 	if model == "" {
-		model = r.Header.Get("HX-Prompt")
+		// Try JSON body
+		var req struct {
+			Model string `json:"model"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		model = req.Model
 	}
 
 	if model == "" {
@@ -497,12 +542,8 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if r.Header.Get("HX-Request") == "true" {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "<div class='bg-green-50 text-green-700 p-2 rounded text-xs animate-pulse'>Pull triggered for %s</div>", model)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Pull triggered for " + model})
 }
 
 func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
@@ -533,11 +574,8 @@ func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
 		b.sendToAgent(agent.Address, "/models/delete", body)
 	}
 
-	if r.Header.Get("HX-Request") == "true" {
-		b.HandleStatus(w, r)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
@@ -545,7 +583,18 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 	prompt := r.FormValue("prompt")
 
 	if model == "" || prompt == "" {
-		fmt.Fprintf(w, "<div class='bg-red-50 text-red-700 p-4 rounded-lg'>Error: Model and Prompt are required.</div>")
+		// Try JSON body
+		var req struct {
+			Model  string `json:"model"`
+			Prompt string `json:"prompt"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		model = req.Model
+		prompt = req.Prompt
+	}
+
+	if model == "" || prompt == "" {
+		http.Error(w, "Model and Prompt are required", http.StatusBadRequest)
 		return
 	}
 
@@ -567,31 +616,27 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(req)
 	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
 	if err != nil {
-		fmt.Fprintf(w, "<div class='bg-red-50 text-red-700 p-4 rounded-lg'>Error: %v</div>", err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
 
 	var result models.InferenceResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		fmt.Fprintf(w, "<div class='bg-red-50 text-red-700 p-4 rounded-lg'>Error: Failed to decode response.</div>")
+		http.Error(w, "Failed to decode response", http.StatusInternalServerError)
 		return
 	}
 
-	fmt.Fprintf(w, `
-		<div class='bg-indigo-50 border border-indigo-100 p-4 rounded-xl shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300'>
-			<div class='flex justify-between items-center mb-2'>
-				<span class='text-xs font-bold text-indigo-700 uppercase'>Response from %s</span>
-				<span class='text-xs text-indigo-400'>%s</span>
-			</div>
-			<div class='text-gray-800 whitespace-pre-wrap leading-relaxed'>%s</div>
-		</div>
-	`, agentID, time.Now().Format("15:04:05"), result.Response)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"agent_id": agentID,
+		"response": result.Response,
+	})
 }
 
 func (b *Balancer) Serve() error {
 	log.Printf("Balancer listening on %s", b.Address)
-	return http.ListenAndServe(b.Address, b.NewMux())
+	return http.ListenAndServe(b.Address, b.CORS(b.NewMux()))
 }
 
 func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {

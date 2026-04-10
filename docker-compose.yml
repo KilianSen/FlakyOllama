@@ -13,6 +13,19 @@ services:
       - balancer_data:/data
     restart: always
 
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://localhost:8080
+      - VITE_BALANCER_TOKEN=your-secret-balancer-token
+      - TAILSCALE_AUTHKEY=${TAILSCALE_AUTHKEY:-}
+      - TAILSCALE_HOSTNAME=flakyollama-ui
+    restart: always
+
   agent-1:
     image: ghcr.io/kiliansen/flakyollama-integrated:latest
     environment:
