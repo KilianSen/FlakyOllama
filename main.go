@@ -58,9 +58,14 @@ func main() {
 		if ollamaURL == "" {
 			ollamaURL = "http://localhost:11434"
 		}
+		dbPath := os.Getenv("DB_PATH")
 
 		a := agent.NewAgent(id, addr, balancerURL, ollamaURL)
-		
+		if dbPath != "" {
+			log.Printf("Agent %s using storage at %s", id, dbPath)
+			// Future use: a.SetStorage(dbPath)
+		}
+
 		// Background registration (retry until success)
 		go func() {
 			for {

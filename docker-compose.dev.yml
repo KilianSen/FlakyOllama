@@ -28,3 +28,6 @@ services:
       - AGENT_TOKEN=dev-token
       - BALANCER_TOKEN=dev-token
       - AGENT_ADDR=0.0.0.0:8081
+    volumes:
+      - ./agent_dev_data:/data
+      - ./agent_dev_ollama:/root/.ollama

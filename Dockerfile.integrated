@@ -26,6 +26,7 @@ ENV AGENT_ID=agent-1
 ENV AGENT_ADDR=0.0.0.0:8081
 ENV BALANCER_URL=http://balancer:8080
 ENV OLLAMA_URL=http://localhost:11434
+ENV DB_PATH=/data/flakyollama.db
 
 EXPOSE 8081 11434
 
