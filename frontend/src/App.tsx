@@ -58,7 +58,7 @@ const ClusterTopology = ({ status }: { status: ClusterStatus }) => {
             const angle = (i / nodeEntries.length) * 2 * Math.PI - Math.PI / 2;
             const x = Math.cos(angle) * radius;
             const y = Math.sin(angle) * radius;
-            const isActive = node.active_models.length > 0;
+            const isActive = (node.active_models?.length || 0) > 0;
 
             return (
               <div key={addr} className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -149,7 +149,7 @@ const ClusterTopology = ({ status }: { status: ClusterStatus }) => {
                           )}
                           <div className="pt-1 flex items-center gap-1 text-[10px]">
                             <Layers className="w-3 h-3 text-primary" />
-                            <span className="font-semibold">{node.active_models.length} active models</span>
+                            <span className="font-semibold">{node.active_models?.length || 0} active models</span>
                           </div>
                         </CardContent>
                       </Card>
@@ -611,7 +611,7 @@ const App = () => {
                                   <Layers className="w-3.5 h-3.5" />
                                 </div>
                                 <span className="text-xs font-black uppercase tracking-widest">Compute Workloads</span>
-                                <Badge variant="secondary" className="font-bold h-5 px-2 text-[10px]">{node.active_models.length + (node.local_models?.length || 0)} Models</Badge>
+                                <Badge variant="secondary" className="font-bold h-5 px-2 text-[10px]">{(node.active_models?.length || 0) + (node.local_models?.length || 0)} Models</Badge>
                               </div>
                             </AccordionTrigger>
                             <AccordionContent className="p-6 pt-2 space-y-6">
