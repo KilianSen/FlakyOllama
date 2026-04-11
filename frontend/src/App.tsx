@@ -3,10 +3,145 @@ import {api, type NodeStatus} from './api';
 import type { ClusterStatus } from './api';
 import { 
   Server, Database, Thermometer, Trash2, XCircle, Play, Layers, RefreshCw, Cpu,
-  Activity, AlertTriangle, CheckCircle2, CloudDownload, Terminal, ChevronDown, ChevronUp
+  Activity, AlertTriangle, CheckCircle2, CloudDownload, Terminal, ChevronDown, ChevronUp,
+  Network, Zap
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
+
+const ClusterTopology = ({ status }: { status: ClusterStatus }) => {
+  const nodeEntries = Object.entries(status.nodes);
+  const radius = 140;
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="px-5 py-3 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Network className="w-4 h-4 text-indigo-600" />
+          <h3 className="text-sm font-bold text-slate-900">Routing Topology</h3>
+        </div>
+        <div className="flex items-center gap-4 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-indigo-500"></div> Balancer</div>
+          <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-slate-200 border border-slate-300"></div> Node</div>
+          <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-amber-400"></div> Draining</div>
+        </div>
+      </div>
+      <div className="relative h-[380px] w-full flex items-center justify-center bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:20px_20px]">
+        
+        {/* Central Hub (Balancer) */}
+        <motion.div 
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          className="relative z-20"
+        >
+          <div className="w-16 h-16 bg-indigo-600 rounded-2xl shadow-xl shadow-indigo-200 flex items-center justify-center border-4 border-white">
+            <Zap className="w-8 h-8 text-white fill-white/20" />
+          </div>
+          <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
+            <span className="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full uppercase shadow-sm">Balancer Hub</span>
+          </div>
+          
+          {/* Animated Glow */}
+          <motion.div 
+            animate={{ scale: [1, 1.2, 1], opacity: [0.2, 0.4, 0.2] }}
+            transition={{ duration: 3, repeat: Infinity }}
+            className="absolute inset-0 bg-indigo-400 rounded-2xl blur-xl -z-10"
+          />
+        </motion.div>
+
+        {/* Nodes and Connections */}
+        {nodeEntries.map(([addr, node], i) => {
+          const angle = (i / nodeEntries.length) * 2 * Math.PI - Math.PI / 2;
+          const x = Math.cos(angle) * radius;
+          const y = Math.sin(angle) * radius;
+          const isActive = node.active_models.length > 0;
+
+          return (
+            <div key={addr} className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              
+              {/* Connector Line */}
+              <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+                <motion.line
+                  initial={{ pathLength: 0, opacity: 0 }}
+                  animate={{ pathLength: 1, opacity: 1 }}
+                  x1="50%" y1="50%"
+                  x2={`calc(50% + ${x}px)`} y2={`calc(50% + ${y}px)`}
+                  stroke={node.draining ? "#fbbf24" : isActive ? "#6366f1" : "#e2e8f0"}
+                  strokeWidth={isActive ? "2" : "1"}
+                  strokeDasharray={node.draining ? "4 4" : "0"}
+                />
+                
+                {/* Active Traffic Pulse */}
+                {isActive && (
+                  <motion.circle
+                    r="3"
+                    fill="#818cf8"
+                    animate={{ 
+                      cx: ["50%", `calc(50% + ${x}px)`],
+                      cy: ["50%", `calc(50% + ${y}px)`],
+                      opacity: [0, 1, 0]
+                    }}
+                    transition={{ 
+                      duration: 1.5 + (i * 0.2), 
+                      repeat: Infinity, 
+                      ease: "easeInOut" 
+                    }}
+                  />
+                )}
+              </svg>
+
+              {/* Node Card */}
+              <motion.div
+                initial={{ opacity: 0, scale: 0 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.1 }}
+                style={{ 
+                  transform: `translate(${x}px, ${y}px)`
+                }}
+                className="absolute pointer-events-auto"
+              >
+                <div className={`group relative p-2.5 rounded-xl border-2 shadow-sm transition-all duration-300 ${
+                  node.draining ? 'bg-amber-50 border-amber-300 shadow-amber-100' : 'bg-white border-slate-200 hover:border-indigo-400 hover:shadow-lg'
+                }`}>
+                  {node.has_gpu ? (
+                    <Zap className={`w-6 h-6 ${node.draining ? 'text-amber-500' : isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+                  ) : (
+                    <Cpu className={`w-6 h-6 ${node.draining ? 'text-amber-500' : isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+                  )}
+                  
+                  {/* Tooltip */}
+                  <div className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-30">
+                    <div className="bg-slate-900 text-white text-[10px] p-2 rounded-lg shadow-xl border border-slate-700 whitespace-nowrap">
+                      <div className="font-bold border-b border-white/10 pb-1 mb-1 flex items-center gap-2">
+                        {node.id}
+                        <span className="text-[8px] bg-white/20 px-1 rounded">{node.has_gpu ? 'GPU' : 'CPU'}</span>
+                      </div>
+                      <div className="flex flex-col gap-0.5 opacity-80">
+                        <span>CPU: {node.cpu_usage.toFixed(1)}%</span>
+                        {node.has_gpu ? (
+                          <span>VRAM: {((node.vram_used / node.vram_total) * 100).toFixed(1)}%</span>
+                        ) : (
+                          <span>RAM: {node.memory_usage.toFixed(1)}%</span>
+                        )}
+                        <span className="text-indigo-300">Models: {node.active_models.length}</span>
+                      </div>
+                    </div>
+                    <div className="w-2 h-2 bg-slate-900 rotate-45 mx-auto -mt-1 border-r border-b border-slate-700"></div>
+                  </div>
+                </div>
+                
+                {/* Node ID Label */}
+                <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 text-[9px] font-black text-slate-500 whitespace-nowrap bg-white/90 backdrop-blur-sm border border-slate-100 px-1.5 py-0.5 rounded shadow-sm">
+                  {node.id.split('-').pop()}
+                </div>
+              </motion.div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 const StateLabel = ({ state }: { state: number }) => {
   const states = ['Healthy', 'Degraded', 'Broken'];
@@ -106,19 +241,19 @@ const App = () => {
     );
   };
 
-  const handleUnload = (addr: string, model: string) => {
+  const handleUnload = (model: string, addr?: string) => {
     handleAction(
-      () => api.unloadModel(addr, model),
-      `Model ${model} unloaded`,
+      () => api.unloadModel(model, addr),
+      addr ? `Model ${model} unloaded from ${addr}` : `Model ${model} unloaded globally`,
       `Failed to unload ${model}`
     );
   };
 
-  const handleDelete = (addr: string, model: string) => {
-    if (window.confirm(`Delete ${model} from ${addr}? This action cannot be undone.`)) {
+  const handleDelete = (model: string, addr?: string) => {
+    if (window.confirm(addr ? `Delete ${model} from ${addr}? This action cannot be undone.` : `Delete ${model} from ALL nodes? This action cannot be undone.`)) {
       handleAction(
-        () => api.deleteModel(addr, model),
-        `Model ${model} deleted`,
+        () => api.deleteModel(model, addr),
+        addr ? `Model ${model} deleted from ${addr}` : `Model ${model} deleted globally`,
         `Failed to delete ${model}`
       );
     }
@@ -326,6 +461,11 @@ const App = () => {
           </motion.div>
         </div>
 
+        {/* Topology Visualization */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
+          <ClusterTopology status={status} />
+        </motion.div>
+
         {/* Worker Nodes Grid */}
         <div>
           <div className="flex items-center justify-between mb-4">
@@ -352,12 +492,15 @@ const App = () => {
                     {/* Node Header */}
                     <div className="p-5 border-b border-slate-100 flex flex-wrap gap-4 items-start justify-between">
                       <div className="flex items-start gap-3">
-                        <div className={`p-2.5 rounded-xl ${node.draining ? 'bg-amber-100 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                          <Server className="w-5 h-5" />
+                        <div className={`p-2.5 rounded-xl ${node.draining ? 'bg-amber-100 text-amber-600' : node.has_gpu ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-600'}`}>
+                          {node.has_gpu ? <Zap className="w-5 h-5" /> : <Cpu className="w-5 h-5" />}
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
                             <h3 className="font-bold text-slate-900 text-lg">{node.id}</h3>
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter ${node.has_gpu ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                              {node.has_gpu ? 'GPU' : 'CPU'}
+                            </span>
                             <StateLabel state={node.state} />
                             {node.draining && (
                               <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500 text-white uppercase tracking-wider animate-pulse">
@@ -399,19 +542,35 @@ const App = () => {
                           </div>
                         </div>
                         <div>
-                          <ProgressBar
-                            value={(node.vram_used / node.vram_total) * 100}
-                            label={`GPU: ${node.gpu_model}`}
-                            sublabel={`${(node.vram_used / 1e9).toFixed(1)} / ${(node.vram_total / 1e9).toFixed(1)} GB VRAM`}
-                            colorClass="bg-emerald-500"
-                          />
-                          <div className="flex items-center gap-2 text-xs font-medium mt-2">
-                            <Thermometer className="w-3.5 h-3.5 text-slate-400" />
-                            <span className="text-slate-600">Temp: </span>
-                            <span className={node.gpu_temp > 80 ? 'text-red-600 font-bold' : node.gpu_temp > 70 ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}>
-                              {node.gpu_temp.toFixed(1)}°C
-                            </span>
-                          </div>
+                          {node.has_gpu ? (
+                            <>
+                              <ProgressBar
+                                value={(node.vram_used / node.vram_total) * 100}
+                                label={`GPU: ${node.gpu_model}`}
+                                sublabel={`${(node.vram_used / 1e9).toFixed(1)} / ${(node.vram_total / 1e9).toFixed(1)} GB VRAM`}
+                                colorClass="bg-emerald-500"
+                              />
+                              <div className="flex items-center gap-2 text-xs font-medium mt-2">
+                                <Thermometer className="w-3.5 h-3.5 text-slate-400" />
+                                <span className="text-slate-600">Temp: </span>
+                                <span className={node.gpu_temp > 80 ? 'text-red-600 font-bold' : node.gpu_temp > 70 ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}>
+                                  {node.gpu_temp.toFixed(1)}°C
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <ProgressBar
+                                value={node.memory_usage}
+                                label="System Memory"
+                                colorClass="bg-emerald-500"
+                              />
+                              <div className="flex items-center gap-2 text-xs font-medium mt-2 text-slate-500">
+                                <Layers className="w-3.5 h-3.5 opacity-50" />
+                                <span>Memory-only inference mode</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -640,11 +799,29 @@ const App = () => {
                   <div className="p-6 text-center text-sm text-slate-500 italic">No models currently available</div>
                 ) : (
                   status.all_models.map(m => (
-                    <div key={m} className="px-5 py-3 flex justify-between items-center hover:bg-slate-50/80 transition-colors">
+                    <div key={m} className="px-5 py-3 flex justify-between items-center group hover:bg-slate-50/80 transition-colors">
                       <span className="text-sm font-bold text-slate-700">{m}</span>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-700 uppercase tracking-widest shadow-sm border border-emerald-200/50">
-                        Ready
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity mr-2">
+                          <button
+                            onClick={() => handleUnload(m)}
+                            className="p-1.5 text-slate-400 hover:text-amber-500 bg-white rounded-lg border border-slate-200 shadow-sm transition-colors"
+                            title="Unload from all VRAMs"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(m)}
+                            className="p-1.5 text-slate-400 hover:text-red-500 bg-white rounded-lg border border-slate-200 shadow-sm transition-colors"
+                            title="Delete from all disks"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-700 uppercase tracking-widest shadow-sm border border-emerald-200/50">
+                          Ready
+                        </span>
+                      </div>
                     </div>
                   ))
                 )}

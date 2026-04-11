@@ -10,6 +10,7 @@ export interface ModelInfo {
 export interface NodeStatus {
   id: string;
   address: string;
+  has_gpu: boolean;
   cpu_usage: number;
   cpu_cores: number;
   memory_usage: number;
@@ -53,12 +54,18 @@ export const api = {
     await fetch(`${API_BASE_URL}/api/manage/node/undrain?addr=${addr}`, { method: 'POST', headers });
   },
 
-  async unloadModel(addr: string, model: string): Promise<void> {
-    await fetch(`${API_BASE_URL}/api/manage/model/unload?addr=${addr}&model=${model}`, { method: 'POST', headers });
+  async unloadModel(model: string, addr?: string): Promise<void> {
+    const url = addr
+      ? `${API_BASE_URL}/api/manage/model/unload?addr=${addr}&model=${model}`
+      : `${API_BASE_URL}/api/manage/model/unload?model=${model}`;
+    await fetch(url, { method: 'POST', headers });
   },
 
-  async deleteModel(addr: string, model: string): Promise<void> {
-    await fetch(`${API_BASE_URL}/api/manage/model/delete?addr=${addr}&model=${model}`, { method: 'POST', headers });
+  async deleteModel(model: string, addr?: string): Promise<void> {
+    const url = addr
+      ? `${API_BASE_URL}/api/manage/model/delete?addr=${addr}&model=${model}`
+      : `${API_BASE_URL}/api/manage/model/delete?model=${model}`;
+    await fetch(url, { method: 'POST', headers });
   },
 
   async pullModel(model: string, addr?: string): Promise<void> {

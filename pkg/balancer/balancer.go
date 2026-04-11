@@ -568,12 +568,18 @@ func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 
 	b.Mu.RLock()
 	var targets []*models.NodeStatus
-	for _, a := range b.Agents {
-		if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
-			targets = append(targets, a)
-			if nodeAddr != "" {
-				break
+	if nodeID != "" || nodeAddr != "" {
+		for _, a := range b.Agents {
+			if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
+				targets = append(targets, a)
+				if nodeAddr != "" {
+					break
+				}
 			}
+		}
+	} else {
+		for _, a := range b.Agents {
+			targets = append(targets, a)
 		}
 	}
 	b.Mu.RUnlock()
@@ -586,7 +592,7 @@ func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(map[string]string{"model": model})
 	for _, agent := range targets {
 		log.Printf("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
-		b.sendToAgent(agent.Address, "/models/unload", body)
+		go b.sendToAgent(agent.Address, "/models/unload", body)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -651,12 +657,18 @@ func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
 
 	b.Mu.RLock()
 	var targets []*models.NodeStatus
-	for _, a := range b.Agents {
-		if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
-			targets = append(targets, a)
-			if nodeAddr != "" {
-				break
+	if nodeID != "" || nodeAddr != "" {
+		for _, a := range b.Agents {
+			if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
+				targets = append(targets, a)
+				if nodeAddr != "" {
+					break
+				}
 			}
+		}
+	} else {
+		for _, a := range b.Agents {
+			targets = append(targets, a)
 		}
 	}
 	b.Mu.RUnlock()
@@ -669,7 +681,7 @@ func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(map[string]string{"model": model})
 	for _, agent := range targets {
 		log.Printf("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
-		b.sendToAgent(agent.Address, "/models/delete", body)
+		go b.sendToAgent(agent.Address, "/models/delete", body)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

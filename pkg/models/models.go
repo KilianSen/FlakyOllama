@@ -28,6 +28,7 @@ func (s NodeState) String() string {
 type NodeStatus struct {
 	ID             string      `json:"id"`
 	Address        string      `json:"address"`
+	HasGPU         bool        `json:"has_gpu"`
 	CPUUsage       float64     `json:"cpu_usage"` // Percentage
 	CPUCores       int         `json:"cpu_cores"`
 	MemoryUsage    float64     `json:"memory_usage"` // Percentage

@@ -45,10 +45,13 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 	err = m.collectGPUMetrics(&status)
 	if err != nil {
 		// Mocking GPU if nvidia-smi fails
-		status.GPUModel = "CPU"
+		status.HasGPU = false
+		status.GPUModel = "CPU Only"
 		status.VRAMTotal = 0
 		status.VRAMUsed = 0
 		status.GPUTemperature = 0
+	} else {
+		status.HasGPU = true
 	}
 
 	return status, nil
