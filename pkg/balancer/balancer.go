@@ -356,6 +356,17 @@ func (b *Balancer) pollAgents() {
 
 				b.Agents[a.Address] = &status
 
+				// Preemptive Draining: If shared node is under host stress but cluster-idle, evict models
+				if status.Tier == "shared" && (status.CPUUsage > 85.0 || status.GPUTemperature > 85.0) {
+					if workload := b.NodeWorkloads[a.Address]; workload == 0 {
+						for _, m := range status.ActiveModels {
+							log.Printf("Preemptively evicting model %s from shared host %s due to system stress", m, status.ID)
+							body, _ := json.Marshal(map[string]string{"model": m})
+							go b.sendToAgent(status.Address, "/models/unload", body)
+						}
+					}
+				}
+
 				// Update learned VRAM
 				for _, m := range status.ActiveModels {
 					if len(status.ActiveModels) == 1 {
@@ -480,7 +491,12 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 			score *= 0.5
 		}
 
-		// 6. Session Stickiness: Grant bonus for KV Cache locality
+		// 6. Node Tiering: Penalize shared nodes so they are only used as overflow
+		if a.Tier == "shared" {
+			score -= 10.0
+		}
+
+		// 7. Session Stickiness: Grant bonus for KV Cache locality
 		if a.ID == affinityID {
 			score += 2.0 // Stickiness bonus
 		}
@@ -945,7 +961,7 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 		agentID = target.ID
 		resp, err = b.sendToAgent(target.Address, "/inference", body)
 	} else {
-		resp, agentID, _, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr)
+		resp, agentID, _, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr, false, 0)
 	}
 
 	if err != nil {
@@ -986,7 +1002,18 @@ func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		req.Address = net.JoinHostPort(host, port)
 	}
 
-	b.Register(req)
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+
+	b.Agents[req.Address] = &models.NodeStatus{
+		ID:      req.ID,
+		Address: req.Address,
+		Tier:    req.Tier,
+		State:   models.StateHealthy,
+		Errors:  0,
+	}
+	log.Printf("Registered agent: %s at %s [Tier: %s] (resetting health)", req.ID, req.Address, req.Tier)
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -1030,7 +1057,7 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body, r.RemoteAddr)
+	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body, r.RemoteAddr, false, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -1069,7 +1096,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body, r.RemoteAddr)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body, r.RemoteAddr, req.AllowHedging, req.Priority)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -1116,7 +1143,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr, req.AllowHedging, req.Priority)
 	if err != nil {
 		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)

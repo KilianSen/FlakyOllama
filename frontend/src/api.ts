@@ -10,6 +10,7 @@ export interface ModelInfo {
 export interface NodeStatus {
   id: string;
   address: string;
+  tier: string;
   has_gpu: boolean;
   cpu_usage: number;
   cpu_cores: number;

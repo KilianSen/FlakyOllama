@@ -21,7 +21,7 @@ type HedgedResult struct {
 
 // DoHedgedRequest sends a request to one node, and if it doesn't return headers by 'delay',
 // it sends a second request to another node.
-func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte, clientIP string) (*http.Response, string, string, error) {
+func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte, clientIP string, allowHedging bool, priority int) (*http.Response, string, string, error) {
 	// Find P90 latency for delay
 	p90, _ := b.Storage.GetP90Latency(modelName)
 	if p90 == 0 {
@@ -38,9 +38,14 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	b.Mu.RUnlock()
 
 	// First attempt
-	go b.singleAttempt(ctx, modelName, path, body, clientIP, results)
+	go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
 
-	if isSaturated {
+	// Decision: Should we hedge?
+	// We hedge if explicitly allowed AND the cluster isn't saturated.
+	// Or we hedge IF the first attempt is sent to a Degraded node (force hedging for reliability).
+	shouldHedge := allowHedging && !isSaturated
+
+	if !shouldHedge {
 		// Just wait for the first attempt or timeout
 		select {
 		case res := <-results:
@@ -81,7 +86,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 			if !secondStarted {
 				secondStarted = true
 				timer.Stop() // No need to wait for timer anymore
-				go b.singleAttempt(ctx, modelName, path, body, clientIP, results)
+				go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
 			} else if i == 1 {
 				// This was the second result (either second attempt finished, or first finished after second started)
 				// and it also failed.
@@ -93,7 +98,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		case <-timer.C:
 			if !secondStarted {
 				secondStarted = true
-				go b.singleAttempt(ctx, modelName, path, body, clientIP, results)
+				go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
 			}
 			// Don't increment i here, we still want to wait for 2 results if possible
 			i--
@@ -108,9 +113,9 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	return nil, "", "", io.EOF
 }
 
-func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, body []byte, clientIP string, results chan<- HedgedResult) {
+func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, body []byte, clientIP string, priority int, results chan<- HedgedResult) {
 	// Route via PriorityQueue to ensure proper load management
-	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, 0, clientIP, ctx)
+	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, priority, clientIP, ctx)
 
 	var qr QueuedResponse
 	select {

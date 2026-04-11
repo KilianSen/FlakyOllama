@@ -58,9 +58,15 @@ func (a *Agent) Register() error {
 	}
 	a.EffectiveAddress = address
 
+	tier := os.Getenv("AGENT_TIER")
+	if tier == "" {
+		tier = "dedicated"
+	}
+
 	req := models.RegisterRequest{
 		ID:      a.ID,
 		Address: a.EffectiveAddress,
+		Tier:    tier,
 	}
 	log.Printf("Registering agent %s with address %s", a.ID, a.EffectiveAddress)
 	body, _ := json.Marshal(req)

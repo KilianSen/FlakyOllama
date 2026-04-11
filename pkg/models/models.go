@@ -28,6 +28,7 @@ func (s NodeState) String() string {
 type NodeStatus struct {
 	ID             string      `json:"id"`
 	Address        string      `json:"address"`
+	Tier           string      `json:"tier"` // "dedicated" or "shared"
 	HasGPU         bool        `json:"has_gpu"`
 	CPUUsage       float64     `json:"cpu_usage"` // Percentage
 	CPUCores       int         `json:"cpu_cores"`
@@ -52,18 +53,22 @@ type ModelRequirement struct {
 
 // InferenceRequest is a simplified request for an LLM task.
 type InferenceRequest struct {
-	Model   string                 `json:"model"`
-	Prompt  string                 `json:"prompt"`
-	Stream  bool                   `json:"stream"`
-	Options map[string]interface{} `json:"options"`
+	Model        string                 `json:"model"`
+	Prompt       string                 `json:"prompt"`
+	Stream       bool                   `json:"stream"`
+	Priority     int                    `json:"priority"`
+	AllowHedging bool                   `json:"allow_hedging"`
+	Options      map[string]interface{} `json:"options"`
 }
 
 // ChatRequest is a request for a chat completion.
 type ChatRequest struct {
-	Model    string                 `json:"model"`
-	Messages []ChatMessage          `json:"messages"`
-	Stream   bool                   `json:"stream"`
-	Options  map[string]interface{} `json:"options"`
+	Model        string                 `json:"model"`
+	Messages     []ChatMessage          `json:"messages"`
+	Stream       bool                   `json:"stream"`
+	Priority     int                    `json:"priority"`
+	AllowHedging bool                   `json:"allow_hedging"`
+	Options      map[string]interface{} `json:"options"`
 }
 
 // ChatMessage represents a single message in a chat history.
@@ -94,6 +99,7 @@ type ModelInfo struct {
 type RegisterRequest struct {
 	ID      string `json:"id"`
 	Address string `json:"address"`
+	Tier    string `json:"tier"`
 }
 
 // ClusterStatus represents the complete state of the cluster for the dashboard.

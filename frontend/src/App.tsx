@@ -373,7 +373,10 @@ const App = () => {
                         {node.has_gpu ? <Zap size={16} /> : <Cpu size={16} />}
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-sm font-black tracking-tight">{node.id}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-black tracking-tight">{node.id}</span>
+                          <Badge variant="outline" className="text-[8px] font-black h-4 px-1 leading-none uppercase bg-muted/50">{node.tier}</Badge>
+                        </div>
                         <span className="text-[9px] font-bold text-muted-foreground font-mono">{node.address}</span>
                       </div>
                     </div>
@@ -424,7 +427,7 @@ const App = () => {
                         ) : (
                           <Badge variant="destructive" className="text-[9px] font-black h-5 uppercase tracking-widest">OFFLINE</Badge>
                         )}
-                        {node.draining && <Badge className="text-[9px] font-black h-5 bg-amber-500 text-white leading-none flex items-center justify-center">DRAINING</Badge>}
+                        {node.draining && <Badge className="text-[9px] font-black h-5 bg-amber-500 text-white leading-none flex items-center justify-center px-2">DRAINING</Badge>}
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical size={14} /></Button></DropdownMenuTrigger>
@@ -526,7 +529,7 @@ const App = () => {
                   <div>
                     <div className="border-b border-white/10 pb-4 mb-4 flex items-center justify-between">
                       <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-[9px] font-black uppercase tracking-widest">Provider: {testResult.agent_id}</Badge>
-                      <Button variant="ghost" size="sm" onClick={() => setTestResult(null)} className="h-6 text-[8px] font-black uppercase text-slate-500 hover:text-white">Clear Buffer</Button>
+                      <Button variant="ghost" size="sm" onClick={() => setTestResult(null)} className="h-6 text-[8px] font-black uppercase text-slate-500">Clear Buffer</Button>
                     </div>
                     {testResult.response}
                   </div>
