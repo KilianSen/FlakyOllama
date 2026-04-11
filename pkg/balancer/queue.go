@@ -3,6 +3,7 @@ package balancer
 import (
 	"FlakyOllama/pkg/models"
 	"container/heap"
+	"context"
 	"sync"
 )
 
@@ -10,6 +11,8 @@ import (
 type QueuedRequest struct {
 	Request  models.InferenceRequest
 	Priority int // Higher value means higher priority
+	ClientIP string
+	Ctx      context.Context
 	Response chan QueuedResponse
 	Index    int // The index of the item in the heap.
 }
@@ -69,7 +72,7 @@ func NewRequestQueue() *RequestQueue {
 	return rq
 }
 
-func (rq *RequestQueue) Push(req models.InferenceRequest, priority int) chan QueuedResponse {
+func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP string, ctx context.Context) chan QueuedResponse {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
@@ -77,16 +80,18 @@ func (rq *RequestQueue) Push(req models.InferenceRequest, priority int) chan Que
 	item := &QueuedRequest{
 		Request:  req,
 		Priority: priority,
+		ClientIP: clientIP,
+		Ctx:      ctx,
 		Response: resCh,
 	}
 	heap.Push(&rq.pq, item)
-	
+
 	// Signal that an item is available
 	select {
 	case rq.ch <- struct{}{}:
 	default:
 	}
-	
+
 	return resCh
 }
 
@@ -94,10 +99,15 @@ func (rq *RequestQueue) Pop() *QueuedRequest {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
-	if rq.pq.Len() == 0 {
-		return nil
+	for rq.pq.Len() > 0 {
+		item := heap.Pop(&rq.pq).(*QueuedRequest)
+		// Check if request was canceled while in queue
+		if item.Ctx != nil && item.Ctx.Err() != nil {
+			continue
+		}
+		return item
 	}
-	return heap.Pop(&rq.pq).(*QueuedRequest)
+	return nil
 }
 
 func (rq *RequestQueue) Wait() <-chan struct{} {

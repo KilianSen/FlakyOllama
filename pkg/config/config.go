@@ -22,6 +22,8 @@ type RoutingWeights struct {
 	LatencyWeight     float64 `json:"latency_weight"`
 	SuccessRateWeight float64 `json:"success_rate_weight"`
 	LoadedModelBonus  float64 `json:"loaded_model_bonus"`
+	LocalModelBonus   float64 `json:"local_model_bonus"`
+	WorkloadPenalty   float64 `json:"workload_penalty"`
 }
 
 type CBConfig struct {
@@ -39,7 +41,9 @@ func DefaultConfig() *Config {
 			CPULoadWeight:     1.0,
 			LatencyWeight:     1.0,
 			SuccessRateWeight: 1.0,
-			LoadedModelBonus:  2.0,
+			LoadedModelBonus:  5.0,
+			LocalModelBonus:   2.0,
+			WorkloadPenalty:   0.5,
 		},
 		CircuitBreaker: CBConfig{
 			ErrorThreshold: 3,

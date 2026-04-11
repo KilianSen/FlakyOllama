@@ -4,7 +4,7 @@ import type { ClusterStatus } from './api';
 import {
   Server, Database, Trash2, XCircle, Play, RefreshCw, Cpu,
   Activity, CloudDownload, Terminal,
-  Network, Zap, Search, MoreVertical, Globe
+  Network, Zap, Search, MoreVertical, Globe, Settings
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
@@ -28,7 +28,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -54,19 +54,21 @@ const Topology = ({ status }: { status: ClusterStatus }) => {
           const x = centerX + Math.cos(angle) * radius;
           const y = centerY + Math.sin(angle) * radius;
           const isActive = (node.active_models?.length || 0) > 0;
+          const workload = status.node_workloads?.[node.address] || 0;
 
           return (
             <g key={node.address}>
               <line 
                 x1={centerX} y1={centerY} x2={x} y2={y} 
-                className={`stroke-[1.5] transition-colors duration-500 ${node.state === 2 ? 'stroke-destructive/30' : isActive ? 'stroke-primary' : 'stroke-border'}`} 
+                className={`transition-all duration-500 ${node.state === 2 ? 'stroke-destructive/30' : isActive ? 'stroke-primary' : 'stroke-border'}`} 
+                strokeWidth={1 + workload * 1.5}
                 strokeDasharray={node.draining || node.state === 2 ? "4 2" : "0"}
               />
-              {isActive && (
+              {workload > 0 && (
                 <motion.circle
-                  r="2.5" className="fill-primary"
+                  r={2 + workload} className="fill-primary"
                   animate={{ cx: [centerX, x], cy: [centerY, y] }}
-                  transition={{ duration: 1.5, repeat: Infinity, ease: "linear", delay: i * 0.2 }}
+                  transition={{ duration: Math.max(0.5, 2 - workload * 0.3), repeat: Infinity, ease: "linear", delay: i * 0.2 }}
                 />
               )}
               <circle cx={x} cy={y} r="16" className={`stroke-2 transition-colors duration-500 ${node.has_gpu ? 'fill-indigo-50 stroke-indigo-500' : 'fill-slate-50 stroke-slate-400'}`} />
@@ -225,8 +227,8 @@ const App = () => {
                 { 
                   label: 'Backlog', 
                   val: status.queue_depth, 
-                  sub: 'Pending', 
-                  color: status.queue_depth > 0 ? 'text-amber-600' : 'text-slate-400',
+                  sub: status.queue_depth > 0 ? 'HEDGING DISABLED' : 'Pending Requests', 
+                  color: status.queue_depth > 0 ? 'text-destructive font-black' : 'text-amber-600',
                   pulse: status.queue_depth > 0
                 },
                 { label: 'Model Library', val: status.all_models.length, sub: 'Registered', color: 'text-emerald-600' },
@@ -234,7 +236,7 @@ const App = () => {
                 <div key={i} className={`flex items-end justify-between border-b border-dashed pb-4 last:border-0 last:pb-0 ${kpi.pulse ? 'animate-pulse' : ''}`}>
                   <div className="flex flex-col">
                     <span className="text-[9px] font-black uppercase text-muted-foreground tracking-widest">{kpi.label}</span>
-                    <span className="text-[10px] font-bold text-muted-foreground/40 uppercase">{kpi.sub}</span>
+                    <span className={`text-[10px] font-bold uppercase ${kpi.pulse ? 'text-destructive' : 'text-muted-foreground/40'}`}>{kpi.sub}</span>
                   </div>
                   <span className={`text-2xl font-black tracking-tighter ${kpi.color}`}>{kpi.val}</span>
                 </div>
@@ -277,7 +279,9 @@ const App = () => {
                     handleAction(() => api.pullModel(tag), `Syncing ${tag} cluster-wide...`);
                   }} className="space-y-4 pt-4">
                     <Input name="tag" placeholder="e.g. llama3:8b" className="font-bold border-2" required />
-                    <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest py-6">Orchestrate Global Sync</Button>
+                    <DialogFooter>
+                      <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest py-6">Orchestrate Global Sync</Button>
+                    </DialogFooter>
                   </form>
                 </DialogContent>
               </Dialog>
@@ -383,7 +387,11 @@ const App = () => {
                       <div className="space-y-1">
                         <div className="flex justify-between text-[8px] font-black text-muted-foreground uppercase">
                           <span>{node.has_gpu ? `VRAM` : 'RAM'}</span>
-                          <span>{node.has_gpu ? `${(node.vram_used / 1e9).toFixed(1)}G` : `${node.memory_usage.toFixed(0)}%`}</span>
+                          <span>
+                            {node.has_gpu 
+                              ? `${((node.vram_total - node.vram_used) / 1e9).toFixed(1)}G FREE` 
+                              : `${node.memory_usage.toFixed(0)}%`}
+                          </span>
                         </div>
                         <Progress value={node.has_gpu ? (node.vram_used / node.vram_total) * 100 : node.memory_usage} indicatorClassName="bg-emerald-500" className="h-1" />
                       </div>
@@ -416,7 +424,7 @@ const App = () => {
                         ) : (
                           <Badge variant="destructive" className="text-[9px] font-black h-5 uppercase">OFFLINE</Badge>
                         )}
-                        {node.draining && <Badge className="text-[9px] font-black h-5 bg-amber-500 text-white">DRAINING</Badge>}
+                        {node.draining && <Badge className="text-[9px] font-black h-5 bg-amber-500 text-white leading-none flex items-center justify-center">DRAINING</Badge>}
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical size={14} /></Button></DropdownMenuTrigger>
@@ -435,8 +443,8 @@ const App = () => {
           </Table>
         </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <Card className="border-none shadow-sm bg-background overflow-hidden flex flex-col">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <Card className="lg:col-span-2 border-none shadow-sm bg-background overflow-hidden flex flex-col">
             <CardHeader className="py-4 border-b bg-muted/10">
               <CardTitle className="text-xs font-black uppercase tracking-widest flex items-center gap-2"><Terminal size={16} className="text-primary" /> Inference Playground</CardTitle>
             </CardHeader>
@@ -472,32 +480,64 @@ const App = () => {
             </CardContent>
           </Card>
 
-          <Card className="border-none shadow-sm bg-background overflow-hidden flex flex-col">
-            <CardHeader className="py-4 border-b">
-              <CardTitle className="text-xs font-black uppercase tracking-widest">Inference Response Buffer</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0 flex-1 relative min-h-[300px]">
-              <ScrollArea className="h-full bg-slate-950 p-6">
-                <div className="text-slate-300 text-xs font-mono whitespace-pre-wrap leading-relaxed">
-                  {testResult ? (
-                    <div>
-                      <div className="border-b border-white/10 pb-4 mb-4 flex items-center justify-between">
-                        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-[9px] font-black uppercase tracking-widest">Provider: {testResult.agent_id}</Badge>
-                        <Button variant="ghost" size="sm" onClick={() => setTestResult(null)} className="h-6 text-[8px] font-black uppercase text-slate-500">Clear Buffer</Button>
-                      </div>
-                      {testResult.response}
-                    </div>
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center pt-20 opacity-20 grayscale select-none">
-                      <Globe className="animate-pulse mb-4" size={48} />
-                      <span className="text-[10px] font-black uppercase tracking-[0.5em]">Awaiting Transmission</span>
-                    </div>
-                  )}
+          <div className="space-y-8 flex flex-col">
+            <Card className="border-none shadow-sm bg-slate-900 text-white flex-1 overflow-hidden">
+              <CardHeader className="py-4 border-b border-white/5 bg-white/5 flex flex-row items-center justify-between">
+                <CardTitle className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-2">
+                  <Settings size={14} className="text-primary" /> Orchestration Details
+                </CardTitle>
+                <div className="flex items-center gap-2 text-[8px] font-black text-slate-500 uppercase tracking-tighter">
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                  Cache Active
                 </div>
-              </ScrollArea>
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent className="p-6 space-y-6">
+                <div className="space-y-4">
+                  <div className="flex items-start gap-4">
+                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center flex-shrink-0"><Zap className="w-4 h-4 text-primary" /></div>
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black uppercase tracking-tight leading-none">Session Stickiness</p>
+                      <p className="text-[9px] font-medium text-white/40 leading-relaxed italic">Balancer maps client IPs to specific nodes to maintain KV Cache locality and minimize TTFT latencies.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-4 text-emerald-400">
+                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center flex-shrink-0"><Activity className="w-4 h-4" /></div>
+                    <div className="space-y-1 text-white">
+                      <p className="text-[10px] font-black uppercase tracking-tight leading-none">Load-Shedding</p>
+                      <p className="text-[9px] font-medium text-white/40 leading-relaxed italic">Hedging is automatically disabled when cluster saturation is detected to prevent retry storms.</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
+
+        <Card className="border-none shadow-sm bg-background overflow-hidden flex flex-col">
+          <CardHeader className="py-4 border-b">
+            <CardTitle className="text-xs font-black uppercase tracking-widest">Inference Response Buffer</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 flex-1 relative min-h-[300px]">
+            <ScrollArea className="h-full bg-slate-950 p-6">
+              <div className="text-slate-300 text-xs font-mono whitespace-pre-wrap leading-relaxed">
+                {testResult ? (
+                  <div>
+                    <div className="border-b border-white/10 pb-4 mb-4 flex items-center justify-between">
+                      <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-[9px] font-black uppercase tracking-widest">Provider: {testResult.agent_id}</Badge>
+                      <Button variant="ghost" size="sm" onClick={() => setTestResult(null)} className="h-6 text-[8px] font-black uppercase text-slate-500">Clear Buffer</Button>
+                    </div>
+                    {testResult.response}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center pt-20 opacity-20 grayscale select-none">
+                    <Globe className="animate-pulse mb-4" size={48} />
+                    <span className="text-[10px] font-black uppercase tracking-[0.5em]">Awaiting Transmission</span>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
 
         <Card className="border-none shadow-sm bg-slate-950">
           <CardHeader className="py-3 px-6 border-b border-white/5 flex flex-row items-center justify-between">
@@ -538,7 +578,9 @@ const App = () => {
             }
           }} className="space-y-4 pt-4">
             <Input name="tag" placeholder="e.g. mistral" className="font-bold border-2" required />
-            <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest py-6">Initiate Targeted Pull</Button>
+            <DialogFooter>
+              <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest py-6">Initiate Targeted Pull</Button>
+            </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

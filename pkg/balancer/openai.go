@@ -39,12 +39,24 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body, r.RemoteAddr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
+
+	// Concurrency Tracking: start
+	if agentAddr != "" {
+		b.Mu.Lock()
+		b.NodeWorkloads[agentAddr]++
+		b.Mu.Unlock()
+		defer func() {
+			b.Mu.Lock()
+			b.NodeWorkloads[agentAddr]--
+			b.Mu.Unlock()
+		}()
+	}
 
 	if !oaiReq.Stream {
 		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentAddr)
@@ -168,12 +180,24 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body, r.RemoteAddr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
+
+	// Concurrency Tracking: start
+	if agentAddr != "" {
+		b.Mu.Lock()
+		b.NodeWorkloads[agentAddr]++
+		b.Mu.Unlock()
+		defer func() {
+			b.Mu.Lock()
+			b.NodeWorkloads[agentAddr]--
+			b.Mu.Unlock()
+		}()
+	}
 
 	if !oaiReq.Stream {
 		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentAddr)

@@ -31,6 +31,7 @@ export interface ClusterStatus {
   nodes: Record<string, NodeStatus>;
   pending_requests: Record<string, number>;
   in_progress_pulls: Record<string, string>;
+  node_workloads: Record<string, number>;
   queue_depth: number;
   active_workloads: number;
   all_models: string[];

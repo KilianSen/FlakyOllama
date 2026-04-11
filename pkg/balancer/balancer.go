@@ -23,6 +23,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+type metricEntry struct {
+	nodeID, model string
+	latency       time.Duration
+	success       bool
+}
+
 // Balancer manages multiple agents and routes requests.
 type Balancer struct {
 	Address         string
@@ -33,6 +39,11 @@ type Balancer struct {
 	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
 	InProgressPulls map[string]time.Time // model_name -> start_time
 	Queue           *RequestQueue
+	NodeWorkloads   map[string]int                       // agent_addr -> count
+	ClientAffinity  map[string]string                    // client_ip -> agent_id
+	PerfCache       map[string]storage.PerformanceMetric // "node_id:model" -> metric
+	perfMu          sync.RWMutex
+	MetricCh        chan metricEntry
 	Mu              sync.RWMutex
 	stopCh          chan struct{}
 	logChs          map[chan string]bool
@@ -59,6 +70,10 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		ModelLastUsed:   make(map[string]time.Time),
 		InProgressPulls: make(map[string]time.Time),
 		Queue:           NewRequestQueue(),
+		NodeWorkloads:   make(map[string]int),
+		ClientAffinity:  make(map[string]string),
+		PerfCache:       make(map[string]storage.PerformanceMetric),
+		MetricCh:        make(chan metricEntry, 1000),
 		stopCh:          make(chan struct{}),
 		logChs:          make(map[chan string]bool),
 		httpClient:      &http.Client{Timeout: 5 * time.Second},
@@ -125,7 +140,65 @@ func (b *Balancer) Close() error {
 func (b *Balancer) StartBackgroundTasks() {
 	b.StartPoller()
 	b.StartKeepAliveCleaner()
+	b.StartPerfCacheRefresher()
+	b.StartMetricProcessor()
 	b.StartWorkerPool(10) // 10 workers for routing
+}
+
+func (b *Balancer) StartMetricProcessor() {
+	go func() {
+		for {
+			select {
+			case m := <-b.MetricCh:
+				b.Storage.RecordMetric(m.nodeID, m.model, m.latency, m.success)
+			case <-b.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (b *Balancer) StartPerfCacheRefresher() {
+	ticker := time.NewTicker(5 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				b.refreshPerfCache()
+			case <-b.stopCh:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+func (b *Balancer) refreshPerfCache() {
+	b.Mu.RLock()
+	// Get unique combinations of node IDs and model names from currently known state
+	type entry struct{ nodeID, model string }
+	entries := make([]entry, 0)
+	for _, a := range b.Agents {
+		for _, m := range a.ActiveModels {
+			entries = append(entries, entry{a.ID, m})
+		}
+		for _, m := range a.LocalModels {
+			entries = append(entries, entry{a.ID, m.Name})
+		}
+	}
+	b.Mu.RUnlock()
+
+	newCache := make(map[string]storage.PerformanceMetric)
+	for _, e := range entries {
+		perf, err := b.Storage.GetPerformance(e.nodeID, e.model)
+		if err == nil {
+			newCache[e.nodeID+":"+e.model] = perf
+		}
+	}
+
+	b.perfMu.Lock()
+	b.PerfCache = newCache
+	b.perfMu.Unlock()
 }
 
 func (b *Balancer) StartWorkerPool(workers int) {
@@ -145,7 +218,7 @@ func (b *Balancer) worker() {
 				continue
 			}
 
-			id, addr, err := b.Route(req.Request)
+			id, addr, err := b.Route(req.Request, req.ClientIP)
 			req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
 		}
 	}
@@ -332,13 +405,14 @@ func (b *Balancer) pollAgents() {
 	}
 }
 
-// Route finds the best agent for an inference request.
-func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
+// Route finds the best agent for an inference request using adaptive heuristics and session stickiness.
+func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, string, error) {
 	b.Mu.RLock()
 	pending := b.PendingRequests[req.Model]
+	affinityID := b.ClientAffinity[clientIP]
 
 	var bestAgent *models.NodeStatus
-	var bestScore = -1.0
+	var bestScore = -1000.0
 
 	// Get model requirements from learned metadata
 	minVRAM, _ := b.Storage.GetModelVRAM(req.Model)
@@ -354,56 +428,97 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	foundLoaded := false
 	now := time.Now()
 	for _, a := range b.Agents {
-		// Threshold adjusted for 2s poll interval
+		// Connectivity and state checks
 		if time.Since(a.LastSeen) > 5*time.Second || a.Draining {
 			continue
 		}
-
-		// Circuit Breaker: skip broken nodes unless they are past their cooloff period
 		if a.State == models.StateBroken && now.Before(a.CooloffUntil) {
 			continue
 		}
-
 		if a.VRAMTotal < minVRAM {
 			continue
 		}
 
-		perf, _ := b.Storage.GetPerformance(a.ID, req.Model)
+		// Use Performance Cache
+		b.perfMu.RLock()
+		perf, ok := b.PerfCache[a.ID+":"+req.Model]
+		b.perfMu.RUnlock()
 
-		// Advanced Scoring Engine
+		if !ok {
+			// If no performance data exists, default to healthy assumption
+			perf = storage.PerformanceMetric{SuccessRate: 1.0, AvgLatency: 1.0}
+		}
+
+		// 1. Foundation: CPU Load (Inverse)
 		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
 
-		// Thermal Protection
+		// 2. Least Connections: Penalize nodes with active workloads to prevent thundering herd
+		workload := b.NodeWorkloads[a.Address]
+		score -= float64(workload) * b.Config.Weights.WorkloadPenalty
+
+		// 3. Thermal Protection
 		if a.GPUTemperature > 80.0 {
-			score *= 0.5 // Heavy penalty above 80C
+			score *= 0.5
 		}
 		if a.GPUTemperature > 90.0 {
-			continue // Skip node if above 90C
+			continue // Critical thermal threshold
 		}
 
-		if perf.SuccessRate > 0 {
-			score *= (perf.SuccessRate * b.Config.Weights.SuccessRateWeight)
+		// 4. Historical Reliability (with Cold-Start defaults)
+		successRate := perf.SuccessRate
+		if successRate <= 0 {
+			successRate = 1.0 // Assume healthy for new nodes
 		}
+		score *= (successRate * b.Config.Weights.SuccessRateWeight)
+
 		if perf.AvgLatency > 0 {
 			score *= ((1.0 / perf.AvgLatency) * b.Config.Weights.LatencyWeight)
 		}
 
-		// Degradation Penalty
+		// 5. Degradation Penalty
 		if a.State == models.StateDegraded {
 			score *= 0.5
 		}
 
-		hasModel := false
+		// 6. Session Stickiness: Grant bonus for KV Cache locality
+		if a.ID == affinityID {
+			score += 2.0 // Stickiness bonus
+		}
+
+		// 7. Model Residency (Hot vs Warm vs Cold)
+		isHot := false
 		for _, m := range a.ActiveModels {
 			if m == req.Model {
-				hasModel = true
+				isHot = true
 				foundLoaded = true
 				break
 			}
 		}
 
-		if hasModel {
-			score *= b.Config.Weights.LoadedModelBonus
+		if isHot {
+			score += b.Config.Weights.LoadedModelBonus
+		} else {
+			// Check if model is on disk (Warm)
+			isWarm := false
+			for _, mInfo := range a.LocalModels {
+				if mInfo.Name == req.Model {
+					isWarm = true
+					break
+				}
+			}
+
+			if isWarm {
+				score += b.Config.Weights.LocalModelBonus
+
+				// VRAM Fragmentation Check: Penalize if Ollama must evict models
+				freeVRAM := a.VRAMTotal - a.VRAMUsed
+				if freeVRAM < minVRAM {
+					score -= 1.0 // Eviction penalty
+				}
+			} else {
+				// Cold start required (Pulling over network)
+				score -= 5.0
+			}
 		}
 
 		if score > bestScore {
@@ -412,6 +527,12 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 		}
 	}
 	b.Mu.RUnlock()
+
+	if bestAgent != nil {
+		b.Mu.Lock()
+		b.ClientAffinity[clientIP] = bestAgent.ID
+		b.Mu.Unlock()
+	}
 
 	// Auto-allocation logic
 	if !foundLoaded || pending > b.Config.StaleThreshold {
@@ -423,7 +544,7 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 		return "", "", fmt.Errorf("no available agents with sufficient capabilities")
 	}
 
-	log.Printf("Routed model %s to agent %s (score: %.2f, pending: %d)", req.Model, bestAgent.ID, bestScore, pending)
+	log.Printf("Routed model %s to agent %s (score: %.2f, pending: %d, affinity: %v)", req.Model, bestAgent.ID, bestScore, pending, bestAgent.ID == affinityID)
 	return bestAgent.ID, bestAgent.Address, nil
 }
 
@@ -509,10 +630,17 @@ func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 		pulls[m] = t
 	}
 
+	// Copy NodeWorkloads
+	workloads := make(map[string]int)
+	for addr, count := range b.NodeWorkloads {
+		workloads[addr] = count
+	}
+
 	status := models.ClusterStatus{
 		Nodes:           b.Agents,
 		PendingRequests: b.PendingRequests,
 		InProgressPulls: pulls,
+		NodeWorkloads:   workloads,
 		QueueDepth:      b.Queue.pq.Len(),
 		ActiveWorkloads: totalWorkloads,
 		AllModels:       allModels,
@@ -791,7 +919,7 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 		agentID = target.ID
 		resp, err = b.sendToAgent(target.Address, "/inference", body)
 	} else {
-		resp, agentID, _, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+		resp, agentID, _, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr)
 	}
 
 	if err != nil {
@@ -876,7 +1004,7 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body)
+	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body, r.RemoteAddr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -909,12 +1037,24 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body, r.RemoteAddr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
+
+	// Concurrency Tracking: start
+	if agentAddr != "" {
+		b.Mu.Lock()
+		b.NodeWorkloads[agentAddr]++
+		b.Mu.Unlock()
+		defer func() {
+			b.Mu.Lock()
+			b.NodeWorkloads[agentAddr]--
+			b.Mu.Unlock()
+		}()
+	}
 
 	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
@@ -938,13 +1078,25 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr)
 	if err != nil {
 		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
+
+	// Concurrency Tracking: start
+	if agentAddr != "" {
+		b.Mu.Lock()
+		b.NodeWorkloads[agentAddr]++
+		b.Mu.Unlock()
+		defer func() {
+			b.Mu.Lock()
+			b.NodeWorkloads[agentAddr]--
+			b.Mu.Unlock()
+		}()
+	}
 
 	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
@@ -965,7 +1117,10 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	latency := time.Since(start)
 	if err != nil {
 		b.recordError(agentAddr)
-		b.Storage.RecordMetric(agentAddr, modelName, latency, false)
+		select {
+		case b.MetricCh <- metricEntry{agentAddr, modelName, latency, false}:
+		default:
+		}
 		if errors.Is(err, ErrStalled) {
 			log.Printf("Agent %s stalled during stream for model %s", agentAddr, modelName)
 		} else {
@@ -975,7 +1130,10 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	}
 
 	b.recordSuccess(agentAddr)
-	b.Storage.RecordMetric(agentAddr, modelName, latency, true)
+	select {
+	case b.MetricCh <- metricEntry{agentAddr, modelName, latency, true}:
+	default:
+	}
 	// We still use ID for some metrics if we want to aggregate by "name",
 	// but here we should probably use Address or ID:Address
 	agentID := agentAddr
