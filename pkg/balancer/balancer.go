@@ -295,6 +295,8 @@ func (b *Balancer) pollAgents() {
 					healthVal = 2.0
 				case models.StateDegraded:
 					healthVal = 1.0
+				default:
+					panic("unhandled default case")
 				}
 				metrics.NodeHealthStatus.WithLabelValues(a.ID, a.Address).Set(healthVal)
 
@@ -312,7 +314,7 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	pending := b.PendingRequests[req.Model]
 
 	var bestAgent *models.NodeStatus
-	var bestScore float64 = -1.0
+	var bestScore = -1.0
 
 	// Get model requirements from learned metadata
 	minVRAM, _ := b.Storage.GetModelVRAM(req.Model)
@@ -448,7 +450,7 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 	})
 }
 
-func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, r *http.Request) {
+func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
@@ -798,7 +800,7 @@ func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (b *Balancer) HandleTags(w http.ResponseWriter, r *http.Request) {
+func (b *Balancer) HandleTags(w http.ResponseWriter, _ *http.Request) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
@@ -900,7 +902,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
 	if err != nil {
 		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
