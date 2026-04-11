@@ -871,7 +871,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
