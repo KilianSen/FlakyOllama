@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,11 @@ type Agent struct {
 	BalancerURL      string
 	Monitor          *monitoring.Monitor
 	Ollama           *ollama.Client
+
+	// Caching to prevent telemetry storms
+	lastStatus     models.NodeStatus
+	lastStatusTime time.Time
+	statusMu       sync.Mutex
 }
 
 func NewAgent(id, address, balancerURL, ollamaURL string) *Agent {
@@ -102,6 +108,15 @@ func (a *Agent) Serve() error {
 }
 
 func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+
+	// Use cache if it's less than 2 seconds old
+	if time.Since(a.lastStatusTime) < 2*time.Second {
+		json.NewEncoder(w).Encode(a.lastStatus)
+		return
+	}
+
 	status, err := a.Monitor.GetStatus()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -113,14 +128,17 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	status.LastSeen = time.Now()
 
 	// Get currently loaded models
-	if models, err := a.Ollama.GetLoadedModels(); err == nil {
-		status.ActiveModels = models
+	if active, err := a.Ollama.GetLoadedModels(); err == nil {
+		status.ActiveModels = active
 	}
 
 	// Get all models on disk
 	if local, err := a.Ollama.ListLocalModels(); err == nil {
 		status.LocalModels = local
 	}
+
+	a.lastStatus = status
+	a.lastStatusTime = time.Now()
 
 	json.NewEncoder(w).Encode(status)
 }

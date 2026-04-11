@@ -23,12 +23,14 @@ export interface NodeStatus {
   last_seen: string;
   state: number;
   errors: number;
+  cooloff_until: string;
   draining: boolean;
 }
 
 export interface ClusterStatus {
   nodes: Record<string, NodeStatus>;
   pending_requests: Record<string, number>;
+  in_progress_pulls: Record<string, string>;
   queue_depth: number;
   active_workloads: number;
   all_models: string[];

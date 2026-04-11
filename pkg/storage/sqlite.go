@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"time"
 )
@@ -40,6 +41,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			min_vram uint64,
 			updated_at DATETIME
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics (timestamp);`,
 	}
 	for _, q := range queries {
 		if _, err = db.Exec(q); err != nil {
@@ -52,6 +54,11 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 
 func (s *SQLiteStorage) Close() error {
 	return s.db.Close()
+}
+
+func (s *SQLiteStorage) PruneOldMetrics(days int) error {
+	_, err := s.db.Exec("DELETE FROM metrics WHERE timestamp < datetime('now', ?)", fmt.Sprintf("-%d days", days))
+	return err
 }
 
 func (s *SQLiteStorage) UpdateModelVRAM(modelName string, minVRAM uint64) error {

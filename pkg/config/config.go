@@ -34,7 +34,7 @@ func DefaultConfig() *Config {
 		KeepAliveDurationSec: 300, // 5m
 		StaleThreshold:       5,
 		LoadThreshold:        80.0,
-		PollIntervalMs:       100, // 10Hz
+		PollIntervalMs:       2000, // 0.5Hz
 		Weights: RoutingWeights{
 			CPULoadWeight:     1.0,
 			LatencyWeight:     1.0,
@@ -63,7 +63,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	defer file.Close()
-	
+
 	err = json.NewDecoder(file).Decode(c)
 	return c, err
 }

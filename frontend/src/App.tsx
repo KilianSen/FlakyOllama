@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { api, type NodeStatus } from './api';
+import { api } from './api';
 import type { ClusterStatus } from './api';
 import {
-  Server, Database, Trash2, XCircle, Play, Layers, RefreshCw, Cpu,
-  Activity, AlertTriangle, CheckCircle2, CloudDownload, Terminal,
-  Network, Zap, HardDrive, Search, MoreVertical, Plus, Info, Globe
+  Server, Database, Trash2, XCircle, Play, RefreshCw, Cpu,
+  Activity, CloudDownload, Terminal,
+  Network, Zap, Search, MoreVertical, Globe
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
 
 // Shadcn UI Components
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
@@ -28,16 +28,11 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, 
-  AlertDialogTrigger 
-} from "@/components/ui/alert-dialog";
 
 const Topology = ({ status }: { status: ClusterStatus }) => {
   const nodes = Object.values(status.nodes);
@@ -64,8 +59,8 @@ const Topology = ({ status }: { status: ClusterStatus }) => {
             <g key={node.address}>
               <line 
                 x1={centerX} y1={centerY} x2={x} y2={y} 
-                className={`stroke-[1.5] transition-colors duration-500 ${isActive ? 'stroke-primary' : 'stroke-border'}`} 
-                strokeDasharray={node.draining ? "4 2" : "0"}
+                className={`stroke-[1.5] transition-colors duration-500 ${node.state === 2 ? 'stroke-destructive/30' : isActive ? 'stroke-primary' : 'stroke-border'}`} 
+                strokeDasharray={node.draining || node.state === 2 ? "4 2" : "0"}
               />
               {isActive && (
                 <motion.circle
@@ -179,8 +174,6 @@ const App = () => {
     </div>
   );
 
-  const filteredModels = status.all_models.filter(m => m.toLowerCase().includes(searchModel.toLowerCase()));
-
   return (
     <div className="min-h-screen bg-slate-50/30 flex flex-col font-sans selection:bg-primary/10">
       <Toaster position="top-center" richColors closeButton />
@@ -229,10 +222,16 @@ const App = () => {
               {[
                 { label: 'Cluster Nodes', val: Object.keys(status.nodes).length, sub: 'Active Workers', color: 'text-blue-600' },
                 { label: 'Network Load', val: status.active_workloads, sub: 'In-Flight', color: 'text-indigo-600' },
-                { label: 'Backlog', val: status.queue_depth, sub: 'Pending', color: 'text-amber-600' },
+                { 
+                  label: 'Backlog', 
+                  val: status.queue_depth, 
+                  sub: 'Pending', 
+                  color: status.queue_depth > 0 ? 'text-amber-600' : 'text-slate-400',
+                  pulse: status.queue_depth > 0
+                },
                 { label: 'Model Library', val: status.all_models.length, sub: 'Registered', color: 'text-emerald-600' },
               ].map((kpi, i) => (
-                <div key={i} className="flex items-end justify-between border-b border-dashed pb-4 last:border-0 last:pb-0">
+                <div key={i} className={`flex items-end justify-between border-b border-dashed pb-4 last:border-0 last:pb-0 ${kpi.pulse ? 'animate-pulse' : ''}`}>
                   <div className="flex flex-col">
                     <span className="text-[9px] font-black uppercase text-muted-foreground tracking-widest">{kpi.label}</span>
                     <span className="text-[10px] font-bold text-muted-foreground/40 uppercase">{kpi.sub}</span>
@@ -293,44 +292,55 @@ const App = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {modelDistribution.filter(m => m.name.includes(searchModel)).map(m => (
-                <TableRow key={m.name} className="group hover:bg-muted/10 transition-colors">
-                  <TableCell className="py-4">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-black tracking-tight">{m.name}</span>
-                      <span className="text-[9px] font-bold text-muted-foreground uppercase opacity-50">Local Weights Persistent</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-2 justify-center">
-                      {m.nodes.map(n => (
-                        <TooltipProvider key={n.address}>
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <Badge 
-                                variant={n.isHot ? "default" : "outline"} 
-                                className={`text-[9px] font-black px-2 h-5 tracking-tighter transition-all ${n.isHot ? 'bg-primary shadow-sm' : 'border-dashed border-muted-foreground/30 text-muted-foreground'}`}
-                              >
-                                {n.id.split('-').pop()}
-                                {n.isHot && <div className="w-1 h-1 rounded-full bg-white ml-1.5 animate-pulse" />}
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent className="text-[10px] font-bold uppercase">
-                              {n.id} - {n.isHot ? 'Hot (Resident in VRAM)' : 'Warm (On Disk)'}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button variant="outline" size="icon" className="h-8 w-8 text-amber-600 hover:bg-amber-50" onClick={() => handleAction(() => api.unloadModel(m.name), `Global evict: ${m.name}`)}><XCircle size={14} /></Button>
-                      <Button variant="outline" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive hover:text-white" onClick={() => handleAction(() => api.deleteModel(m.name), `Global purge: ${m.name}`)}><Trash2 size={14} /></Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {modelDistribution.filter(m => m.name.toLowerCase().includes(searchModel.toLowerCase())).map(m => {
+                const isSyncing = status.in_progress_pulls && status.in_progress_pulls[m.name];
+                return (
+                  <TableRow key={m.name} className="group hover:bg-muted/10 transition-colors">
+                    <TableCell className="py-4">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-black tracking-tight">{m.name}</span>
+                        {isSyncing ? (
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="secondary" className="text-[8px] h-4 font-black bg-indigo-50 text-indigo-600 border-indigo-100 animate-pulse">
+                              <RefreshCw size={10} className="animate-spin mr-1" /> SYNCING
+                            </Badge>
+                          </div>
+                        ) : (
+                          <span className="text-[9px] font-bold text-muted-foreground uppercase opacity-50">Local Weights Persistent</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-2 justify-center">
+                        {m.nodes.map(n => (
+                          <TooltipProvider key={n.address}>
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Badge 
+                                  variant={n.isHot ? "default" : "outline"} 
+                                  className={`text-[9px] font-black px-2 h-5 tracking-tighter transition-all ${n.isHot ? 'bg-primary shadow-sm' : 'border-dashed border-muted-foreground/30 text-muted-foreground'}`}
+                                >
+                                  {n.id.split('-').pop()}
+                                  {n.isHot && <div className="w-1 h-1 rounded-full bg-white ml-1.5 animate-pulse" />}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent className="text-[10px] font-bold uppercase">
+                                {n.id} - {n.isHot ? 'Hot (Resident in VRAM)' : 'Warm (On Disk)'}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button disabled={!!isSyncing} variant="outline" size="icon" className="h-8 w-8 text-amber-600 hover:bg-amber-50" onClick={() => handleAction(() => api.unloadModel(m.name), `Global evict: ${m.name}`)}><XCircle size={14} /></Button>
+                        <Button disabled={!!isSyncing} variant="outline" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive hover:text-white" onClick={() => handleAction(() => api.deleteModel(m.name), `Global purge: ${m.name}`)}><Trash2 size={14} /></Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </Card>
@@ -392,7 +402,20 @@ const App = () => {
                   <TableCell className="text-right">
                     <div className="flex flex-col items-end gap-2">
                       <div className="flex items-center gap-2">
-                        <Badge variant={node.state === 0 ? "secondary" : "destructive"} className="text-[9px] font-black h-5 uppercase">{node.state === 0 ? 'READY' : 'ERROR'}</Badge>
+                        {node.state === 0 ? (
+                          <Badge variant="secondary" className="text-[9px] font-black h-5 uppercase bg-emerald-50 text-emerald-700 border-emerald-100">READY</Badge>
+                        ) : node.state === 1 ? (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-[9px] font-black h-5 uppercase bg-amber-50 text-amber-700 border-amber-200">DEGRADED</Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>Recent errors detected: {node.errors}</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <Badge variant="destructive" className="text-[9px] font-black h-5 uppercase">OFFLINE</Badge>
+                        )}
                         {node.draining && <Badge className="text-[9px] font-black h-5 bg-amber-500 text-white">DRAINING</Badge>}
                       </div>
                       <DropdownMenu>

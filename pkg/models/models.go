@@ -41,6 +41,7 @@ type NodeStatus struct {
 	LastSeen       time.Time   `json:"last_seen"`
 	State          NodeState   `json:"state"`
 	Errors         int         `json:"errors"` // Consecutive errors
+	CooloffUntil   time.Time   `json:"cooloff_until"`
 	Draining       bool        `json:"draining"`
 }
 
@@ -99,6 +100,7 @@ type RegisterRequest struct {
 type ClusterStatus struct {
 	Nodes           map[string]*NodeStatus `json:"nodes"`
 	PendingRequests map[string]int         `json:"pending_requests"`
+	InProgressPulls map[string]time.Time   `json:"in_progress_pulls"`
 	QueueDepth      int                    `json:"queue_depth"`
 	ActiveWorkloads int                    `json:"active_workloads"`
 	AllModels       []string               `json:"all_models"`

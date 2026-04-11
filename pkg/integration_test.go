@@ -41,6 +41,7 @@ func TestIntegration(t *testing.T) {
 
 	// 2. Start Balancer
 	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", nil)
+	b.Config.PollIntervalMs = 100 // Fast polling for test
 	balancerSrv := httptest.NewServer(b.NewMux())
 	defer balancerSrv.Close()
 	defer b.Close()

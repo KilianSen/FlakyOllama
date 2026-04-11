@@ -88,12 +88,23 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 }
 
 func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, body []byte, results chan<- HedgedResult) {
-	// Route
-	id, addr, err := b.Route(models.InferenceRequest{Model: modelName})
-	if err != nil {
-		results <- HedgedResult{Err: err}
+	// Route via PriorityQueue to ensure proper load management
+	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, 0)
+
+	var qr QueuedResponse
+	select {
+	case <-ctx.Done():
+		results <- HedgedResult{Err: ctx.Err()}
 		return
+	case qr = <-resCh:
+		if qr.Err != nil {
+			results <- HedgedResult{Err: qr.Err}
+			return
+		}
 	}
+
+	id := qr.AgentID
+	addr := qr.AgentAddr
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", "http://"+addr+path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")

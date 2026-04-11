@@ -31,12 +31,13 @@ type Balancer struct {
 	Config          *config.Config
 	PendingRequests map[string]int       // model_name -> count
 	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
-	InProgressPulls map[string]bool      // model_name -> is_pulling
+	InProgressPulls map[string]time.Time // model_name -> start_time
 	Queue           *RequestQueue
 	Mu              sync.RWMutex
 	stopCh          chan struct{}
 	logChs          map[chan string]bool
 	logMu           sync.Mutex
+	httpClient      *http.Client
 }
 
 func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
@@ -56,10 +57,11 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		Config:          cfg,
 		PendingRequests: make(map[string]int),
 		ModelLastUsed:   make(map[string]time.Time),
-		InProgressPulls: make(map[string]bool),
+		InProgressPulls: make(map[string]time.Time),
 		Queue:           NewRequestQueue(),
 		stopCh:          make(chan struct{}),
 		logChs:          make(map[chan string]bool),
+		httpClient:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	// Intercept log output
@@ -151,13 +153,19 @@ func (b *Balancer) worker() {
 
 func (b *Balancer) StartKeepAliveCleaner() {
 	ticker := time.NewTicker(30 * time.Second)
+	pruneTicker := time.NewTicker(1 * time.Hour)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
 				b.cleanStaleModels()
+			case <-pruneTicker.C:
+				if err := b.Storage.PruneOldMetrics(2); err != nil {
+					log.Printf("Failed to prune old metrics: %v", err)
+				}
 			case <-b.stopCh:
 				ticker.Stop()
+				pruneTicker.Stop()
 				return
 			}
 		}
@@ -172,13 +180,15 @@ func (b *Balancer) cleanStaleModels() {
 	toUnload := make([]struct{ nodeID, addr, model string }, 0)
 	for key, lastTime := range b.ModelLastUsed {
 		if now.Sub(lastTime) > keepAlive {
-			parts := strings.Split(key, ":")
-			if len(parts) != 2 {
+			idx := strings.LastIndex(key, ":")
+			if idx == -1 {
 				continue
 			}
-			nodeID, modelName := parts[0], parts[1]
-			if agent, ok := b.Agents[nodeID]; ok {
-				toUnload = append(toUnload, struct{ nodeID, addr, model string }{nodeID, agent.Address, modelName})
+			agentAddr := key[:idx]
+			modelName := key[idx+1:]
+
+			if agent, ok := b.Agents[agentAddr]; ok {
+				toUnload = append(toUnload, struct{ nodeID, addr, model string }{agent.ID, agent.Address, modelName})
 			}
 			delete(b.ModelLastUsed, key)
 		}
@@ -198,7 +208,7 @@ func (b *Balancer) sendToAgent(addr, path string, body []byte) (*http.Response, 
 	if token := os.Getenv("AGENT_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	return http.DefaultClient.Do(req)
+	return b.httpClient.Do(req)
 }
 
 // Register registers a new agent.
@@ -247,7 +257,8 @@ func (b *Balancer) pollAgents() {
 			if token := os.Getenv("AGENT_TOKEN"); token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
 			}
-			resp, err := http.DefaultClient.Do(req)
+			// Use internal httpClient with timeout
+			resp, err := b.httpClient.Do(req)
 			if err != nil {
 				log.Printf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
 				b.recordError(a.Address)
@@ -264,18 +275,10 @@ func (b *Balancer) pollAgents() {
 					return
 				}
 
-				// Preserving some internal state, but resetting errors on successful poll
+				// Preserving some internal state
 				status.State = currentAgent.State
 				status.Errors = currentAgent.Errors
 				status.Draining = currentAgent.Draining
-
-				// If we successfully polled but it was broken, consider it healthy again
-				if status.State == models.StateBroken || status.State == models.StateDegraded {
-					log.Printf("Agent %s (%s) recovered via successful poll", a.ID, a.Address)
-					status.State = models.StateHealthy
-					status.Errors = 0
-				}
-
 				status.LastSeen = time.Now()
 
 				b.Agents[a.Address] = &status
@@ -288,6 +291,29 @@ func (b *Balancer) pollAgents() {
 					}
 				}
 
+				// Clear InProgressPulls if the model is now visible on any node (active or local)
+				for m := range b.InProgressPulls {
+					found := false
+					for _, am := range status.ActiveModels {
+						if am == m {
+							found = true
+							break
+						}
+					}
+					if !found {
+						for _, lm := range status.LocalModels {
+							if lm.Name == m {
+								found = true
+								break
+							}
+						}
+					}
+					if found {
+						log.Printf("Model %s discovered on node %s, clearing pull lock", m, a.ID)
+						delete(b.InProgressPulls, m)
+					}
+				}
+
 				// Update metrics
 				healthVal := 0.0
 				switch status.State {
@@ -295,8 +321,6 @@ func (b *Balancer) pollAgents() {
 					healthVal = 2.0
 				case models.StateDegraded:
 					healthVal = 1.0
-				default:
-					panic("unhandled default case")
 				}
 				metrics.NodeHealthStatus.WithLabelValues(a.ID, a.Address).Set(healthVal)
 
@@ -328,10 +352,18 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 	}
 
 	foundLoaded := false
+	now := time.Now()
 	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second || a.State == models.StateBroken || a.Draining {
+		// Threshold adjusted for 2s poll interval
+		if time.Since(a.LastSeen) > 5*time.Second || a.Draining {
 			continue
 		}
+
+		// Circuit Breaker: skip broken nodes unless they are past their cooloff period
+		if a.State == models.StateBroken && now.Before(a.CooloffUntil) {
+			continue
+		}
+
 		if a.VRAMTotal < minVRAM {
 			continue
 		}
@@ -397,22 +429,15 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 
 func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	b.Mu.Lock()
-	if b.InProgressPulls[model] {
-		b.Mu.Unlock()
-		return
-	}
-	b.InProgressPulls[model] = true
-	b.Mu.Unlock()
-
-	defer func() {
-		// We'll reset this after some time or after we see the model loaded
-		// For now, let's just reset it after 10 seconds to allow retry if it failed
-		time.AfterFunc(10*time.Second, func() {
-			b.Mu.Lock()
-			delete(b.InProgressPulls, model)
+	if startTime, ok := b.InProgressPulls[model]; ok {
+		// 10-minute safety timeout for pull lock
+		if time.Since(startTime) < 10*time.Minute {
 			b.Mu.Unlock()
-		})
-	}()
+			return
+		}
+	}
+	b.InProgressPulls[model] = time.Now()
+	b.Mu.Unlock()
 
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
@@ -468,15 +493,26 @@ func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 			modelMap[model] = true
 		}
 	}
+	// Include models currently being pulled for the first time
+	for m := range b.InProgressPulls {
+		modelMap[m] = true
+	}
 	allModels := make([]string, 0, len(modelMap))
 	for m := range modelMap {
 		allModels = append(allModels, m)
 	}
 	sort.Strings(allModels)
 
+	// Copy InProgressPulls
+	pulls := make(map[string]time.Time)
+	for m, t := range b.InProgressPulls {
+		pulls[m] = t
+	}
+
 	status := models.ClusterStatus{
 		Nodes:           b.Agents,
 		PendingRequests: b.PendingRequests,
+		InProgressPulls: pulls,
 		QueueDepth:      b.Queue.pq.Len(),
 		ActiveWorkloads: totalWorkloads,
 		AllModels:       allModels,
@@ -965,11 +1001,12 @@ func (b *Balancer) recordError(addr string) {
 		oldState := a.State
 		if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
 			a.State = models.StateBroken
+			a.CooloffUntil = time.Now().Add(time.Duration(b.Config.CircuitBreaker.CooloffSec) * time.Second)
 		} else {
 			a.State = models.StateDegraded
 		}
 		if oldState != a.State {
-			log.Printf("Node %s (%s) state changed: %s -> %s (errors: %d)", a.ID, addr, oldState.String(), a.State.String(), a.Errors)
+			log.Printf("Node %s (%s) state changed: %s -> %s (errors: %d, cooloff until: %v)", a.ID, addr, oldState.String(), a.State.String(), a.Errors, a.CooloffUntil)
 		}
 	}
 }
