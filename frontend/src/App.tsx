@@ -1,27 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api, type NodeStatus } from './api';
 import type { ClusterStatus } from './api';
 import {
-  Server, Database, Trash2, XCircle, Play, Layers, RefreshCw, Cpu,
-  Activity, AlertTriangle, CheckCircle2, CloudDownload, Terminal,
-  Network, Zap, HardDrive, Info, Settings2, Search, MoreVertical,
-  Maximize2, Minimize2, Trash
+  Trash2, XCircle, Play, RefreshCw, Cpu,
+  Activity, Terminal,
+  Zap, Search, MoreVertical,
+  Trash
 } from 'lucide-react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
 
 // Shadcn UI Components
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { 
@@ -135,10 +131,7 @@ const App = () => {
   const [testLoading, setTestLoading] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(true);
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [searchModel, setSearchModel] = useState("");
-  const [isPulling, setIsPulling] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const cleanup = api.streamLogs((msg) => {
