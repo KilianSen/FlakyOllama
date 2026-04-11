@@ -31,8 +31,10 @@ type Balancer struct {
 	Config          *config.Config
 	PendingRequests map[string]int       // model_name -> count
 	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
+	InProgressPulls map[string]bool      // model_name -> is_pulling
 	Queue           *RequestQueue
 	Mu              sync.RWMutex
+	stopCh          chan struct{}
 }
 
 func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
@@ -52,8 +54,15 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		Config:          cfg,
 		PendingRequests: make(map[string]int),
 		ModelLastUsed:   make(map[string]time.Time),
+		InProgressPulls: make(map[string]bool),
 		Queue:           NewRequestQueue(),
+		stopCh:          make(chan struct{}),
 	}, nil
+}
+
+func (b *Balancer) Close() error {
+	close(b.stopCh)
+	return b.Storage.Close()
 }
 
 func (b *Balancer) StartBackgroundTasks() {
@@ -71,6 +80,8 @@ func (b *Balancer) StartWorkerPool(workers int) {
 func (b *Balancer) worker() {
 	for {
 		select {
+		case <-b.stopCh:
+			return
 		case <-b.Queue.Wait():
 			req := b.Queue.Pop()
 			if req == nil {
@@ -86,8 +97,14 @@ func (b *Balancer) worker() {
 func (b *Balancer) StartKeepAliveCleaner() {
 	ticker := time.NewTicker(30 * time.Second)
 	go func() {
-		for range ticker.C {
-			b.cleanStaleModels()
+		for {
+			select {
+			case <-ticker.C:
+				b.cleanStaleModels()
+			case <-b.stopCh:
+				ticker.Stop()
+				return
+			}
 		}
 	}()
 }
@@ -148,9 +165,15 @@ func (b *Balancer) StartPoller() {
 	interval := time.Duration(b.Config.PollIntervalMs) * time.Millisecond
 	ticker := time.NewTicker(interval)
 	go func() {
-		for range ticker.C {
-			b.pollAgents()
-			metrics.QueueDepth.Set(float64(b.Queue.pq.Len()))
+		for {
+			select {
+			case <-ticker.C:
+				b.pollAgents()
+				metrics.QueueDepth.Set(float64(b.Queue.pq.Len()))
+			case <-b.stopCh:
+				ticker.Stop()
+				return
+			}
 		}
 	}()
 }
@@ -316,6 +339,24 @@ func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
 }
 
 func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
+	b.Mu.Lock()
+	if b.InProgressPulls[model] {
+		b.Mu.Unlock()
+		return
+	}
+	b.InProgressPulls[model] = true
+	b.Mu.Unlock()
+
+	defer func() {
+		// We'll reset this after some time or after we see the model loaded
+		// For now, let's just reset it after 10 seconds to allow retry if it failed
+		time.AfterFunc(10*time.Second, func() {
+			b.Mu.Lock()
+			delete(b.InProgressPulls, model)
+			b.Mu.Unlock()
+		})
+	}()
+
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
@@ -407,6 +448,7 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/api/manage/model/pull", auth.Middleware(token, b.HandleModelPull))
 	mux.HandleFunc("/api/manage/model/delete", auth.Middleware(token, b.HandleModelDelete))
 	mux.HandleFunc("/api/manage/test", auth.Middleware(token, b.HandleTestInference))
+	mux.HandleFunc("/api/logs", b.HandleLogs)
 
 	// OpenAI compatibility layer
 	mux.HandleFunc("/v1/chat/completions", auth.Middleware(token, b.HandleOpenAIChat))

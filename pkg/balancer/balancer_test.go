@@ -83,15 +83,15 @@ func TestBalancer_HandleRegister(t *testing.T) {
 	}
 
 	b.Mu.RLock()
-	agent, ok := b.Agents["agent-0"]
+	expectedAddr := "192.168.1.50:8081"
+	agent, ok := b.Agents[expectedAddr]
 	b.Mu.RUnlock()
 
 	if !ok {
-		t.Fatalf("Agent agent-0 not registered")
+		t.Fatalf("Agent at %s not registered", expectedAddr)
 	}
 
-	expectedAddr := "192.168.1.50:8081"
-	if agent.Address != expectedAddr {
-		t.Errorf("Expected address %s, got %s", expectedAddr, agent.Address)
+	if agent.ID != "agent-0" {
+		t.Errorf("Expected ID agent-0, got %s", agent.ID)
 	}
 }

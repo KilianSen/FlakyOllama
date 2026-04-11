@@ -18,9 +18,13 @@ func TestIntegration(t *testing.T) {
 	mockOllama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/ps" {
 			json.NewEncoder(w).Encode(struct {
-				Models []struct{ Name string `json:"name"` } `json:"models"`
+				Models []struct {
+					Name string `json:"name"`
+				} `json:"models"`
 			}{
-				Models: []struct{ Name string `json:"name"` }{{Name: "llama2"}},
+				Models: []struct {
+					Name string `json:"name"`
+				}{{Name: "llama2"}},
 			})
 			return
 		}
@@ -39,6 +43,7 @@ func TestIntegration(t *testing.T) {
 	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", nil)
 	balancerSrv := httptest.NewServer(b.NewMux())
 	defer balancerSrv.Close()
+	defer b.Close()
 
 	// 3. Start Agent
 	// Extract port from httptest URL for Agent's "Address"
@@ -46,7 +51,7 @@ func TestIntegration(t *testing.T) {
 	a := agent.NewAgent("agent-test", "localhost:0", balancerURL, mockOllama.URL)
 	agentSrv := httptest.NewServer(a.NewMux())
 	defer agentSrv.Close()
-	
+
 	// Update agent's address to the actual httptest server address
 	a.Address = strings.TrimPrefix(agentSrv.URL, "http://")
 
@@ -57,7 +62,24 @@ func TestIntegration(t *testing.T) {
 
 	// 5. Start background tasks (poller, workers, etc.)
 	b.StartBackgroundTasks()
-	time.Sleep(1000 * time.Millisecond) // Wait for at least one poll
+
+	// Wait for agent to be polled successfully (up to 2 seconds)
+	deadline := time.Now().Add(2 * time.Second)
+	success := false
+	for time.Now().Before(deadline) {
+		b.Mu.RLock()
+		if agent, ok := b.Agents[a.Address]; ok && len(agent.ActiveModels) > 0 {
+			success = true
+			b.Mu.RUnlock()
+			break
+		}
+		b.Mu.RUnlock()
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !success {
+		t.Fatalf("Agent was not polled successfully within timeout")
+	}
 
 	// 6. Send an inference request to the Balancer
 	req := models.InferenceRequest{

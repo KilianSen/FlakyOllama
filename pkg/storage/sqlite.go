@@ -50,6 +50,10 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 	return &SQLiteStorage{db: db}, nil
 }
 
+func (s *SQLiteStorage) Close() error {
+	return s.db.Close()
+}
+
 func (s *SQLiteStorage) UpdateModelVRAM(modelName string, minVRAM uint64) error {
 	_, err := s.db.Exec(`
 		INSERT INTO model_metadata (model_name, min_vram, updated_at) 
@@ -88,9 +92,9 @@ func (s *SQLiteStorage) GetPerformance(nodeID, modelName string) (PerformanceMet
 	SELECT AVG(latency), AVG(success) 
 	FROM metrics 
 	WHERE node_id = ? AND model_name = ? AND timestamp > ?`
-	
+
 	row := s.db.QueryRow(query, nodeID, modelName, time.Now().Add(-24*time.Hour))
-	
+
 	var avgLatency, successRate sql.NullFloat64
 	err := row.Scan(&avgLatency, &successRate)
 	if err != nil {
@@ -111,7 +115,7 @@ func (s *SQLiteStorage) GetP90Latency(modelName string) (time.Duration, error) {
 	SELECT latency FROM metrics 
 	WHERE model_name = ? AND success = 1 AND timestamp > ?
 	ORDER BY latency ASC LIMIT 100`
-	
+
 	rows, err := s.db.Query(query, modelName, time.Now().Add(-24*time.Hour))
 	if err != nil {
 		return 0, err
