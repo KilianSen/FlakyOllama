@@ -679,16 +679,23 @@ func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 	model := r.FormValue("model")
 	prompt := r.FormValue("prompt")
+	nodeID := r.FormValue("node_id")
+	nodeAddr := r.FormValue("node_addr")
 
 	if model == "" || prompt == "" {
 		// Try JSON body
 		var req struct {
-			Model  string `json:"model"`
-			Prompt string `json:"prompt"`
+			Model    string `json:"model"`
+			Prompt   string `json:"prompt"`
+			NodeID   string `json:"node_id"`
+			NodeAddr string `json:"node_addr"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
-		model = req.Model
-		prompt = req.Prompt
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			model = req.Model
+			prompt = req.Prompt
+			nodeID = req.NodeID
+			nodeAddr = req.NodeAddr
+		}
 	}
 
 	if model == "" || prompt == "" {
@@ -712,7 +719,31 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	var resp *http.Response
+	var agentID string
+	var err error
+
+	if nodeID != "" || nodeAddr != "" {
+		b.Mu.RLock()
+		var target *models.NodeStatus
+		for _, a := range b.Agents {
+			if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
+				target = a
+				break
+			}
+		}
+		b.Mu.RUnlock()
+
+		if target == nil {
+			http.Error(w, "Node not found", http.StatusNotFound)
+			return
+		}
+		agentID = target.ID
+		resp, err = b.sendToAgent(target.Address, "/inference", body)
+	} else {
+		resp, agentID, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	}
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

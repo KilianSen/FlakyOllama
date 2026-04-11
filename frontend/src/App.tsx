@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api } from './api';
+import {api, type NodeStatus} from './api';
 import type { ClusterStatus } from './api';
 import { 
   Server, Database, Thermometer, Trash2, XCircle, Play, Layers, RefreshCw, Cpu,
@@ -10,7 +10,6 @@ import { Toaster, toast } from 'sonner';
 
 const StateLabel = ({ state }: { state: number }) => {
   const states = ['Healthy', 'Degraded', 'Broken'];
-  const colors = ['bg-emerald-500', 'bg-amber-500', 'bg-red-500'];
   const textColors = ['text-emerald-700', 'text-amber-700', 'text-red-700'];
   const icons = [
     <CheckCircle2 className="w-3 h-3 text-emerald-600" />,
@@ -51,10 +50,20 @@ const App = () => {
   const [testResult, setTestResult] = useState<{agent_id: string, response: string} | null>(null);
   const [testLoading, setTestLoading] = useState(false);
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
+  const [logs, setLogs] = useState<string[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   const toggleNode = (id: string) => {
     setExpandedNodes(prev => ({ ...prev, [id]: !prev[id] }));
   };
+
+  useEffect(() => {
+    const cleanup = api.streamLogs((msg) => {
+      setLogs(prev => [...prev.slice(-99), msg]);
+    });
+    return cleanup;
+  }, []);
 
   const fetchStatus = async (silent = false) => {
     try {
@@ -145,11 +154,15 @@ const App = () => {
     const formData = new FormData(e.currentTarget);
     const model = formData.get('model') as string;
     const prompt = formData.get('prompt') as string;
+    const nodeAddr = formData.get('node_addr') as string;
+
     if (model && prompt) {
       setTestLoading(true);
-      const toastId = toast.loading('Running inference test...');
+      const toastId = toast.loading(nodeAddr ? `Running targeted inference on ${nodeAddr}...` : 'Running inference test...');
       try {
-        const res = await api.runTest(model, prompt);
+        const res = nodeAddr 
+          ? await api.runTestOnNode(model, prompt, nodeAddr)
+          : await api.runTest(model, prompt);
         setTestResult(res);
         toast.success(`Received response from ${res.agent_id}`, { id: toastId });
       } catch (err) {
@@ -159,6 +172,28 @@ const App = () => {
       }
     }
   };
+
+  const LogViewer = () => (
+    <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-700 overflow-hidden flex flex-col h-[400px]">
+      <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Terminal className="w-4 h-4 text-indigo-400" />
+          <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Live Cluster Logs</h3>
+        </div>
+        <button onClick={() => setLogs([])} className="text-[10px] font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-widest bg-slate-700 px-2 py-1 rounded">Clear</button>
+      </div>
+      <div className="p-4 overflow-y-auto font-mono text-[11px] leading-relaxed text-indigo-300 flex-1 flex flex-col-reverse">
+        <div>
+          {logs.map((log, i) => (
+            <div key={i} className="mb-1 opacity-90 border-l-2 border-indigo-500/30 pl-2 hover:bg-white/5 transition-colors">
+              <span className="text-slate-500 mr-2">[{new Date().toLocaleTimeString()}]</span>
+              {log}
+            </div>
+          )).reverse()}
+        </div>
+      </div>
+    </div>
+  );
 
   if (!status) return (
     <div className="flex items-center justify-center min-h-screen bg-slate-50">
@@ -203,6 +238,13 @@ const App = () => {
               Live Sync
             </div>
             <button
+              onClick={() => setShowLogs(!showLogs)}
+              className={`p-2 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 ${showLogs ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'}`}
+              title="Toggle Live Logs"
+            >
+              <Terminal className="w-5 h-5" />
+            </button>
+            <button
               onClick={() => fetchStatus(false)}
               className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
               title="Refresh Cluster Status"
@@ -214,6 +256,20 @@ const App = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-8">
+
+        {/* Live Logs Section */}
+        <AnimatePresence>
+          {showLogs && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden"
+            >
+              <LogViewer />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Top KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -282,7 +338,7 @@ const App = () => {
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <AnimatePresence>
-              {Object.values(status.nodes).map((node) => {
+              {Object.values(status.nodes).map((node: NodeStatus) => {
                 const isExpanded = expandedNodes[node.id] || false;
                 return (
                   <motion.div
@@ -417,13 +473,27 @@ const App = () => {
                                   <div key={m.name} className="group flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200 shadow-sm hover:shadow hover:border-slate-300 transition-all">
                                     {m.name}
                                     <span className="text-[10px] text-slate-400 font-normal ml-1">({(m.size / 1e9).toFixed(1)}GB)</span>
-                                    <button
-                                      onClick={() => handleDelete(node.address, m.name)}
-                                      className="ml-1.5 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-                                      title="Delete from disk"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
+                                    <div className="flex items-center gap-1 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button
+                                        onClick={() => {
+                                          setSelectedNode(node.address);
+                                          const select = document.querySelector('select[name="model"]') as HTMLSelectElement;
+                                          if (select) select.value = m.name;
+                                          window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                                        }}
+                                        className="text-slate-300 hover:text-indigo-600 transition-colors"
+                                        title="Run inference here"
+                                      >
+                                        <Play className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDelete(node.address, m.name)}
+                                        className="text-slate-300 hover:text-red-500 transition-colors"
+                                        title="Delete from disk"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
                                   </div>
                                 )) : (
                                   <span className="text-xs text-slate-400 italic">No models on disk</span>
@@ -454,16 +524,37 @@ const App = () => {
             </div>
             <div className="p-6 flex-1 flex flex-col">
               <form onSubmit={handleTest} className="space-y-5">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Target Model</label>
-                  <select
-                    name="model"
-                    className="w-full rounded-xl border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm font-medium text-slate-700 bg-slate-50 py-2.5"
-                    required
-                  >
-                    {!status.all_models.length && <option value="">No models available in cluster</option>}
-                    {status.all_models.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Target Model</label>
+                    <select
+                      name="model"
+                      className="w-full rounded-xl border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm font-medium text-slate-700 bg-slate-50 py-2.5"
+                      required
+                    >
+                      {!status.all_models.length && <option value="">No models available in cluster</option>}
+                      {status.all_models.map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Target Node (Optional)</label>
+                    <div className="relative">
+                      <select
+                        name="node_addr"
+                        value={selectedNode || ""}
+                        onChange={(e) => setSelectedNode(e.target.value || null)}
+                        className="w-full rounded-xl border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm font-medium text-slate-700 bg-slate-50 py-2.5 pl-3 pr-10 appearance-none"
+                      >
+                        <option value="">Dynamic Routing (Best Node)</option>
+                        {Object.values(status.nodes).map((n: NodeStatus) => (
+                          <option key={n.address} value={n.address}>{n.id} ({n.address})</option>
+                        ))}
+                      </select>
+                      <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400">
+                        <ChevronDown className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Prompt</label>

@@ -76,5 +76,27 @@ export const api = {
     });
     if (!res.ok) throw new Error('Test failed');
     return res.json();
+  },
+
+  async runTestOnNode(model: string, prompt: string, addr: string): Promise<{agent_id: string, response: string}> {
+    const res = await fetch(`${API_BASE_URL}/api/manage/test`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model, prompt, node_addr: addr }),
+    });
+    if (!res.ok) throw new Error('Test on node failed');
+    return res.json();
+  },
+
+  streamLogs(onMessage: (msg: string) => void): () => void {
+    const eventSource = new EventSource(`${API_BASE_URL}/api/logs`);
+    eventSource.onmessage = (event) => {
+      onMessage(event.data);
+    };
+    eventSource.onerror = (err) => {
+      console.error('EventSource failed:', err);
+      eventSource.close();
+    };
+    return () => eventSource.close();
   }
 };
