@@ -561,25 +561,51 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	b.Mu.Unlock()
 
 	b.Mu.RLock()
-	defer b.Mu.RUnlock()
+	var bestTarget *models.NodeStatus
+	var bestScore = -1.0
 
 	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken || a.Draining {
+		// Connectivity and basic requirements
+		if time.Since(a.LastSeen) > 5*time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken || a.Draining {
 			continue
 		}
-		hasModel := false
+
+		// Skip if model is already there
+		alreadyHas := false
 		for _, m := range a.ActiveModels {
 			if m == model {
-				hasModel = true
+				alreadyHas = true
 				break
 			}
 		}
-		if !hasModel {
-			log.Printf("Triggering auto-allocation of model %s to agent %s", model, a.ID)
-			body, _ := json.Marshal(map[string]string{"model": model})
-			go b.sendToAgent(a.Address, "/models/pull", body)
-			return
+		if alreadyHas {
+			continue
 		}
+		for _, m := range a.LocalModels {
+			if m.Name == model {
+				alreadyHas = true
+				break
+			}
+		}
+		if alreadyHas {
+			continue
+		}
+
+		// Allocation Score: prioritize nodes with most free VRAM and lowest CPU
+		freeVRAM := float64(a.VRAMTotal - a.VRAMUsed)
+		score := (freeVRAM / 1e9) * (1.0 - (a.CPUUsage / 100.0))
+
+		if score > bestScore {
+			bestScore = score
+			bestTarget = a
+		}
+	}
+	b.Mu.RUnlock()
+
+	if bestTarget != nil {
+		log.Printf("Triggering auto-allocation of model %s to agent %s (allocation score: %.2f)", model, bestTarget.ID, bestScore)
+		body, _ := json.Marshal(map[string]string{"model": model})
+		go b.sendToAgent(bestTarget.Address, "/models/pull", body)
 	}
 }
 
@@ -1027,6 +1053,12 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
 
+	// Load Shedding: Check if queue is at capacity
+	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+		return
+	}
+
 	b.Mu.Lock()
 	b.PendingRequests[req.Model]++
 	b.Mu.Unlock()
@@ -1067,6 +1099,12 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
+
+	// Load Shedding: Check if queue is at capacity
+	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+		return
+	}
 
 	b.Mu.Lock()
 	b.PendingRequests[req.Model]++

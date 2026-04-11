@@ -29,6 +29,12 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Load Shedding: Check if queue is at capacity
+	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+		return
+	}
+
 	b.Mu.Lock()
 	b.PendingRequests[ollamaReq.Model]++
 	b.Mu.Unlock()
@@ -168,6 +174,12 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 		Prompt:  oaiReq.Prompt,
 		Stream:  oaiReq.Stream,
 		Options: oaiReq.Options,
+	}
+
+	// Load Shedding: Check if queue is at capacity
+	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+		return
 	}
 
 	b.Mu.Lock()

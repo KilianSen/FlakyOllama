@@ -15,6 +15,7 @@ type Config struct {
 	CircuitBreaker       CBConfig       `json:"circuit_breaker"`
 	StallTimeoutSec      int            `json:"stall_timeout_sec"`
 	HedgingPercentile    float64        `json:"hedging_percentile"`
+	MaxQueueDepth        int            `json:"max_queue_depth"`
 }
 
 type RoutingWeights struct {
@@ -51,6 +52,7 @@ func DefaultConfig() *Config {
 		},
 		StallTimeoutSec:   15,
 		HedgingPercentile: 0.95,
+		MaxQueueDepth:     100,
 	}
 }
 

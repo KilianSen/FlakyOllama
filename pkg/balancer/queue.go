@@ -11,6 +11,7 @@ import (
 type QueuedRequest struct {
 	Request  models.InferenceRequest
 	Priority int // Higher value means higher priority
+	Sequence int64
 	ClientIP string
 	Ctx      context.Context
 	Response chan QueuedResponse
@@ -29,8 +30,12 @@ type PriorityQueue []*QueuedRequest
 func (pq PriorityQueue) Len() int { return len(pq) }
 
 func (pq PriorityQueue) Less(i, j int) bool {
-	// We want Pop to give us the highest, not lowest, priority so we use greater than here.
-	return pq[i].Priority > pq[j].Priority
+	// We want Pop to give us the highest, not lowest, priority
+	if pq[i].Priority != pq[j].Priority {
+		return pq[i].Priority > pq[j].Priority
+	}
+	// Equal priority: use sequence to enforce FIFO (lower sequence was enqueued earlier)
+	return pq[i].Sequence < pq[j].Sequence
 }
 
 func (pq PriorityQueue) Swap(i, j int) {
@@ -58,9 +63,10 @@ func (pq *PriorityQueue) Pop() interface{} {
 
 // RequestQueue handles thread-safe priority queuing.
 type RequestQueue struct {
-	pq PriorityQueue
-	mu sync.Mutex
-	ch chan struct{} // signaled when a new item is pushed
+	pq       PriorityQueue
+	sequence int64
+	mu       sync.Mutex
+	ch       chan struct{} // signaled when a new item is pushed
 }
 
 func NewRequestQueue() *RequestQueue {
@@ -77,9 +83,11 @@ func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP
 	defer rq.mu.Unlock()
 
 	resCh := make(chan QueuedResponse, 1)
+	rq.sequence++
 	item := &QueuedRequest{
 		Request:  req,
 		Priority: priority,
+		Sequence: rq.sequence,
 		ClientIP: clientIP,
 		Ctx:      ctx,
 		Response: resCh,

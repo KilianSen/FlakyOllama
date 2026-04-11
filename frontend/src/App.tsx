@@ -28,7 +28,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter
 } from "@/components/ui/dialog";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -269,7 +269,7 @@ const App = () => {
                 </DialogTrigger>
                 <DialogContent>
                   <DialogHeader>
-                    <DialogTitle className="font-black tracking-tighter">FLEET DEPLOYMENT</DialogTitle>
+                    <DialogTitle className="font-black tracking-tighter text-foreground uppercase">Fleet Deployment</DialogTitle>
                     <DialogDescription className="text-xs font-bold uppercase text-muted-foreground">Broadcast pull command to entire compute fabric</DialogDescription>
                   </DialogHeader>
                   <form onSubmit={(e) => {
@@ -328,7 +328,7 @@ const App = () => {
                                   {n.isHot && <div className="w-1 h-1 rounded-full bg-white ml-1.5 animate-pulse" />}
                                 </Badge>
                               </TooltipTrigger>
-                              <TooltipContent className="text-[10px] font-bold uppercase">
+                              <TooltipContent className="text-[10px] font-bold uppercase tracking-widest">
                                 {n.id} - {n.isHot ? 'Hot (Resident in VRAM)' : 'Warm (On Disk)'}
                               </TooltipContent>
                             </Tooltip>
@@ -381,11 +381,11 @@ const App = () => {
                   <TableCell>
                     <div className="flex flex-col gap-3 w-48">
                       <div className="space-y-1">
-                        <div className="flex justify-between text-[8px] font-black text-muted-foreground uppercase"><span>CPU</span> <span>{node.cpu_usage.toFixed(0)}%</span></div>
+                        <div className="flex justify-between text-[8px] font-black text-muted-foreground uppercase tracking-widest"><span>CPU LOAD</span> <span>{node.cpu_usage.toFixed(0)}%</span></div>
                         <Progress value={node.cpu_usage} indicatorClassName="bg-blue-500" className="h-1" />
                       </div>
                       <div className="space-y-1">
-                        <div className="flex justify-between text-[8px] font-black text-muted-foreground uppercase">
+                        <div className="flex justify-between text-[8px] font-black text-muted-foreground uppercase tracking-widest">
                           <span>{node.has_gpu ? `VRAM` : 'RAM'}</span>
                           <span>
                             {node.has_gpu 
@@ -422,7 +422,7 @@ const App = () => {
                             </Tooltip>
                           </TooltipProvider>
                         ) : (
-                          <Badge variant="destructive" className="text-[9px] font-black h-5 uppercase">OFFLINE</Badge>
+                          <Badge variant="destructive" className="text-[9px] font-black h-5 uppercase tracking-widest">OFFLINE</Badge>
                         )}
                         {node.draining && <Badge className="text-[9px] font-black h-5 bg-amber-500 text-white leading-none flex items-center justify-center">DRAINING</Badge>}
                       </div>
@@ -471,11 +471,13 @@ const App = () => {
                     </Select>
                   </div>
                 </div>
-                <Textarea name="prompt" placeholder="TRANSMIT PROMPT..." className="min-h-[120px] text-xs font-bold uppercase p-4 border-2 resize-none" required />
-                <Button type="submit" disabled={testLoading} className="w-full font-black text-xs tracking-[0.3em] uppercase py-6 shadow-xl shadow-primary/20">
-                  {testLoading ? <RefreshCw className="animate-spin mr-3" size={16} /> : <Play className="mr-3" size={16} fill="currentColor" fillOpacity={0.2} />}
-                  Execute Inference
-                </Button>
+                <Textarea name="prompt" placeholder="TRANSMIT PROMPT..." className="min-h-[120px] text-xs font-bold uppercase p-4 border-2 resize-none focus-visible:ring-primary/20" required />
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={testLoading} className="h-12 px-10 font-black text-xs tracking-[0.3em] uppercase shadow-xl shadow-primary/20 bg-primary">
+                    {testLoading ? <RefreshCw className="animate-spin mr-3" size={16} /> : <Play className="mr-3" size={16} fill="currentColor" fillOpacity={0.2} />}
+                    Execute Inference
+                  </Button>
+                </div>
               </form>
             </CardContent>
           </Card>
@@ -524,7 +526,7 @@ const App = () => {
                   <div>
                     <div className="border-b border-white/10 pb-4 mb-4 flex items-center justify-between">
                       <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-[9px] font-black uppercase tracking-widest">Provider: {testResult.agent_id}</Badge>
-                      <Button variant="ghost" size="sm" onClick={() => setTestResult(null)} className="h-6 text-[8px] font-black uppercase text-slate-500">Clear Buffer</Button>
+                      <Button variant="ghost" size="sm" onClick={() => setTestResult(null)} className="h-6 text-[8px] font-black uppercase text-slate-500 hover:text-white">Clear Buffer</Button>
                     </div>
                     {testResult.response}
                   </div>
@@ -562,9 +564,8 @@ const App = () => {
         </Card>
       </main>
 
-      {/* Node-Specific Pull Dialog */}
       <Dialog open={!!nodePullTarget} onOpenChange={(open) => !open && setNodePullTarget(null)}>
-        <DialogContent>
+        <DialogContent className="rounded-2xl">
           <DialogHeader>
             <DialogTitle className="font-black tracking-tighter text-foreground uppercase">Node-Specific Deployment</DialogTitle>
             <DialogDescription className="text-xs font-bold uppercase text-muted-foreground">Targeting worker: {nodePullTarget}</DialogDescription>
@@ -577,9 +578,9 @@ const App = () => {
               setNodePullTarget(null);
             }
           }} className="space-y-4 pt-4">
-            <Input name="tag" placeholder="e.g. mistral" className="font-bold border-2" required />
+            <Input name="tag" placeholder="e.g. mistral" className="font-bold border-2 h-12 rounded-xl shadow-inner" required />
             <DialogFooter>
-              <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest py-6">Initiate Targeted Pull</Button>
+              <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest h-12 rounded-xl shadow-lg">Initiate Targeted Pull</Button>
             </DialogFooter>
           </form>
         </DialogContent>
