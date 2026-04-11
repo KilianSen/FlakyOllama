@@ -35,6 +35,8 @@ type Balancer struct {
 	Queue           *RequestQueue
 	Mu              sync.RWMutex
 	stopCh          chan struct{}
+	logChs          map[chan string]bool
+	logMu           sync.Mutex
 }
 
 func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
@@ -47,7 +49,7 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		cfg = config.DefaultConfig()
 	}
 
-	return &Balancer{
+	b := &Balancer{
 		Address:         address,
 		Agents:          make(map[string]*models.NodeStatus),
 		Storage:         s,
@@ -57,7 +59,60 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		InProgressPulls: make(map[string]bool),
 		Queue:           NewRequestQueue(),
 		stopCh:          make(chan struct{}),
-	}, nil
+		logChs:          make(map[chan string]bool),
+	}
+
+	// Intercept log output
+	log.SetOutput(b)
+
+	return b, nil
+}
+
+func (b *Balancer) Write(p []byte) (n int, err error) {
+	msg := string(p)
+	os.Stderr.Write(p) // Also write to stderr
+
+	b.logMu.Lock()
+	for ch := range b.logChs {
+		select {
+		case ch <- msg:
+		default:
+		}
+	}
+	b.logMu.Unlock()
+	return len(p), nil
+}
+
+func (b *Balancer) HandleLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ch := make(chan string, 100)
+	b.logMu.Lock()
+	b.logChs[ch] = true
+	b.logMu.Unlock()
+
+	defer func() {
+		b.logMu.Lock()
+		delete(b.logChs, ch)
+		b.logMu.Unlock()
+		close(ch)
+	}()
+
+	flusher, _ := w.(http.Flusher)
+	for {
+		select {
+		case msg := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		case <-b.stopCh:
+			return
+		}
+	}
 }
 
 func (b *Balancer) Close() error {
