@@ -753,7 +753,7 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 		agentID = target.ID
 		resp, err = b.sendToAgent(target.Address, "/inference", body)
 	} else {
-		resp, agentID, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+		resp, agentID, _, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
 	}
 
 	if err != nil {
@@ -838,7 +838,7 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	resp, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body)
+	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -871,14 +871,14 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
+	resp, agentID, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentID, req.Model)
+	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
 
 func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
@@ -900,7 +900,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	resp, agentID, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
 	if err != nil {
 		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -908,7 +908,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentID, req.Model)
+	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
 
 func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string) {

@@ -13,14 +13,15 @@ import (
 
 // HedgedResult wraps an HTTP response or an error.
 type HedgedResult struct {
-	Resp    *http.Response
-	AgentID string
-	Err     error
+	Resp      *http.Response
+	AgentID   string
+	AgentAddr string
+	Err       error
 }
 
 // DoHedgedRequest sends a request to one node, and if it doesn't return headers by 'delay',
 // it sends a second request to another node.
-func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte) (*http.Response, string, error) {
+func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte) (*http.Response, string, string, error) {
 	// Find P90 latency for delay
 	p90, _ := b.Storage.GetP90Latency(modelName)
 	if p90 == 0 {
@@ -45,7 +46,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		select {
 		case res := <-results:
 			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
-				return res.Resp, res.AgentID, nil
+				return res.Resp, res.AgentID, res.AgentAddr, nil
 			}
 
 			if res.Err != nil {
@@ -64,9 +65,9 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 				// This was the second result (either second attempt finished, or first finished after second started)
 				// and it also failed.
 				if firstErr != nil {
-					return nil, "", firstErr
+					return nil, "", "", firstErr
 				}
-				return nil, "", fmt.Errorf("all attempts failed")
+				return nil, "", "", fmt.Errorf("all attempts failed")
 			}
 		case <-timer.C:
 			if !secondStarted {
@@ -76,14 +77,14 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 			// Don't increment i here, we still want to wait for 2 results if possible
 			i--
 		case <-ctx.Done():
-			return nil, "", ctx.Err()
+			return nil, "", "", ctx.Err()
 		}
 	}
 
 	if firstErr != nil {
-		return nil, "", firstErr
+		return nil, "", "", firstErr
 	}
-	return nil, "", io.EOF
+	return nil, "", "", io.EOF
 }
 
 func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, body []byte, results chan<- HedgedResult) {
@@ -102,8 +103,8 @@ func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, bo
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		b.recordError(id)
+		b.recordError(addr)
 		b.Storage.RecordMetric(id, modelName, 0, false)
 	}
-	results <- HedgedResult{Resp: resp, AgentID: id, Err: err}
+	results <- HedgedResult{Resp: resp, AgentID: id, AgentAddr: addr, Err: err}
 }
