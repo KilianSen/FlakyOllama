@@ -239,7 +239,19 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		// Cluster-wide pull
+		// Cluster-wide pull - Idempotency Check
+		b.pullsMu.Lock()
+		if startTime, ok := b.InProgressPulls[model]; ok {
+			if time.Since(startTime) < 10*time.Minute {
+				b.pullsMu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{"status": "ignored", "message": "Pull already in progress"})
+				return
+			}
+		}
+		b.InProgressPulls[model] = time.Now()
+		b.pullsMu.Unlock()
+
 		logging.Global.Infof("Pulling model %s cluster-wide", model)
 		b.Broadcast("/models/pull", body)
 	}

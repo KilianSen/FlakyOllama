@@ -118,3 +118,7 @@ func (rq *RequestQueue) Pop() *QueuedRequest {
 func (rq *RequestQueue) Wait() <-chan struct{} {
 	return rq.ch
 }
+
+func (rq *RequestQueue) Close() {
+	close(rq.ch)
+}

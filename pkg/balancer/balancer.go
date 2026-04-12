@@ -97,6 +97,7 @@ func (b *Balancer) Ship(entry models.LogEntry) {
 
 func (b *Balancer) Close() error {
 	close(b.stopCh)
+	b.Queue.Close()
 	return b.Storage.Close()
 }
 

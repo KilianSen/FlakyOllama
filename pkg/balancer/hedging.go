@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -17,44 +18,63 @@ type HedgedResult struct {
 	AgentID   string
 	AgentAddr string
 	Err       error
+	Cancel    context.CancelFunc // Function to cancel this specific attempt's context
 }
 
 // DoHedgedRequest sends a request to one node, and if it doesn't return headers by 'delay',
 // it sends a second request to another node.
 func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte, clientIP string, allowHedging bool, priority int) (*http.Response, string, string, error) {
-	// Find P90 latency for delay
 	p90, _ := b.Storage.GetP90Latency(modelName)
 	if p90 == 0 {
-		p90 = 2 * time.Second // Default fallback
+		p90 = 2 * time.Second
 	}
 
 	results := make(chan HedgedResult, 2)
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
-	// Load Shedding: If cluster is saturated, disable hedging to prevent retry storms
-	// Note: Directly accessing pq.Len() is not ideal, but we'll keep the lock that was there,
-	// or rather, use no lock if we believe Queue manages itself, but b.Mu was used.
-	// Since no other granular mutex applies to Queue, we'll keep using b.Mu or none.
-	// Actually, b.Mu.RLock() is fine for reading cluster-wide state.
+	// Track which attempt won to avoid canceling its context prematurely
+	var winningAddr string
+
+	// Cleanup goroutine to ensure no response bodies are leaked
+	defer func() {
+		go func() {
+			for i := 0; i < 2; i++ {
+				select {
+				case res := <-results:
+					if res.AgentAddr != winningAddr && res.Resp != nil {
+						res.Resp.Body.Close()
+					}
+					if res.AgentAddr != winningAddr && res.Cancel != nil {
+						res.Cancel()
+					}
+				case <-time.After(5 * time.Minute):
+					return
+				}
+			}
+		}()
+	}()
+
 	b.Mu.RLock()
 	isSaturated := b.Queue.pq.Len() > 0
 	b.Mu.RUnlock()
 
 	// First attempt
-	go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
+	ctx1, cancel1 := context.WithCancel(ctx)
+	go b.singleAttempt(ctx1, cancel1, modelName, path, body, clientIP, priority, results)
 
-	// Decision: Should we hedge?
 	shouldHedge := allowHedging && !isSaturated
 
 	if !shouldHedge {
 		select {
 		case res := <-results:
 			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
+				winningAddr = res.AgentAddr
 				return res.Resp, res.AgentID, res.AgentAddr, nil
 			}
 			if res.Resp != nil {
 				res.Resp.Body.Close()
+			}
+			if res.Cancel != nil {
+				res.Cancel()
 			}
 			if res.Err != nil {
 				return nil, "", "", res.Err
@@ -75,20 +95,27 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		select {
 		case res := <-results:
 			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
+				winningAddr = res.AgentAddr
 				return res.Resp, res.AgentID, res.AgentAddr, nil
 			}
 
+			if res.Resp != nil {
+				res.Resp.Body.Close()
+			}
+			if res.Cancel != nil {
+				res.Cancel()
+			}
 			if res.Err != nil {
 				firstErr = res.Err
 			} else if res.Resp != nil {
 				firstErr = fmt.Errorf("agent %s returned status %d", res.AgentID, res.Resp.StatusCode)
-				res.Resp.Body.Close()
 			}
 
 			if !secondStarted {
 				secondStarted = true
 				timer.Stop()
-				go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
+				ctx2, cancel2 := context.WithCancel(ctx)
+				go b.singleAttempt(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
 			} else if i == 1 {
 				if firstErr != nil {
 					return nil, "", "", firstErr
@@ -98,7 +125,8 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		case <-timer.C:
 			if !secondStarted {
 				secondStarted = true
-				go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
+				ctx2, cancel2 := context.WithCancel(ctx)
+				go b.singleAttempt(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
 			}
 			i--
 		case <-ctx.Done():
@@ -112,18 +140,17 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	return nil, "", "", io.EOF
 }
 
-func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, body []byte, clientIP string, priority int, results chan<- HedgedResult) {
+func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc, modelName, path string, body []byte, clientIP string, priority int, results chan<- HedgedResult) {
 	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, priority, clientIP, ctx)
 
 	var qr QueuedResponse
 	select {
 	case <-ctx.Done():
-		// If we are canceled while in queue, Route hasn't been called, so no workload incremented
-		results <- HedgedResult{Err: ctx.Err()}
+		results <- HedgedResult{Err: ctx.Err(), Cancel: cancel}
 		return
 	case qr = <-resCh:
 		if qr.Err != nil {
-			results <- HedgedResult{Err: qr.Err}
+			results <- HedgedResult{Err: qr.Err, Cancel: cancel}
 			return
 		}
 	}
@@ -145,7 +172,6 @@ func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, bo
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		b.recordError(addr)
-		// Decrement workload since the attempt failed immediately
 		b.workloadMu.Lock()
 		b.NodeWorkloads[addr]--
 		b.workloadMu.Unlock()
@@ -154,11 +180,27 @@ func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, bo
 		case b.MetricCh <- metricEntry{id, modelName, 0, false}:
 		default:
 		}
-		results <- HedgedResult{Err: err, AgentID: id, AgentAddr: addr}
+		results <- HedgedResult{Err: err, AgentID: id, AgentAddr: addr, Cancel: cancel}
 		return
 	}
 
-	// Wrap body to decrement workload on close
-	resp.Body = &workloadBody{ReadCloser: resp.Body, b: b, addr: addr}
-	results <- HedgedResult{Resp: resp, AgentID: id, AgentAddr: addr, Err: nil}
+	// Wrap body to decrement workload on close.
+	// We ALSO want to call the attempt-specific cancel() when the body is closed
+	// to release any internal resources tied to that attempt's context.
+	wrapped := &workloadBody{ReadCloser: resp.Body, b: b, addr: addr}
+	resp.Body = &cancelBody{ReadCloser: wrapped, cancel: cancel}
+
+	results <- HedgedResult{Resp: resp, AgentID: id, AgentAddr: addr, Err: nil, Cancel: cancel}
+}
+
+type cancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (c *cancelBody) Close() error {
+	err := c.ReadCloser.Close()
+	c.once.Do(c.cancel)
+	return err
 }

@@ -244,6 +244,19 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	if bestTarget != nil {
 		logging.Global.Infof("Triggering auto-allocation of model %s to agent %s (allocation score: %.2f)", model, bestTarget.ID, bestScore)
 		body, _ := json.Marshal(map[string]string{"model": model})
-		go b.sendToAgent(bestTarget.Address, "/models/pull", body)
+		go func(addr, m string, bdy []byte) {
+			resp, err := b.sendToAgent(addr, "/models/pull", bdy)
+			if err != nil || resp.StatusCode >= 400 {
+				if err == nil {
+					resp.Body.Close()
+				}
+				logging.Global.Errorf("Auto-allocation of %s to %s failed, clearing lock", m, addr)
+				b.pullsMu.Lock()
+				delete(b.InProgressPulls, m)
+				b.pullsMu.Unlock()
+			} else {
+				resp.Body.Close()
+			}
+		}(bestTarget.Address, model, body)
 	}
 }

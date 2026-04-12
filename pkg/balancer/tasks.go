@@ -110,7 +110,10 @@ func (b *Balancer) worker() {
 		select {
 		case <-b.stopCh:
 			return
-		case <-b.Queue.Wait():
+		case _, ok := <-b.Queue.Wait():
+			if !ok {
+				return // Queue closed
+			}
 			// Drain the queue as much as possible
 			for {
 				req := b.Queue.Pop()
