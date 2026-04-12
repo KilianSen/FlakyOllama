@@ -6,10 +6,10 @@ import (
 
 // EMA calculates the exponential moving average.
 type EMA struct {
-	value float64
-	alpha float64
+	value       float64
+	alpha       float64
 	initialized bool
-	mu sync.RWMutex
+	mu          sync.RWMutex
 }
 
 func NewEMA(alpha float64) *EMA {

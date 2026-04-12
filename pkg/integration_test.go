@@ -3,7 +3,7 @@ package pkg
 import (
 	"FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/balancer"
-	"FlakyOllama/pkg/models"
+	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -49,7 +49,7 @@ func TestIntegration(t *testing.T) {
 	// 3. Start Agent
 	// Extract port from httptest URL for Agent's "Address"
 	balancerURL := balancerSrv.URL
-	a := agent.NewAgent("agent-test", "localhost:0", balancerURL, mockOllama.URL)
+	a := agent.NewAgent("agent-test", "localhost:0", balancerURL, mockOllama.URL, nil)
 	agentSrv := httptest.NewServer(a.NewMux())
 	defer agentSrv.Close()
 

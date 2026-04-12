@@ -1,11 +1,13 @@
 package agent
 
 import (
-	"FlakyOllama/pkg/auth"
-	"FlakyOllama/pkg/models"
-	"FlakyOllama/pkg/monitoring"
-	"FlakyOllama/pkg/ollama"
+	"FlakyOllama/pkg/agent/monitoring"
+	"FlakyOllama/pkg/agent/ollama"
+	"FlakyOllama/pkg/shared/auth"
+	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/shared/models"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +28,8 @@ type Agent struct {
 	BalancerURL      string
 	Monitor          *monitoring.Monitor
 	Ollama           *ollama.Client
+	Config           *config.Config
+	LogCh            chan models.LogEntry
 
 	// Caching to prevent telemetry storms
 	lastStatus     models.NodeStatus
@@ -33,7 +37,10 @@ type Agent struct {
 	statusMu       sync.Mutex
 }
 
-func NewAgent(id, address, balancerURL, ollamaURL string) *Agent {
+func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *Agent {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
 	return &Agent{
 		ID:               id,
 		Address:          address,
@@ -41,6 +48,8 @@ func NewAgent(id, address, balancerURL, ollamaURL string) *Agent {
 		BalancerURL:      balancerURL,
 		Monitor:          monitoring.NewMonitor(),
 		Ollama:           ollama.NewClient(ollamaURL),
+		Config:           cfg,
+		LogCh:            make(chan models.LogEntry, 100),
 	}
 }
 
@@ -77,7 +86,14 @@ func (a *Agent) Register() error {
 		agentReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(agentReq)
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: a.Config.TLS.InsecureSkipVerify,
+			},
+		},
+	}
+	resp, err := client.Do(agentReq)
 	if err != nil {
 		return err
 	}
@@ -100,6 +116,11 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux.HandleFunc("/inference", auth.Middleware(token, a.HandleInference))
 	mux.HandleFunc("/chat", auth.Middleware(token, a.HandleChat))
 	mux.HandleFunc("/show", auth.Middleware(token, a.HandleShow))
+	mux.HandleFunc("/embeddings", auth.Middleware(token, a.HandleEmbeddings))
+	mux.HandleFunc("/version", auth.Middleware(token, a.HandleVersion))
+	mux.HandleFunc("/models/create", auth.Middleware(token, a.HandleCreate))
+	mux.HandleFunc("/models/copy", auth.Middleware(token, a.HandleCopy))
+	mux.HandleFunc("/models/push", auth.Middleware(token, a.HandlePush))
 	mux.HandleFunc("/models/pull", auth.Middleware(token, a.HandlePull))
 	mux.HandleFunc("/models/unload", auth.Middleware(token, a.HandleUnload))
 	mux.HandleFunc("/models/delete", auth.Middleware(token, a.HandleDelete))
@@ -109,7 +130,11 @@ func (a *Agent) NewMux() *http.ServeMux {
 
 // Serve starts the HTTP server.
 func (a *Agent) Serve() error {
-	log.Printf("Agent %s listening on %s", a.ID, a.Address)
+	log.Printf("Agent %s listening on %s (TLS: %v)", a.ID, a.Address, a.Config.TLS.Enabled)
+	go a.StartLogShipper()
+	if a.Config.TLS.Enabled {
+		return http.ListenAndServeTLS(a.Address, a.Config.TLS.CertFile, a.Config.TLS.KeyFile, a.NewMux())
+	}
 	return http.ListenAndServe(a.Address, a.NewMux())
 }
 
@@ -279,5 +304,146 @@ func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
 	case <-done:
 	case <-r.Context().Done():
 		log.Printf("Chat cancelled by Balancer for model %s", req.Model)
+	}
+}
+
+func (a *Agent) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model string      `json:"model"`
+		Input interface{} `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	stream, code, err := a.Ollama.Embeddings(req.Model, req.Input)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream)
+}
+
+func (a *Agent) HandleVersion(w http.ResponseWriter, r *http.Request) {
+	version, err := a.Ollama.Version()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"version": version})
+}
+
+func (a *Agent) HandleCreate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name      string `json:"name"`
+		Modelfile string `json:"modelfile"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	stream, code, err := a.Ollama.Create(req.Name, req.Modelfile)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream)
+}
+
+func (a *Agent) HandleCopy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	code, err := a.Ollama.Copy(req.Source, req.Destination)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (a *Agent) HandlePush(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	stream, code, err := a.Ollama.Push(req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream)
+}
+
+func (a *Agent) Ship(entry models.LogEntry) {
+	select {
+	case a.LogCh <- entry:
+	default:
+	}
+}
+
+func (a *Agent) StartLogShipper() {
+	scheme := "http"
+	if a.Config.TLS.Enabled {
+		scheme = "https"
+	}
+	// Use BalancerURL directly, but ensure scheme is correct
+	url := a.BalancerURL
+	if strings.Contains(url, "://") {
+		// Replace existing scheme
+		parts := strings.Split(url, "://")
+		url = scheme + "://" + parts[1]
+	} else {
+		url = scheme + "://" + url
+	}
+	url = strings.TrimSuffix(url, "/") + "/api/log/collect"
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: a.Config.TLS.InsecureSkipVerify,
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	for {
+		entry := <-a.LogCh
+		body, _ := json.Marshal(entry)
+		req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		if token := os.Getenv("BALANCER_TOKEN"); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
 	}
 }

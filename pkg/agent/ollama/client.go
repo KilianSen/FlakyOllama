@@ -1,7 +1,7 @@
 package ollama
 
 import (
-	"FlakyOllama/pkg/models"
+	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -163,4 +163,74 @@ func (c *Client) Show(model string) (map[string]interface{}, error) {
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
 	return result, nil
+}
+
+// Embeddings generates embeddings for a given input.
+func (c *Client) Embeddings(model string, input interface{}) (io.ReadCloser, int, error) {
+	req := map[string]interface{}{
+		"model": model,
+		"input": input,
+	}
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(c.BaseURL+"/api/embeddings", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.Body, resp.StatusCode, nil
+}
+
+// Create creates a model from a Modelfile.
+func (c *Client) Create(name, modelfile string) (io.ReadCloser, int, error) {
+	req := map[string]interface{}{
+		"name":      name,
+		"modelfile": modelfile,
+	}
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(c.BaseURL+"/api/create", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.Body, resp.StatusCode, nil
+}
+
+// Copy copies a model.
+func (c *Client) Copy(source, destination string) (int, error) {
+	req := map[string]interface{}{
+		"source":      source,
+		"destination": destination,
+	}
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(c.BaseURL+"/api/copy", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+// Push pushes a model to a registry.
+func (c *Client) Push(name string) (io.ReadCloser, int, error) {
+	req := map[string]interface{}{
+		"name": name,
+	}
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(c.BaseURL+"/api/push", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.Body, resp.StatusCode, nil
+}
+
+// Version returns the Ollama version.
+func (c *Client) Version() (string, error) {
+	resp, err := http.Get(c.BaseURL + "/api/version")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Version string `json:"version"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Version, nil
 }

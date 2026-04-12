@@ -1,7 +1,7 @@
 package monitoring
 
 import (
-	"FlakyOllama/pkg/models"
+	"FlakyOllama/pkg/shared/models"
 	"os/exec"
 	"strconv"
 	"strings"

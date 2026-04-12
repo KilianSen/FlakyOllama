@@ -16,6 +16,14 @@ type Config struct {
 	StallTimeoutSec      int            `json:"stall_timeout_sec"`
 	HedgingPercentile    float64        `json:"hedging_percentile"`
 	MaxQueueDepth        int            `json:"max_queue_depth"`
+	TLS                  TLSConfig      `json:"tls"`
+}
+
+type TLSConfig struct {
+	Enabled            bool   `json:"enabled"`
+	CertFile           string `json:"cert_file"`
+	KeyFile            string `json:"key_file"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // Useful for self-signed certs
 }
 
 type RoutingWeights struct {

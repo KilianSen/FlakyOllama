@@ -1,7 +1,7 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/models"
+	"FlakyOllama/pkg/shared/models"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -72,14 +72,10 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
-	// Ollama chat non-stream is actually many chunks if we aren't careful,
-	// but usually it's one big JSON if stream=false.
 	var ollamaResp struct {
 		Message models.ChatMessage `json:"message"`
 	}
 
-	// We might need to handle multiple JSON objects if it was proxied as a stream but requested as non-stream.
-	// But our Agent HandleChat respects the stream flag.
 	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
 		http.Error(w, "Failed to decode agent response", http.StatusInternalServerError)
 		return
@@ -311,6 +307,9 @@ func (b *Balancer) HandleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		for _, m := range agent.ActiveModels {
 			modelMap[m] = true
 		}
+		for _, m := range agent.LocalModels {
+			modelMap[m.Name] = true
+		}
 	}
 
 	var oaiModels []models.OpenAIModel
@@ -328,4 +327,53 @@ func (b *Balancer) HandleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		Object: "list",
 		Data:   oaiModels,
 	})
+}
+
+func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request) {
+	var oaiReq models.OpenAIEmbeddingRequest
+	if err := json.NewDecoder(r.Body).Decode(&oaiReq); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Map OpenAI to Ollama
+	ollamaReq := struct {
+		Model string      `json:"model"`
+		Input interface{} `json:"input"`
+	}{
+		Model: oaiReq.Model,
+		Input: oaiReq.Input,
+	}
+
+	body, _ := json.Marshal(ollamaReq)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), oaiReq.Model, "/embeddings", body, r.RemoteAddr, false, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	var ollamaResp struct {
+		Embedding []float32 `json:"embedding"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		http.Error(w, "Failed to decode agent response", http.StatusInternalServerError)
+		return
+	}
+
+	oaiResp := models.OpenAIEmbeddingResponse{
+		Object: "list",
+		Model:  oaiReq.Model,
+		Data: []models.OpenAIEmbeddingData{
+			{
+				Object:    "embedding",
+				Embedding: ollamaResp.Embedding,
+				Index:     0,
+			},
+		},
+	}
+
+	b.recordSuccess(agentAddr)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(oaiResp)
 }

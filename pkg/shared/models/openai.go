@@ -47,3 +47,27 @@ type OpenAIModel struct {
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
 }
+
+type OpenAIEmbeddingRequest struct {
+	Model string      `json:"model"`
+	Input interface{} `json:"input"`
+}
+
+type OpenAIEmbeddingResponse struct {
+	Object string                `json:"object"`
+	Data   []OpenAIEmbeddingData `json:"data"`
+	Model  string                `json:"model"`
+	Usage  OpenAIUsage           `json:"usage"`
+}
+
+type OpenAIEmbeddingData struct {
+	Object    string    `json:"object"`
+	Embedding []float32 `json:"embedding"`
+	Index     int       `json:"index"`
+}
+
+type OpenAIUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}

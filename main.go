@@ -3,7 +3,7 @@ package main
 import (
 	"FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/balancer"
-	"FlakyOllama/pkg/config"
+	"FlakyOllama/pkg/shared/config"
 	"log"
 	"os"
 	"time"
@@ -65,7 +65,7 @@ func main() {
 		}
 		dbPath := os.Getenv("DB_PATH")
 
-		a := agent.NewAgent(id, addr, balancerURL, ollamaURL)
+		a := agent.NewAgent(id, addr, balancerURL, ollamaURL, cfg)
 		if dbPath != "" {
 			log.Printf("Agent %s using storage at %s", id, dbPath)
 			// Future use: a.SetStorage(dbPath)
