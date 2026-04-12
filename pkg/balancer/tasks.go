@@ -7,7 +7,6 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -245,8 +244,8 @@ func (b *Balancer) pollAgents() {
 				scheme = "https"
 			}
 			req, _ := http.NewRequest("GET", scheme+"://"+a.Address+"/telemetry", nil)
-			if token := os.Getenv("AGENT_TOKEN"); token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
+			if b.Config.RemoteToken != "" {
+				req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
 			}
 			// Use internal httpClient with timeout
 			resp, err := b.httpClient.Do(req)

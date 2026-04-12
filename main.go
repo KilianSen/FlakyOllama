@@ -6,6 +6,7 @@ import (
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -39,17 +40,17 @@ func main() {
 
 	if role == "balancer" {
 		if cfg.AuthToken == "" {
-			cfg.AuthToken = os.Getenv("BALANCER_TOKEN")
+			cfg.AuthToken = strings.Trim(os.Getenv("BALANCER_TOKEN"), "\"'")
 		}
 		if cfg.RemoteToken == "" {
-			cfg.RemoteToken = os.Getenv("AGENT_TOKEN")
+			cfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
 		}
 	} else {
 		if cfg.AuthToken == "" {
-			cfg.AuthToken = os.Getenv("AGENT_TOKEN")
+			cfg.AuthToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
 		}
 		if cfg.RemoteToken == "" {
-			cfg.RemoteToken = os.Getenv("BALANCER_TOKEN")
+			cfg.RemoteToken = strings.Trim(os.Getenv("BALANCER_TOKEN"), "\"'")
 		}
 	}
 
@@ -68,6 +69,7 @@ func main() {
 			logging.Global.Errorf("Failed to initialize balancer: %v", err)
 			os.Exit(1)
 		}
+		logging.Global.SetSink(b)
 		b.StartBackgroundTasks()
 		if err := b.Serve(); err != nil {
 			logging.Global.Errorf("Balancer failed: %v", err)

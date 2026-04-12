@@ -17,7 +17,8 @@ services:
       - 'OPENID_PROVIDER_URL=https://openid.kiliansen.de/.well-known/openid-configuration'
       - 'ENABLE_API_KEYS=True'
       - 'ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS=True'
-      - 'OLLAMA_BASE_URL=http://balancer:8080' # Fixed port to use internal balancer port
+      - 'OPENAI_API_BASE_URL=http://balancer:8080/v1'
+      - 'OPENAI_API_KEY=${BALANCER_TOKEN:-your-secret-balancer-token}'
     restart: unless-stopped
     deploy:
       mode: replicated
