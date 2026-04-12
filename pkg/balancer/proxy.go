@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
@@ -37,8 +36,8 @@ func (b *Balancer) sendToAgent(addr, path string, body []byte) (*http.Response, 
 	}
 	req, _ := http.NewRequest("POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
-	if token := os.Getenv("AGENT_TOKEN"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if b.Config.RemoteToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
 	}
 	return b.httpClient.Do(req)
 }

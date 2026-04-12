@@ -37,6 +37,22 @@ func main() {
 		cfg = config.DefaultConfig()
 	}
 
+	if role == "balancer" {
+		if cfg.AuthToken == "" {
+			cfg.AuthToken = os.Getenv("BALANCER_TOKEN")
+		}
+		if cfg.RemoteToken == "" {
+			cfg.RemoteToken = os.Getenv("AGENT_TOKEN")
+		}
+	} else {
+		if cfg.AuthToken == "" {
+			cfg.AuthToken = os.Getenv("AGENT_TOKEN")
+		}
+		if cfg.RemoteToken == "" {
+			cfg.RemoteToken = os.Getenv("BALANCER_TOKEN")
+		}
+	}
+
 	switch role {
 	case "balancer":
 		addr := os.Getenv("BALANCER_ADDR")

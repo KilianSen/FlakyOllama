@@ -1,6 +1,31 @@
 version: '3.8'
 
 services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}
+    volumes:
+      - openwebui:/app/backend/data
+    ports:
+      - ${OPEN_WEBUI_PORT-3000}:8080
+    environment:
+      - 'OAUTH_ADMIN_ROLES=admins'
+      - 'OAUTH_CLIENT_ID=94e3d3fc-e850-4939-9f0d-e2e299f36cf8'
+      - 'OAUTH_CLIENT_SECRET=vMBZB8P8YD8NJ6gSTjdz7JKjn1cpeRbx'
+      - 'OAUTH_PROVIDER_NAME=OpenID'
+      - 'OAUTH_ROLES_CLAIM=groups'
+      - 'OAUTH_SCOPES=openid email profile groups'
+      - 'OPENID_PROVIDER_URL=https://openid.kiliansen.de/.well-known/openid-configuration'
+      - 'ENABLE_API_KEYS=True'
+      - 'ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS=True'
+      - 'OLLAMA_BASE_URL=http://balancer:8080' # Fixed port to use internal balancer port
+    restart: unless-stopped
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
   balancer:
     image: ghcr.io/kiliansen/flakyollama-balancer:latest
     ports:
@@ -20,13 +45,11 @@ services:
       replicas: 1
       placement:
         constraints:
-          # Pin the balancer to a specific node to maintain database state
-          - node.labels.role == balancer
+          - node.role == manager # Ensure database remains on a manager node
       restart_policy:
         condition: on-failure
 
   frontend:
-    # Swarm requires an image instead of a build context
     image: ghcr.io/kiliansen/flakyollama-frontend:latest
     ports:
       - target: 80
@@ -37,57 +60,29 @@ services:
       - BACKEND_URL=http://balancer:8080
       - VITE_BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
     deploy:
-      replicas: 2 # Frontend can easily be scaled across the cluster
+      replicas: 2
       restart_policy:
         condition: any
 
-  agent-1:
+  agent:
     image: ghcr.io/kiliansen/flakyollama-integrated:latest
     environment:
       - ROLE=agent
-      - AGENT_ID=gpu-node-1
-      - BALANCER_URL=http://balancer:8080
-      - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
-      - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
-      # Depending on how the NVIDIA driver is configured on the swarm node,
-      # you may need to pass the runtime through daemon.json or environment variables.
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    volumes:
-      - agent1_data:/data
-      - agent1_ollama:/root/.ollama
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          # Schedule only on nodes explicitly labeled as having a GPU
-          - node.labels.gpu == true
-      restart_policy:
-        condition: any
-
-  agent-2:
-    image: ghcr.io/kiliansen/flakyollama-integrated:latest
-    environment:
-      - ROLE=agent
-      - AGENT_ID=cpu-node-2
+      - AGENT_ID={{.Node.Hostname}}{{.Task.Slot}}
       - BALANCER_URL=http://balancer:8080
       - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
       - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
     volumes:
-      - agent2_data:/data
-      - agent2_ollama:/root/.ollama
+      - agent_data:/data
+      - agent_ollama:/root/.ollama
     deploy:
-      replicas: 1
-      placement:
-        constraints:
-          # Schedule on a node designated for CPU workloads
-          - node.labels.role == worker-cpu
+      mode: global # One agent per node in the cluster
       restart_policy:
         condition: any
 
 volumes:
+  openwebui:
+    external: true
   balancer_data:
-  agent1_data:
-  agent1_ollama:
-  agent2_data:
-  agent2_ollama:
+  agent_data:
+  agent_ollama:

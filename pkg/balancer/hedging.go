@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
@@ -165,8 +164,8 @@ func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc,
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
-	if token := os.Getenv("AGENT_TOKEN"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if b.Config.RemoteToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
 	}
 
 	resp, err := b.httpClient.Do(req)

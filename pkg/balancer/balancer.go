@@ -8,7 +8,6 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"crypto/tls"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -128,7 +127,7 @@ func (b *Balancer) Serve() error {
 
 // NewMux returns a mux with the balancer's handlers registered.
 func (b *Balancer) NewMux() *http.ServeMux {
-	token := os.Getenv("BALANCER_TOKEN")
+	token := b.Config.AuthToken
 	mux := http.NewServeMux()
 
 	// Base
@@ -155,10 +154,10 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/v1/embeddings", auth.Middleware(token, b.HandleOpenAIEmbeddings))
 
 	// Management Layer
-	mux.HandleFunc("/register", b.HandleRegister)
+	mux.HandleFunc("/register", auth.Middleware(token, b.HandleRegister))
 	mux.HandleFunc("/api/status", auth.Middleware(token, b.HandleAPIStatus))
-	mux.HandleFunc("/api/logs", b.HandleLogs)
-	mux.HandleFunc("/api/log/collect", b.HandleLogCollect)
+	mux.HandleFunc("/api/logs", auth.Middleware(token, b.HandleLogs))
+	mux.HandleFunc("/api/log/collect", auth.Middleware(token, b.HandleLogCollect))
 	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
 	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
 	mux.HandleFunc("/api/manage/model/unload", auth.Middleware(token, b.HandleModelUnload))

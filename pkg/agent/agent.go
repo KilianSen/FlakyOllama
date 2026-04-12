@@ -84,8 +84,8 @@ func (a *Agent) Register() error {
 
 	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
 	agentReq.Header.Set("Content-Type", "application/json")
-	if token := os.Getenv("BALANCER_TOKEN"); token != "" {
-		agentReq.Header.Set("Authorization", "Bearer "+token)
+	if a.Config.RemoteToken != "" {
+		agentReq.Header.Set("Authorization", "Bearer "+a.Config.RemoteToken)
 	}
 
 	client := &http.Client{
@@ -110,7 +110,7 @@ func (a *Agent) Register() error {
 
 // NewMux returns a mux with the agent's handlers registered.
 func (a *Agent) NewMux() *http.ServeMux {
-	token := os.Getenv("AGENT_TOKEN")
+	token := a.Config.AuthToken
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -439,8 +439,8 @@ func (a *Agent) StartLogShipper() {
 			body, _ := json.Marshal(entry)
 			req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
-			if token := os.Getenv("BALANCER_TOKEN"); token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
+			if a.Config.RemoteToken != "" {
+				req.Header.Set("Authorization", "Bearer "+a.Config.RemoteToken)
 			}
 
 			resp, err := client.Do(req)

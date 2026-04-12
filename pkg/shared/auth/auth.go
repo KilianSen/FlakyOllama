@@ -22,8 +22,14 @@ func Middleware(token string, next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		parts := strings.Fields(authHeader)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" || parts[1] != token {
-			logging.Global.Warnf("Auth failure from %s: invalid or missing token", r.RemoteAddr)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			logging.Global.Warnf("Auth failure from %s: invalid authorization header format", r.RemoteAddr)
+			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+			return
+		}
+
+		if parts[1] != token {
+			logging.Global.Warnf("Auth failure from %s: token mismatch", r.RemoteAddr)
 			http.Error(w, "Invalid or missing token", http.StatusUnauthorized)
 			return
 		}

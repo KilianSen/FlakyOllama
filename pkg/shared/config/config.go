@@ -17,6 +17,8 @@ type Config struct {
 	HedgingPercentile    float64        `json:"hedging_percentile"`
 	MaxQueueDepth        int            `json:"max_queue_depth"`
 	TLS                  TLSConfig      `json:"tls"`
+	AuthToken            string         `json:"auth_token"`   // Token expected from clients
+	RemoteToken          string         `json:"remote_token"` // Token to send to agents/balancer
 }
 
 type TLSConfig struct {
