@@ -97,7 +97,7 @@ const App = () => {
 
   const modelDistribution = useMemo(() => {
     if (!status) return [];
-    return status.all_models.map(m => {
+    return (status.all_models || []).map(m => {
       const hostingNodes = Object.values(status.nodes).filter(n => 
         n.active_models?.includes(m) || n.local_models?.some(lm => lm.name === m)
       );
@@ -231,7 +231,7 @@ const App = () => {
                   color: status.queue_depth > 0 ? 'text-destructive font-black' : 'text-amber-600',
                   pulse: status.queue_depth > 0
                 },
-                { label: 'Model Library', val: status.all_models.length, sub: 'Registered', color: 'text-emerald-600' },
+                { label: 'Model Library', val: (status.all_models || []).length, sub: 'Registered', color: 'text-emerald-600' },
               ].map((kpi, i) => (
                 <div key={i} className={`flex items-end justify-between border-b border-dashed pb-4 last:border-0 last:pb-0 ${kpi.pulse ? 'animate-pulse' : ''}`}>
                   <div className="flex flex-col">
@@ -456,10 +456,10 @@ const App = () => {
                 <div className="grid grid-cols-2 gap-6">
                   <div className="space-y-2">
                     <label className="text-[9px] font-black uppercase text-muted-foreground px-1 tracking-widest">Neural architecture</label>
-                    <Select name="model" required defaultValue={status.all_models[0]}>
+                    <Select name="model" required defaultValue={(status.all_models || [])[0]}>
                       <SelectTrigger className="h-10 font-bold text-xs border-2"><SelectValue placeholder="Target" /></SelectTrigger>
                       <SelectContent className="font-bold text-xs">
-                        {status.all_models.map(m => <SelectItem key={m} value={m}>{m.toUpperCase()}</SelectItem>)}
+                        {(status.all_models || [] ).map(m => <SelectItem key={m} value={m}>{m.toUpperCase()}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
