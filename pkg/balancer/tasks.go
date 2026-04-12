@@ -2,10 +2,10 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/balancer/storage"
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/metrics"
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -132,7 +132,7 @@ func (b *Balancer) StartKeepAliveCleaner() {
 				b.cleanStaleModels()
 			case <-pruneTicker.C:
 				if err := b.Storage.PruneOldMetrics(2); err != nil {
-					log.Printf("Failed to prune old metrics: %v", err)
+					logging.Global.Errorf("Failed to prune old metrics: %v", err)
 				}
 			case <-b.stopCh:
 				ticker.Stop()
@@ -167,7 +167,7 @@ func (b *Balancer) cleanStaleModels() {
 	b.Mu.Unlock()
 
 	for _, item := range toUnload {
-		log.Printf("Unloading stale model %s from agent %s", item.model, item.nodeID)
+		logging.Global.Infof("Unloading stale model %s from agent %s", item.model, item.nodeID)
 		body, _ := json.Marshal(map[string]string{"model": item.model})
 		b.sendToAgent(item.addr, "/models/unload", body)
 	}
@@ -211,7 +211,7 @@ func (b *Balancer) pollAgents() {
 			// Use internal httpClient with timeout
 			resp, err := b.httpClient.Do(req)
 			if err != nil {
-				log.Printf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
+				logging.Global.Warnf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
 				b.recordError(a.Address)
 				return
 			}
@@ -238,7 +238,7 @@ func (b *Balancer) pollAgents() {
 				if status.Tier == "shared" && (status.CPUUsage > 85.0 || status.GPUTemperature > 85.0) {
 					if workload := b.NodeWorkloads[a.Address]; workload == 0 {
 						for _, m := range status.ActiveModels {
-							log.Printf("Preemptively evicting model %s from shared host %s due to system stress", m, status.ID)
+							logging.Global.Warnf("Preemptively evicting model %s from shared host %s due to system stress", m, status.ID)
 							body, _ := json.Marshal(map[string]string{"model": m})
 							go b.sendToAgent(status.Address, "/models/unload", body)
 						}
@@ -271,7 +271,7 @@ func (b *Balancer) pollAgents() {
 						}
 					}
 					if found {
-						log.Printf("Model %s discovered on node %s, clearing pull lock", m, a.ID)
+						logging.Global.Infof("Model %s discovered on node %s, clearing pull lock", m, a.ID)
 						delete(b.InProgressPulls, m)
 					}
 				}
@@ -290,7 +290,7 @@ func (b *Balancer) pollAgents() {
 
 				b.Mu.Unlock()
 			} else {
-				log.Printf("Failed to decode telemetry for agent %s (%s): %v", a.ID, a.Address, err)
+				logging.Global.Errorf("Failed to decode telemetry for agent %s (%s): %v", a.ID, a.Address, err)
 			}
 		}(agent)
 	}

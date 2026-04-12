@@ -2,10 +2,10 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/balancer/storage"
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 )
@@ -150,11 +150,11 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 	}
 
 	if bestAgent == nil {
-		log.Printf("Routing failed: No suitable agent found for model %s (pending: %d)", req.Model, pending)
+		logging.Global.Warnf("Routing failed: No suitable agent found for model %s (pending: %d)", req.Model, pending)
 		return "", "", fmt.Errorf("no available agents with sufficient capabilities")
 	}
 
-	log.Printf("Routed model %s to agent %s (score: %.2f, pending: %d, affinity: %v)", req.Model, bestAgent.ID, bestScore, pending, bestAgent.ID == affinityID)
+	logging.Global.Infof("Routed model %s to agent %s (score: %.2f, pending: %d, affinity: %v)", req.Model, bestAgent.ID, bestScore, pending, bestAgent.ID == affinityID)
 	return bestAgent.ID, bestAgent.Address, nil
 }
 
@@ -213,7 +213,7 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	b.Mu.RUnlock()
 
 	if bestTarget != nil {
-		log.Printf("Triggering auto-allocation of model %s to agent %s (allocation score: %.2f)", model, bestTarget.ID, bestScore)
+		logging.Global.Infof("Triggering auto-allocation of model %s to agent %s (allocation score: %.2f)", model, bestTarget.ID, bestScore)
 		body, _ := json.Marshal(map[string]string{"model": model})
 		go b.sendToAgent(bestTarget.Address, "/models/pull", body)
 	}

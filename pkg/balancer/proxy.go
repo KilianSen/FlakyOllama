@@ -1,12 +1,12 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/metrics"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -46,9 +46,9 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		default:
 		}
 		if errors.Is(err, ErrStalled) {
-			log.Printf("Agent %s stalled during stream for model %s", agentAddr, modelName)
+			logging.Global.Warnf("Agent %s stalled during stream for model %s", agentAddr, modelName)
 		} else {
-			log.Printf("Stream error from %s: %v", agentAddr, err)
+			logging.Global.Errorf("Stream error from %s: %v", agentAddr, err)
 		}
 		return
 	}
@@ -88,7 +88,7 @@ func (b *Balancer) recordError(addr string) {
 			a.State = models.StateDegraded
 		}
 		if oldState != a.State {
-			log.Printf("Node %s (%s) state changed: %s -> %s (errors: %d, cooloff until: %v)", a.ID, addr, oldState.String(), a.State.String(), a.Errors, a.CooloffUntil)
+			logging.Global.Infof("Node %s (%s) state changed: %s -> %s (errors: %d, cooloff until: %v)", a.ID, addr, oldState.String(), a.State.String(), a.Errors, a.CooloffUntil)
 		}
 	}
 }
@@ -98,7 +98,7 @@ func (b *Balancer) recordSuccess(addr string) {
 	defer b.Mu.Unlock()
 	if a, ok := b.Agents[addr]; ok {
 		if a.State != models.StateHealthy {
-			log.Printf("Node %s (%s) recovered to Healthy state", a.ID, addr)
+			logging.Global.Infof("Node %s (%s) recovered to Healthy state", a.ID, addr)
 		}
 		a.Errors = 0
 		a.State = models.StateHealthy

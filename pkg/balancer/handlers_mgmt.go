@@ -1,10 +1,10 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -176,7 +176,7 @@ func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := json.Marshal(map[string]string{"model": model})
 	for _, agent := range targets {
-		log.Printf("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
+		logging.Global.Infof("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
 		go b.sendToAgent(agent.Address, "/models/unload", body)
 	}
 
@@ -212,7 +212,7 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 		// Single node or group pull
 		for _, agent := range b.Agents {
 			if (nodeAddr != "" && agent.Address == nodeAddr) || (nodeID != "" && agent.ID == nodeID) {
-				log.Printf("Pulling model %s on agent %s (%s)", model, agent.ID, agent.Address)
+				logging.Global.Infof("Pulling model %s on agent %s (%s)", model, agent.ID, agent.Address)
 				body, _ := json.Marshal(map[string]string{"model": model})
 				go b.sendToAgent(agent.Address, "/models/pull", body)
 				if nodeAddr != "" {
@@ -222,7 +222,7 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Cluster-wide pull
-		log.Printf("Pulling model %s cluster-wide", model)
+		logging.Global.Infof("Pulling model %s cluster-wide", model)
 		body, _ := json.Marshal(map[string]string{"model": model})
 		for _, agent := range b.Agents {
 			if !agent.Draining && agent.State != models.StateBroken {
@@ -265,7 +265,7 @@ func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := json.Marshal(map[string]string{"model": model})
 	for _, agent := range targets {
-		log.Printf("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
+		logging.Global.Infof("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
 		go b.sendToAgent(agent.Address, "/models/delete", body)
 	}
 
@@ -384,7 +384,7 @@ func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		State:   models.StateHealthy,
 		Errors:  0,
 	}
-	log.Printf("Registered agent: %s at %s [Tier: %s] (resetting health)", req.ID, req.Address, req.Tier)
+	logging.Global.Infof("Registered agent: %s at %s [Tier: %s] (resetting health)", req.ID, req.Address, req.Tier)
 
 	w.WriteHeader(http.StatusOK)
 }

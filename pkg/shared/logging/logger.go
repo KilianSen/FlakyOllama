@@ -2,7 +2,6 @@ package logging
 
 import (
 	"FlakyOllama/pkg/shared/models"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -78,7 +77,7 @@ func (l *Logger) Debugf(format string, v ...interface{}) {
 }
 
 // Global logger for convenience (initialized in main)
-var Global *Logger
+var Global *Logger = NewLogger("default", "default")
 
 func InitGlobal(nodeID, component string) {
 	Global = NewLogger(nodeID, component)
@@ -92,6 +91,6 @@ type lwriter struct {
 }
 
 func (w lwriter) Write(p []byte) (n int, err error) {
-	w.l.Infof(string(p))
+	w.l.Log(models.LevelInfo, string(p))
 	return len(p), nil
 }

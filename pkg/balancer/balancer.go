@@ -4,12 +4,11 @@ import (
 	"FlakyOllama/pkg/balancer/storage"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"crypto/tls"
-	"log"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -81,30 +80,14 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		},
 	}
 
-	// Intercept log output
-	log.SetOutput(b)
-
 	return b, nil
 }
 
-func (b *Balancer) Write(p []byte) (n int, err error) {
-	msg := string(p)
-	os.Stderr.Write(p) // Also write to stderr
-
-	// Send structured entry to LogCh
-	entry := models.LogEntry{
-		Timestamp: time.Now(),
-		NodeID:    "balancer",
-		Level:     models.LevelInfo,
-		Component: "core",
-		Message:   strings.TrimSpace(msg),
-	}
+func (b *Balancer) Ship(entry models.LogEntry) {
 	select {
 	case b.LogCh <- entry:
 	default:
 	}
-
-	return len(p), nil
 }
 
 func (b *Balancer) Close() error {
@@ -130,7 +113,7 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 }
 
 func (b *Balancer) Serve() error {
-	log.Printf("Balancer listening on %s (TLS: %v)", b.Address, b.Config.TLS.Enabled)
+	logging.Global.Infof("Balancer listening on %s (TLS: %v)", b.Address, b.Config.TLS.Enabled)
 	if b.Config.TLS.Enabled {
 		return http.ListenAndServeTLS(b.Address, b.Config.TLS.CertFile, b.Config.TLS.KeyFile, b.CORS(b.NewMux()))
 	}

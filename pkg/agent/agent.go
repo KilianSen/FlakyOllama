@@ -5,13 +5,13 @@ import (
 	"FlakyOllama/pkg/agent/ollama"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -77,7 +77,7 @@ func (a *Agent) Register() error {
 		Address: a.EffectiveAddress,
 		Tier:    tier,
 	}
-	log.Printf("Registering agent %s with address %s", a.ID, a.EffectiveAddress)
+	logging.Global.Infof("Registering agent %s with address %s", a.ID, a.EffectiveAddress)
 	body, _ := json.Marshal(req)
 
 	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
@@ -130,7 +130,7 @@ func (a *Agent) NewMux() *http.ServeMux {
 
 // Serve starts the HTTP server.
 func (a *Agent) Serve() error {
-	log.Printf("Agent %s listening on %s (TLS: %v)", a.ID, a.Address, a.Config.TLS.Enabled)
+	logging.Global.Infof("Agent %s listening on %s (TLS: %v)", a.ID, a.Address, a.Config.TLS.Enabled)
 	go a.StartLogShipper()
 	if a.Config.TLS.Enabled {
 		return http.ListenAndServeTLS(a.Address, a.Config.TLS.CertFile, a.Config.TLS.KeyFile, a.NewMux())
@@ -184,9 +184,9 @@ func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() {
 		if err := a.Ollama.Pull(req.Model); err != nil {
-			log.Printf("Pull failed for model %s: %v", req.Model, err)
+			logging.Global.Infof("Pull failed for model %s: %v", req.Model, err)
 		} else {
-			log.Printf("Pull finished for model %s", req.Model)
+			logging.Global.Infof("Pull finished for model %s", req.Model)
 		}
 	}()
 	w.WriteHeader(http.StatusAccepted)
@@ -200,7 +200,7 @@ func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	log.Printf("Unloading model %s", req.Model)
+	logging.Global.Infof("Unloading model %s", req.Model)
 	if err := a.Ollama.Unload(req.Model); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -216,7 +216,7 @@ func (a *Agent) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	log.Printf("Deleting model %s from disk", req.Model)
+	logging.Global.Infof("Deleting model %s from disk", req.Model)
 	if err := a.Ollama.Delete(req.Model); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -247,7 +247,7 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Starting inference for model %s", req.Model)
+	logging.Global.Infof("Starting inference for model %s", req.Model)
 
 	// Propagation of context for cancellation
 	stream, code, err := a.Ollama.GenerateStream(req)
@@ -271,7 +271,7 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 	case <-done:
 		// Completed successfully
 	case <-r.Context().Done():
-		log.Printf("Inference cancelled by Balancer for model %s", req.Model)
+		logging.Global.Infof("Inference cancelled by Balancer for model %s", req.Model)
 	}
 }
 
@@ -282,7 +282,7 @@ func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Starting chat completion for model %s", req.Model)
+	logging.Global.Infof("Starting chat completion for model %s", req.Model)
 
 	stream, code, err := a.Ollama.ChatStream(req)
 	if err != nil {
@@ -303,7 +303,7 @@ func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
 	select {
 	case <-done:
 	case <-r.Context().Done():
-		log.Printf("Chat cancelled by Balancer for model %s", req.Model)
+		logging.Global.Infof("Chat cancelled by Balancer for model %s", req.Model)
 	}
 }
 

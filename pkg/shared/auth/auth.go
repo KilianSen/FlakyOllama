@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"log"
+	"FlakyOllama/pkg/shared/logging"
 	"net/http"
 	"strings"
 )
@@ -23,7 +23,7 @@ func Middleware(token string, next http.HandlerFunc) http.HandlerFunc {
 
 		parts := strings.Fields(authHeader)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" || parts[1] != token {
-			log.Printf("Auth failure from %s: invalid or missing token", r.RemoteAddr)
+			logging.Global.Warnf("Auth failure from %s: invalid or missing token", r.RemoteAddr)
 			http.Error(w, "Invalid or missing token", http.StatusUnauthorized)
 			return
 		}

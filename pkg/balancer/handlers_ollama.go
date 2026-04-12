@@ -1,10 +1,10 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"time"
 )
@@ -16,7 +16,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
+	logging.Global.Infof("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
 
 	// Load Shedding: Check if queue is at capacity
 	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
@@ -36,7 +36,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(req)
 	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr, req.AllowHedging, req.Priority)
 	if err != nil {
-		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
+		logging.Global.Errorf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -64,7 +64,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
+	logging.Global.Infof("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
 
 	// Load Shedding: Check if queue is at capacity
 	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
@@ -237,7 +237,7 @@ func (b *Balancer) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
-	log.Printf("Creating model %s cluster-wide", req.Name)
+	logging.Global.Infof("Creating model %s cluster-wide", req.Name)
 	for _, agent := range b.Agents {
 		if !agent.Draining && agent.State != models.StateBroken {
 			go b.sendToAgent(agent.Address, "/models/create", body)
@@ -262,7 +262,7 @@ func (b *Balancer) HandleCopy(w http.ResponseWriter, r *http.Request) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
-	log.Printf("Copying model %s to %s cluster-wide", req.Source, req.Destination)
+	logging.Global.Infof("Copying model %s to %s cluster-wide", req.Source, req.Destination)
 	for _, agent := range b.Agents {
 		if !agent.Draining && agent.State != models.StateBroken {
 			go b.sendToAgent(agent.Address, "/models/copy", body)
@@ -286,7 +286,7 @@ func (b *Balancer) HandlePush(w http.ResponseWriter, r *http.Request) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
 
-	log.Printf("Pushing model %s cluster-wide", req.Name)
+	logging.Global.Infof("Pushing model %s cluster-wide", req.Name)
 	for _, agent := range b.Agents {
 		if !agent.Draining && agent.State != models.StateBroken {
 			go b.sendToAgent(agent.Address, "/models/push", body)
