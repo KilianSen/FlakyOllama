@@ -33,6 +33,10 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	defer cancel()
 
 	// Load Shedding: If cluster is saturated, disable hedging to prevent retry storms
+	// Note: Directly accessing pq.Len() is not ideal, but we'll keep the lock that was there,
+	// or rather, use no lock if we believe Queue manages itself, but b.Mu was used.
+	// Since no other granular mutex applies to Queue, we'll keep using b.Mu or none.
+	// Actually, b.Mu.RLock() is fine for reading cluster-wide state.
 	b.Mu.RLock()
 	isSaturated := b.Queue.pq.Len() > 0
 	b.Mu.RUnlock()
@@ -41,27 +45,26 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
 
 	// Decision: Should we hedge?
-	// We hedge if explicitly allowed AND the cluster isn't saturated.
-	// Or we hedge IF the first attempt is sent to a Degraded node (force hedging for reliability).
 	shouldHedge := allowHedging && !isSaturated
 
 	if !shouldHedge {
-		// Just wait for the first attempt or timeout
 		select {
 		case res := <-results:
 			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
 				return res.Resp, res.AgentID, res.AgentAddr, nil
 			}
+			if res.Resp != nil {
+				res.Resp.Body.Close()
+			}
 			if res.Err != nil {
 				return nil, "", "", res.Err
 			}
-			return nil, "", "", fmt.Errorf("agent returned status %d", res.Resp.StatusCode)
+			return nil, "", "", fmt.Errorf("agent %s returned status %d", res.AgentID, res.Resp.StatusCode)
 		case <-ctx.Done():
 			return nil, "", "", ctx.Err()
 		}
 	}
 
-	// Timer for second attempt
 	timer := time.NewTimer(p90)
 	defer timer.Stop()
 
@@ -82,14 +85,11 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 				res.Resp.Body.Close()
 			}
 
-			// If this was the first result and it failed, and we haven't started the second one, start it now.
 			if !secondStarted {
 				secondStarted = true
-				timer.Stop() // No need to wait for timer anymore
+				timer.Stop()
 				go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
 			} else if i == 1 {
-				// This was the second result (either second attempt finished, or first finished after second started)
-				// and it also failed.
 				if firstErr != nil {
 					return nil, "", "", firstErr
 				}
@@ -100,7 +100,6 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 				secondStarted = true
 				go b.singleAttempt(ctx, modelName, path, body, clientIP, priority, results)
 			}
-			// Don't increment i here, we still want to wait for 2 results if possible
 			i--
 		case <-ctx.Done():
 			return nil, "", "", ctx.Err()
@@ -114,12 +113,12 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 }
 
 func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, body []byte, clientIP string, priority int, results chan<- HedgedResult) {
-	// Route via PriorityQueue to ensure proper load management
 	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, priority, clientIP, ctx)
 
 	var qr QueuedResponse
 	select {
 	case <-ctx.Done():
+		// If we are canceled while in queue, Route hasn't been called, so no workload incremented
 		results <- HedgedResult{Err: ctx.Err()}
 		return
 	case qr = <-resCh:
@@ -132,19 +131,34 @@ func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, bo
 	id := qr.AgentID
 	addr := qr.AgentAddr
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", "http://"+addr+path, bytes.NewBuffer(body))
+	scheme := "http"
+	if b.Config.TLS.Enabled {
+		scheme = "https"
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, "POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token := os.Getenv("AGENT_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		b.recordError(addr)
+		// Decrement workload since the attempt failed immediately
+		b.workloadMu.Lock()
+		b.NodeWorkloads[addr]--
+		b.workloadMu.Unlock()
+
 		select {
 		case b.MetricCh <- metricEntry{id, modelName, 0, false}:
 		default:
 		}
+		results <- HedgedResult{Err: err, AgentID: id, AgentAddr: addr}
+		return
 	}
-	results <- HedgedResult{Resp: resp, AgentID: id, AgentAddr: addr, Err: err}
+
+	// Wrap body to decrement workload on close
+	resp.Body = &workloadBody{ReadCloser: resp.Body, b: b, addr: addr}
+	results <- HedgedResult{Resp: resp, AgentID: id, AgentAddr: addr, Err: nil}
 }

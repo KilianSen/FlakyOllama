@@ -30,11 +30,9 @@ type PriorityQueue []*QueuedRequest
 func (pq PriorityQueue) Len() int { return len(pq) }
 
 func (pq PriorityQueue) Less(i, j int) bool {
-	// We want Pop to give us the highest, not lowest, priority
 	if pq[i].Priority != pq[j].Priority {
 		return pq[i].Priority > pq[j].Priority
 	}
-	// Equal priority: use sequence to enforce FIFO (lower sequence was enqueued earlier)
 	return pq[i].Sequence < pq[j].Sequence
 }
 
@@ -55,8 +53,8 @@ func (pq *PriorityQueue) Pop() interface{} {
 	old := *pq
 	n := len(old)
 	item := old[n-1]
-	old[n-1] = nil  // avoid memory leak
-	item.Index = -1 // for safety
+	old[n-1] = nil
+	item.Index = -1
 	*pq = old[0 : n-1]
 	return item
 }
@@ -72,7 +70,7 @@ type RequestQueue struct {
 func NewRequestQueue() *RequestQueue {
 	rq := &RequestQueue{
 		pq: make(PriorityQueue, 0),
-		ch: make(chan struct{}, 1000),
+		ch: make(chan struct{}, 1),
 	}
 	heap.Init(&rq.pq)
 	return rq
@@ -94,7 +92,7 @@ func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP
 	}
 	heap.Push(&rq.pq, item)
 
-	// Signal that an item is available
+	// Signal that an item is available (non-blocking)
 	select {
 	case rq.ch <- struct{}{}:
 	default:
@@ -109,7 +107,6 @@ func (rq *RequestQueue) Pop() *QueuedRequest {
 
 	for rq.pq.Len() > 0 {
 		item := heap.Pop(&rq.pq).(*QueuedRequest)
-		// Check if request was canceled while in queue
 		if item.Ctx != nil && item.Ctx.Err() != nil {
 			continue
 		}

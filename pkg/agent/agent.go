@@ -30,6 +30,7 @@ type Agent struct {
 	Ollama           *ollama.Client
 	Config           *config.Config
 	LogCh            chan models.LogEntry
+	stopCh           chan struct{}
 
 	// Caching to prevent telemetry storms
 	lastStatus     models.NodeStatus
@@ -50,6 +51,7 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 		Ollama:           ollama.NewClient(ollamaURL),
 		Config:           cfg,
 		LogCh:            make(chan models.LogEntry, 100),
+		stopCh:           make(chan struct{}),
 	}
 }
 
@@ -432,18 +434,22 @@ func (a *Agent) StartLogShipper() {
 	}
 
 	for {
-		entry := <-a.LogCh
-		body, _ := json.Marshal(entry)
-		req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
-		req.Header.Set("Content-Type", "application/json")
-		if token := os.Getenv("BALANCER_TOKEN"); token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
+		select {
+		case entry := <-a.LogCh:
+			body, _ := json.Marshal(entry)
+			req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
+			req.Header.Set("Content-Type", "application/json")
+			if token := os.Getenv("BALANCER_TOKEN"); token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
 
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+		case <-a.stopCh:
+			return
 		}
-		resp.Body.Close()
 	}
 }

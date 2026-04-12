@@ -9,8 +9,26 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
+
+type workloadBody struct {
+	io.ReadCloser
+	b    *Balancer
+	addr string
+	once sync.Once
+}
+
+func (w *workloadBody) Close() error {
+	err := w.ReadCloser.Close()
+	w.once.Do(func() {
+		w.b.workloadMu.Lock()
+		w.b.NodeWorkloads[w.addr]--
+		w.b.workloadMu.Unlock()
+	})
+	return err
+}
 
 func (b *Balancer) sendToAgent(addr, path string, body []byte) (*http.Response, error) {
 	scheme := "http"
@@ -70,9 +88,9 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
 	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
 
-	b.Mu.Lock()
+	b.lastUsedMu.Lock()
 	b.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
-	b.Mu.Unlock()
+	b.lastUsedMu.Unlock()
 }
 
 func (b *Balancer) recordError(addr string) {

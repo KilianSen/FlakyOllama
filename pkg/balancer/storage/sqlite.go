@@ -2,7 +2,6 @@ package storage
 
 import (
 	"database/sql"
-	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"time"
 )
@@ -57,7 +56,7 @@ func (s *SQLiteStorage) Close() error {
 }
 
 func (s *SQLiteStorage) PruneOldMetrics(days int) error {
-	_, err := s.db.Exec("DELETE FROM metrics WHERE timestamp < datetime('now', ?)", fmt.Sprintf("-%d days", days))
+	_, err := s.db.Exec("DELETE FROM metrics WHERE timestamp < datetime('now', '-' || ? || ' days')", days)
 	return err
 }
 

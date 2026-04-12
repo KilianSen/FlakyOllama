@@ -35,13 +35,13 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.Mu.Lock()
+	b.pendingMu.Lock()
 	b.PendingRequests[ollamaReq.Model]++
-	b.Mu.Unlock()
+	b.pendingMu.Unlock()
 	defer func() {
-		b.Mu.Lock()
+		b.pendingMu.Lock()
 		b.PendingRequests[ollamaReq.Model]--
-		b.Mu.Unlock()
+		b.pendingMu.Unlock()
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
@@ -51,18 +51,6 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-
-	// Concurrency Tracking: start
-	if agentAddr != "" {
-		b.Mu.Lock()
-		b.NodeWorkloads[agentAddr]++
-		b.Mu.Unlock()
-		defer func() {
-			b.Mu.Lock()
-			b.NodeWorkloads[agentAddr]--
-			b.Mu.Unlock()
-		}()
-	}
 
 	if !oaiReq.Stream {
 		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentAddr)
@@ -178,13 +166,13 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	b.Mu.Lock()
+	b.pendingMu.Lock()
 	b.PendingRequests[ollamaReq.Model]++
-	b.Mu.Unlock()
+	b.pendingMu.Unlock()
 	defer func() {
-		b.Mu.Lock()
+		b.pendingMu.Lock()
 		b.PendingRequests[ollamaReq.Model]--
-		b.Mu.Unlock()
+		b.pendingMu.Unlock()
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
@@ -194,18 +182,6 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer resp.Body.Close()
-
-	// Concurrency Tracking: start
-	if agentAddr != "" {
-		b.Mu.Lock()
-		b.NodeWorkloads[agentAddr]++
-		b.Mu.Unlock()
-		defer func() {
-			b.Mu.Lock()
-			b.NodeWorkloads[agentAddr]--
-			b.Mu.Unlock()
-		}()
-	}
 
 	if !oaiReq.Stream {
 		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentAddr)

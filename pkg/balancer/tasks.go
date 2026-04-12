@@ -111,13 +111,23 @@ func (b *Balancer) worker() {
 		case <-b.stopCh:
 			return
 		case <-b.Queue.Wait():
-			req := b.Queue.Pop()
-			if req == nil {
-				continue
-			}
+			// Drain the queue as much as possible
+			for {
+				req := b.Queue.Pop()
+				if req == nil {
+					break
+				}
 
-			id, addr, err := b.Route(req.Request, req.ClientIP)
-			req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
+				id, addr, err := b.Route(req.Request, req.ClientIP)
+				req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
+
+				// Check for shutdown between items
+				select {
+				case <-b.stopCh:
+					return
+				default:
+				}
+			}
 		}
 	}
 }
@@ -144,7 +154,7 @@ func (b *Balancer) StartKeepAliveCleaner() {
 }
 
 func (b *Balancer) cleanStaleModels() {
-	b.Mu.Lock()
+	b.lastUsedMu.Lock()
 	now := time.Now()
 	keepAlive := time.Duration(b.Config.KeepAliveDurationSec) * time.Second
 
@@ -158,13 +168,15 @@ func (b *Balancer) cleanStaleModels() {
 			agentAddr := key[:idx]
 			modelName := key[idx+1:]
 
+			b.Mu.RLock()
 			if agent, ok := b.Agents[agentAddr]; ok {
 				toUnload = append(toUnload, struct{ nodeID, addr, model string }{agent.ID, agent.Address, modelName})
 			}
+			b.Mu.RUnlock()
 			delete(b.ModelLastUsed, key)
 		}
 	}
-	b.Mu.Unlock()
+	b.lastUsedMu.Unlock()
 
 	for _, item := range toUnload {
 		logging.Global.Infof("Unloading stale model %s from agent %s", item.model, item.nodeID)
@@ -190,6 +202,31 @@ func (b *Balancer) StartPoller() {
 	}()
 }
 
+func (b *Balancer) Broadcast(path string, body []byte) {
+	b.Mu.RLock()
+	agents := make([]*models.NodeStatus, 0, len(b.Agents))
+	for _, a := range b.Agents {
+		if !a.Draining && a.State != models.StateBroken {
+			agents = append(agents, a)
+		}
+	}
+	b.Mu.RUnlock()
+
+	for _, a := range agents {
+		go func(addr string, id string) {
+			resp, err := b.sendToAgent(addr, path, body)
+			if err != nil {
+				logging.Global.Errorf("Broadcast to %s (%s) failed: %v", id, addr, err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode >= 400 {
+				logging.Global.Warnf("Broadcast to %s (%s) returned status %d", id, addr, resp.StatusCode)
+			}
+		}(a.Address, a.ID)
+	}
+}
+
 func (b *Balancer) pollAgents() {
 	b.Mu.RLock()
 	agents := make([]*models.NodeStatus, 0, len(b.Agents))
@@ -211,7 +248,7 @@ func (b *Balancer) pollAgents() {
 			// Use internal httpClient with timeout
 			resp, err := b.httpClient.Do(req)
 			if err != nil {
-				logging.Global.Warnf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
+				logging.Global.Errorf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
 				b.recordError(a.Address)
 				return
 			}
@@ -236,9 +273,12 @@ func (b *Balancer) pollAgents() {
 
 				// Preemptive Draining: If shared node is under host stress but cluster-idle, evict models
 				if status.Tier == "shared" && (status.CPUUsage > 85.0 || status.GPUTemperature > 85.0) {
-					if workload := b.NodeWorkloads[a.Address]; workload == 0 {
+					b.workloadMu.RLock()
+					workload := b.NodeWorkloads[a.Address]
+					b.workloadMu.RUnlock()
+					if workload == 0 {
 						for _, m := range status.ActiveModels {
-							logging.Global.Warnf("Preemptively evicting model %s from shared host %s due to system stress", m, status.ID)
+							logging.Global.Infof("Preemptively evicting model %s from shared host %s due to system stress", m, status.ID)
 							body, _ := json.Marshal(map[string]string{"model": m})
 							go b.sendToAgent(status.Address, "/models/unload", body)
 						}
@@ -254,6 +294,7 @@ func (b *Balancer) pollAgents() {
 				}
 
 				// Clear InProgressPulls if the model is now visible on any node (active or local)
+				b.pullsMu.Lock()
 				for m := range b.InProgressPulls {
 					found := false
 					for _, am := range status.ActiveModels {
@@ -275,6 +316,7 @@ func (b *Balancer) pollAgents() {
 						delete(b.InProgressPulls, m)
 					}
 				}
+				b.pullsMu.Unlock()
 
 				// Update metrics
 				healthVal := 0.0
@@ -284,7 +326,8 @@ func (b *Balancer) pollAgents() {
 				case models.StateDegraded:
 					healthVal = 1.0
 				default:
-					panic("unhandled default case")
+					// panic("unhandled default case")
+					healthVal = 0.0
 				}
 				metrics.NodeHealthStatus.WithLabelValues(a.ID, a.Address).Set(healthVal)
 

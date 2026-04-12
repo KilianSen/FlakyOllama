@@ -23,6 +23,7 @@ func TestBalancer_Route(t *testing.T) {
 		ID:           "agent-1",
 		Address:      "localhost:8081",
 		CPUUsage:     10.0,
+		VRAMTotal:    10 * 1024 * 1024 * 1024,
 		LastSeen:     time.Now(),
 		ActiveModels: []string{},
 	}
@@ -43,6 +44,7 @@ func TestBalancer_Route(t *testing.T) {
 		ID:           "agent-2",
 		Address:      "localhost:8082",
 		CPUUsage:     20.0,
+		VRAMTotal:    10 * 1024 * 1024 * 1024,
 		LastSeen:     time.Now(),
 		ActiveModels: []string{"llama2"},
 	}

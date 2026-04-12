@@ -12,9 +12,13 @@ import (
 
 // Route finds the best agent for an inference request using adaptive heuristics and session stickiness.
 func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, string, error) {
-	b.Mu.RLock()
+	b.pendingMu.RLock()
 	pending := b.PendingRequests[req.Model]
+	b.pendingMu.RUnlock()
+
+	b.affinityMu.RLock()
 	affinityID := b.ClientAffinity[clientIP]
+	b.affinityMu.RUnlock()
 
 	var bestAgent *models.NodeStatus
 	var bestScore = -1000.0
@@ -22,16 +26,13 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 	// Get model requirements from learned metadata
 	minVRAM, _ := b.Storage.GetModelVRAM(req.Model)
 	if minVRAM == 0 {
-		// Fallback for unknown models
-		if strings.Contains(req.Model, "7b") {
-			minVRAM = 4 * 1024 * 1024 * 1024
-		} else if strings.Contains(req.Model, "70b") {
-			minVRAM = 40 * 1024 * 1024 * 1024
-		}
+		minVRAM = estimateVRAMFallback(req.Model)
 	}
 
 	foundLoaded := false
 	now := time.Now()
+
+	b.Mu.RLock()
 	for _, a := range b.Agents {
 		// Connectivity and state checks
 		if time.Since(a.LastSeen) > 5*time.Second || a.Draining {
@@ -58,7 +59,9 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
 
 		// 2. Least Connections: Penalize nodes with active workloads to prevent thundering herd
+		b.workloadMu.RLock()
 		workload := b.NodeWorkloads[a.Address]
+		b.workloadMu.RUnlock()
 		score -= float64(workload) * b.Config.Weights.WorkloadPenalty
 
 		// 3. Thermal Protection
@@ -136,12 +139,18 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 			bestAgent = a
 		}
 	}
+
+	if bestAgent != nil {
+		b.workloadMu.Lock()
+		b.NodeWorkloads[bestAgent.Address]++
+		b.workloadMu.Unlock()
+	}
 	b.Mu.RUnlock()
 
 	if bestAgent != nil {
-		b.Mu.Lock()
+		b.affinityMu.Lock()
 		b.ClientAffinity[clientIP] = bestAgent.ID
-		b.Mu.Unlock()
+		b.affinityMu.Unlock()
 	}
 
 	// Auto-allocation logic
@@ -158,17 +167,37 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 	return bestAgent.ID, bestAgent.Address, nil
 }
 
+func estimateVRAMFallback(model string) uint64 {
+	model = strings.ToLower(model)
+	if strings.Contains(model, "70b") {
+		return 40 * 1024 * 1024 * 1024
+	}
+	if strings.Contains(model, "30b") || strings.Contains(model, "33b") || strings.Contains(model, "34b") {
+		return 20 * 1024 * 1024 * 1024
+	}
+	if strings.Contains(model, "13b") || strings.Contains(model, "14b") {
+		return 10 * 1024 * 1024 * 1024
+	}
+	if strings.Contains(model, "7b") || strings.Contains(model, "8b") {
+		return 5 * 1024 * 1024 * 1024
+	}
+	if strings.Contains(model, "3b") || strings.Contains(model, "4b") {
+		return 2 * 1024 * 1024 * 1024
+	}
+	return 1 * 1024 * 1024 * 1024 // 1GB minimum
+}
+
 func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
-	b.Mu.Lock()
+	b.pullsMu.Lock()
 	if startTime, ok := b.InProgressPulls[model]; ok {
 		// 10-minute safety timeout for pull lock
 		if time.Since(startTime) < 10*time.Minute {
-			b.Mu.Unlock()
+			b.pullsMu.Unlock()
 			return
 		}
 	}
 	b.InProgressPulls[model] = time.Now()
-	b.Mu.Unlock()
+	b.pullsMu.Unlock()
 
 	b.Mu.RLock()
 	var bestTarget *models.NodeStatus

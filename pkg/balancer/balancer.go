@@ -27,12 +27,17 @@ type Balancer struct {
 	Agents          map[string]*models.NodeStatus
 	Storage         *storage.SQLiteStorage
 	Config          *config.Config
-	PendingRequests map[string]int       // model_name -> count
+	PendingRequests map[string]int // model_name -> count
+	pendingMu       sync.RWMutex
 	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
+	lastUsedMu      sync.RWMutex
 	InProgressPulls map[string]time.Time // model_name -> start_time
+	pullsMu         sync.RWMutex
 	Queue           *RequestQueue
-	NodeWorkloads   map[string]int                       // agent_addr -> count
-	ClientAffinity  map[string]string                    // client_ip -> agent_id
+	NodeWorkloads   map[string]int // agent_addr -> count
+	workloadMu      sync.RWMutex
+	ClientAffinity  map[string]string // client_ip -> agent_id
+	affinityMu      sync.RWMutex
 	PerfCache       map[string]storage.PerformanceMetric // "node_id:model" -> metric
 	perfMu          sync.RWMutex
 	MetricCh        chan metricEntry

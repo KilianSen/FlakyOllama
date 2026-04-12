@@ -45,15 +45,19 @@ func (b *Balancer) HandleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, _ *http.Request) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
 	totalWorkloads := 0
+	b.pendingMu.RLock()
 	for _, count := range b.PendingRequests {
 		totalWorkloads += count
 	}
+	pendingRequestsCopy := make(map[string]int)
+	for m, c := range b.PendingRequests {
+		pendingRequestsCopy[m] = c
+	}
+	b.pendingMu.RUnlock()
 
 	modelMap := make(map[string]bool)
+	b.Mu.RLock()
 	for _, agent := range b.Agents {
 		for _, model := range agent.LocalModels {
 			modelMap[model.Name] = true
@@ -62,31 +66,41 @@ func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 			modelMap[model] = true
 		}
 	}
+	agentsCopy := make(map[string]*models.NodeStatus)
+	for addr, agent := range b.Agents {
+		agentsCopy[addr] = agent
+	}
+	b.Mu.RUnlock()
+
 	// Include models currently being pulled for the first time
+	b.pullsMu.RLock()
 	for m := range b.InProgressPulls {
 		modelMap[m] = true
 	}
+	// Copy InProgressPulls
+	pulls := make(map[string]time.Time)
+	for m, t := range b.InProgressPulls {
+		pulls[m] = t
+	}
+	b.pullsMu.RUnlock()
+
 	allModels := make([]string, 0, len(modelMap))
 	for m := range modelMap {
 		allModels = append(allModels, m)
 	}
 	sort.Strings(allModels)
 
-	// Copy InProgressPulls
-	pulls := make(map[string]time.Time)
-	for m, t := range b.InProgressPulls {
-		pulls[m] = t
-	}
-
 	// Copy NodeWorkloads
+	b.workloadMu.RLock()
 	workloads := make(map[string]int)
 	for addr, count := range b.NodeWorkloads {
 		workloads[addr] = count
 	}
+	b.workloadMu.RUnlock()
 
 	status := models.ClusterStatus{
-		Nodes:           b.Agents,
-		PendingRequests: b.PendingRequests,
+		Nodes:           agentsCopy,
+		PendingRequests: pendingRequestsCopy,
 		InProgressPulls: pulls,
 		NodeWorkloads:   workloads,
 		QueueDepth:      b.Queue.pq.Len(),
@@ -175,9 +189,14 @@ func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(map[string]string{"model": model})
-	for _, agent := range targets {
-		logging.Global.Infof("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
-		go b.sendToAgent(agent.Address, "/models/unload", body)
+	if nodeID != "" || nodeAddr != "" {
+		for _, agent := range targets {
+			logging.Global.Infof("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
+			go b.sendToAgent(agent.Address, "/models/unload", body)
+		}
+	} else {
+		logging.Global.Infof("Unloading model %s cluster-wide", model)
+		b.Broadcast("/models/unload", body)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -205,15 +224,14 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
+	body, _ := json.Marshal(map[string]string{"model": model})
 	if nodeID != "" || nodeAddr != "" {
+		b.Mu.RLock()
+		defer b.Mu.RUnlock()
 		// Single node or group pull
 		for _, agent := range b.Agents {
 			if (nodeAddr != "" && agent.Address == nodeAddr) || (nodeID != "" && agent.ID == nodeID) {
 				logging.Global.Infof("Pulling model %s on agent %s (%s)", model, agent.ID, agent.Address)
-				body, _ := json.Marshal(map[string]string{"model": model})
 				go b.sendToAgent(agent.Address, "/models/pull", body)
 				if nodeAddr != "" {
 					break
@@ -223,12 +241,7 @@ func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Cluster-wide pull
 		logging.Global.Infof("Pulling model %s cluster-wide", model)
-		body, _ := json.Marshal(map[string]string{"model": model})
-		for _, agent := range b.Agents {
-			if !agent.Draining && agent.State != models.StateBroken {
-				go b.sendToAgent(agent.Address, "/models/pull", body)
-			}
-		}
+		b.Broadcast("/models/pull", body)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -264,9 +277,14 @@ func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(map[string]string{"model": model})
-	for _, agent := range targets {
-		logging.Global.Infof("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
-		go b.sendToAgent(agent.Address, "/models/delete", body)
+	if nodeID != "" || nodeAddr != "" {
+		for _, agent := range targets {
+			logging.Global.Infof("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
+			go b.sendToAgent(agent.Address, "/models/delete", body)
+		}
+	} else {
+		logging.Global.Infof("Deleting model %s cluster-wide", model)
+		b.Broadcast("/models/delete", body)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -306,13 +324,13 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 		Stream: false,
 	}
 
-	b.Mu.Lock()
+	b.pendingMu.Lock()
 	b.PendingRequests[req.Model]++
-	b.Mu.Unlock()
+	b.pendingMu.Unlock()
 	defer func() {
-		b.Mu.Lock()
+		b.pendingMu.Lock()
 		b.PendingRequests[req.Model]--
-		b.Mu.Unlock()
+		b.pendingMu.Unlock()
 	}()
 
 	body, _ := json.Marshal(req)

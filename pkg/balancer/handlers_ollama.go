@@ -24,13 +24,13 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.Mu.Lock()
+	b.pendingMu.Lock()
 	b.PendingRequests[req.Model]++
-	b.Mu.Unlock()
+	b.pendingMu.Unlock()
 	defer func() {
-		b.Mu.Lock()
+		b.pendingMu.Lock()
 		b.PendingRequests[req.Model]--
-		b.Mu.Unlock()
+		b.pendingMu.Unlock()
 	}()
 
 	body, _ := json.Marshal(req)
@@ -41,18 +41,6 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-
-	// Concurrency Tracking: start
-	if agentAddr != "" {
-		b.Mu.Lock()
-		b.NodeWorkloads[agentAddr]++
-		b.Mu.Unlock()
-		defer func() {
-			b.Mu.Lock()
-			b.NodeWorkloads[agentAddr]--
-			b.Mu.Unlock()
-		}()
-	}
 
 	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
@@ -72,13 +60,13 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.Mu.Lock()
+	b.pendingMu.Lock()
 	b.PendingRequests[req.Model]++
-	b.Mu.Unlock()
+	b.pendingMu.Unlock()
 	defer func() {
-		b.Mu.Lock()
+		b.pendingMu.Lock()
 		b.PendingRequests[req.Model]--
-		b.Mu.Unlock()
+		b.pendingMu.Unlock()
 	}()
 
 	body, _ := json.Marshal(req)
@@ -88,18 +76,6 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-
-	// Concurrency Tracking: start
-	if agentAddr != "" {
-		b.Mu.Lock()
-		b.NodeWorkloads[agentAddr]++
-		b.Mu.Unlock()
-		defer func() {
-			b.Mu.Lock()
-			b.NodeWorkloads[agentAddr]--
-			b.Mu.Unlock()
-		}()
-	}
 
 	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
@@ -234,15 +210,8 @@ func (b *Balancer) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
 	logging.Global.Infof("Creating model %s cluster-wide", req.Name)
-	for _, agent := range b.Agents {
-		if !agent.Draining && agent.State != models.StateBroken {
-			go b.sendToAgent(agent.Address, "/models/create", body)
-		}
-	}
+	b.Broadcast("/models/create", body)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Creation triggered for " + req.Name})
@@ -259,15 +228,8 @@ func (b *Balancer) HandleCopy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
 	logging.Global.Infof("Copying model %s to %s cluster-wide", req.Source, req.Destination)
-	for _, agent := range b.Agents {
-		if !agent.Draining && agent.State != models.StateBroken {
-			go b.sendToAgent(agent.Address, "/models/copy", body)
-		}
-	}
+	b.Broadcast("/models/copy", body)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Copy triggered for " + req.Source})
@@ -283,15 +245,8 @@ func (b *Balancer) HandlePush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
 	logging.Global.Infof("Pushing model %s cluster-wide", req.Name)
-	for _, agent := range b.Agents {
-		if !agent.Draining && agent.State != models.StateBroken {
-			go b.sendToAgent(agent.Address, "/models/push", body)
-		}
-	}
+	b.Broadcast("/models/push", body)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Push triggered for " + req.Name})
