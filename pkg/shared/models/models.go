@@ -109,8 +109,8 @@ type ClusterStatus struct {
 	InProgressPulls map[string]time.Time   `json:"in_progress_pulls"`
 	NodeWorkloads   map[string]int         `json:"node_workloads"`
 	QueueDepth      int                    `json:"queue_depth"`
-	ActiveWorkloads int                    `json:\"active_workloads\"`
-	AllModels       []string               `json:\"all_models\"`
+	ActiveWorkloads int                    `json:"active_workloads"`
+	AllModels       []string               `json:"all_models"`
 }
 
 type LogLevel string
