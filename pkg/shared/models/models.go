@@ -89,7 +89,7 @@ type TagsResponse struct {
 }
 
 type ModelInfo struct {
-	Name       string    `json:"name"`
+	Model      string    `json:"model"`
 	ModifiedAt time.Time `json:"modified_at"`
 	Size       int64     `json:"size"`
 	Digest     string    `json:"digest"`
@@ -111,6 +111,14 @@ type ClusterStatus struct {
 	QueueDepth      int                    `json:"queue_depth"`
 	ActiveWorkloads int                    `json:"active_workloads"`
 	AllModels       []string               `json:"all_models"`
+
+	// Aggregate metrics
+	TotalVRAM      uint64  `json:"total_vram"`      // Total VRAM in bytes
+	UsedVRAM       uint64  `json:"used_vram"`       // Total used VRAM in bytes
+	TotalCPUCores  int     `json:"total_cpu_cores"` // Total CPU cores
+	AvgCPUUsage    float64 `json:"avg_cpu_usage"`   // Average CPU usage percentage
+	AvgMemoryUsage float64 `json:"avg_mem_usage"`   // Average Memory usage percentage
+	UptimeSeconds  int64   `json:"uptime_seconds"`
 }
 
 type LogLevel string

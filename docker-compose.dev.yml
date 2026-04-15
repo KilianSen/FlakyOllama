@@ -28,10 +28,9 @@ services:
   agent-dev:
     build:
       context: .
-      dockerfile: Dockerfile.integrated
+      dockerfile: Dockerfile
     ports:
       - "8081:8081"
-      - "11434:11434"
     environment:
       - ROLE=agent
       - AGENT_ID=dev-node

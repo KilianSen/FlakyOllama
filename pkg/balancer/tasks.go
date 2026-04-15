@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/balancer/storage"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/metrics"
@@ -71,19 +72,18 @@ func (b *Balancer) StartPerfCacheRefresher() {
 }
 
 func (b *Balancer) refreshPerfCache() {
-	b.Mu.RLock()
-	// Get unique combinations of node IDs and model names from currently known state
+	snapshot := b.State.GetSnapshot()
+
 	type entry struct{ nodeID, model string }
 	entries := make([]entry, 0)
-	for _, a := range b.Agents {
+	for _, a := range snapshot.Agents {
 		for _, m := range a.ActiveModels {
 			entries = append(entries, entry{a.ID, m})
 		}
 		for _, m := range a.LocalModels {
-			entries = append(entries, entry{a.ID, m.Name})
+			entries = append(entries, entry{a.ID, m.Model})
 		}
 	}
-	b.Mu.RUnlock()
 
 	newCache := make(map[string]storage.PerformanceMetric)
 	for _, e := range entries {
@@ -113,7 +113,6 @@ func (b *Balancer) worker() {
 			if !ok {
 				return // Queue closed
 			}
-			// Drain the queue as much as possible
 			for {
 				req := b.Queue.Pop()
 				if req == nil {
@@ -123,7 +122,6 @@ func (b *Balancer) worker() {
 				id, addr, err := b.Route(req.Request, req.ClientIP)
 				req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
 
-				// Check for shutdown between items
 				select {
 				case <-b.stopCh:
 					return
@@ -142,6 +140,7 @@ func (b *Balancer) StartKeepAliveCleaner() {
 			select {
 			case <-ticker.C:
 				b.cleanStaleModels()
+				b.Jobs.CleanupOldJobs(1 * time.Hour)
 			case <-pruneTicker.C:
 				if err := b.Storage.PruneOldMetrics(2); err != nil {
 					logging.Global.Errorf("Failed to prune old metrics: %v", err)
@@ -156,29 +155,28 @@ func (b *Balancer) StartKeepAliveCleaner() {
 }
 
 func (b *Balancer) cleanStaleModels() {
-	b.lastUsedMu.Lock()
 	now := time.Now()
 	keepAlive := time.Duration(b.Config.KeepAliveDurationSec) * time.Second
 
 	toUnload := make([]struct{ nodeID, addr, model string }, 0)
-	for key, lastTime := range b.ModelLastUsed {
-		if now.Sub(lastTime) > keepAlive {
-			idx := strings.LastIndex(key, ":")
-			if idx == -1 {
-				continue
-			}
-			agentAddr := key[:idx]
-			modelName := key[idx+1:]
 
-			b.Mu.RLock()
-			if agent, ok := b.Agents[agentAddr]; ok {
-				toUnload = append(toUnload, struct{ nodeID, addr, model string }{agent.ID, agent.Address, modelName})
+	b.State.Do(func(s *state.ClusterState) {
+		for key, lastTime := range s.ModelLastUsed {
+			if now.Sub(lastTime) > keepAlive {
+				idx := strings.LastIndex(key, ":")
+				if idx == -1 {
+					continue
+				}
+				agentAddr := key[:idx]
+				modelName := key[idx+1:]
+
+				if agent, ok := s.Agents[agentAddr]; ok {
+					toUnload = append(toUnload, struct{ nodeID, addr, model string }{agent.ID, agent.Address, modelName})
+				}
+				delete(s.ModelLastUsed, key)
 			}
-			b.Mu.RUnlock()
-			delete(b.ModelLastUsed, key)
 		}
-	}
-	b.lastUsedMu.Unlock()
+	})
 
 	for _, item := range toUnload {
 		logging.Global.Infof("Unloading stale model %s from agent %s", item.model, item.nodeID)
@@ -205,120 +203,101 @@ func (b *Balancer) StartPoller() {
 }
 
 func (b *Balancer) Broadcast(path string, body []byte) {
-	b.Mu.RLock()
-	agents := make([]*models.NodeStatus, 0, len(b.Agents))
-	for _, a := range b.Agents {
-		if !a.Draining && a.State != models.StateBroken {
-			agents = append(agents, a)
-		}
-	}
-	b.Mu.RUnlock()
+	snapshot := b.State.GetSnapshot()
 
-	for _, a := range agents {
-		go func(addr string, id string) {
-			resp, err := b.sendToAgent(addr, path, body)
-			if err != nil {
-				logging.Global.Errorf("Broadcast to %s (%s) failed: %v", id, addr, err)
-				return
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				logging.Global.Warnf("Broadcast to %s (%s) returned status %d", id, addr, resp.StatusCode)
-			}
-		}(a.Address, a.ID)
+	for addr, a := range snapshot.Agents {
+		if !a.Draining && a.State != models.StateBroken {
+			go func(address string, id string) {
+				resp, err := b.sendToAgent(address, path, body)
+				if err != nil {
+					logging.Global.Errorf("Broadcast to %s (%s) failed: %v", id, address, err)
+					return
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode >= 400 {
+					logging.Global.Warnf("Broadcast to %s (%s) returned status %d", id, address, resp.StatusCode)
+				}
+			}(addr, a.ID)
+		}
 	}
 }
 
 func (b *Balancer) pollAgents() {
-	b.Mu.RLock()
-	agents := make([]*models.NodeStatus, 0, len(b.Agents))
-	for _, a := range b.Agents {
-		agents = append(agents, a)
-	}
-	b.Mu.RUnlock()
+	snapshot := b.State.GetSnapshot()
 
-	for _, agent := range agents {
-		go func(a *models.NodeStatus) {
+	for addr, agent := range snapshot.Agents {
+		go func(address string, a models.NodeStatus) {
 			scheme := "http"
 			if b.Config.TLS.Enabled {
 				scheme = "https"
 			}
-			req, _ := http.NewRequest("GET", scheme+"://"+a.Address+"/telemetry", nil)
+			req, _ := http.NewRequest("GET", scheme+"://"+address+"/telemetry", nil)
 			if b.Config.RemoteToken != "" {
 				req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
 			}
-			// Use internal httpClient with timeout
 			resp, err := b.httpClient.Do(req)
 			if err != nil {
-				logging.Global.Errorf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
-				b.recordError(a.Address)
+				logging.Global.Errorf("Failed to poll agent %s (%s): %v", a.ID, address, err)
+				b.recordError(address)
 				return
 			}
 			defer resp.Body.Close()
 
 			var status models.NodeStatus
 			if err := json.NewDecoder(resp.Body).Decode(&status); err == nil {
-				b.Mu.Lock()
-				currentAgent, ok := b.Agents[a.Address]
-				if !ok {
-					b.Mu.Unlock()
-					return
-				}
+				b.State.Do(func(s *state.ClusterState) {
+					currentAgent, ok := s.Agents[address]
+					if !ok {
+						return
+					}
 
-				// Preserving some internal state
-				status.State = currentAgent.State
-				status.Errors = currentAgent.Errors
-				status.Draining = currentAgent.Draining
-				status.LastSeen = time.Now()
+					// Preserving internal state
+					status.State = currentAgent.State
+					status.Errors = currentAgent.Errors
+					status.Draining = currentAgent.Draining
+					status.LastSeen = time.Now()
 
-				b.Agents[a.Address] = &status
+					s.Agents[address] = &status
 
-				// Preemptive Draining: If shared node is under host stress but cluster-idle, evict models
-				if status.Tier == "shared" && (status.CPUUsage > 85.0 || status.GPUTemperature > 85.0) {
-					b.workloadMu.RLock()
-					workload := b.NodeWorkloads[a.Address]
-					b.workloadMu.RUnlock()
-					if workload == 0 {
-						for _, m := range status.ActiveModels {
-							logging.Global.Infof("Preemptively evicting model %s from shared host %s due to system stress", m, status.ID)
-							body, _ := json.Marshal(map[string]string{"model": m})
-							go b.sendToAgent(status.Address, "/models/unload", body)
+					// Preemptive Draining
+					if status.Tier == "shared" && (status.CPUUsage > 85.0 || status.GPUTemperature > 85.0) {
+						if s.NodeWorkloads[address] == 0 {
+							for _, m := range status.ActiveModels {
+								logging.Global.Infof("Preemptively evicting model %s from shared host %s due to system stress", m, status.ID)
+								body, _ := json.Marshal(map[string]string{"model": m})
+								go b.sendToAgent(address, "/models/unload", body)
+							}
 						}
 					}
-				}
 
-				// Update learned VRAM
-				for _, m := range status.ActiveModels {
+					// Update learned VRAM
 					if len(status.ActiveModels) == 1 {
-						// Heuristic: if only one model is loaded, VRAMUsed is a good estimate
-						b.Storage.UpdateModelVRAM(m, status.VRAMUsed)
+						b.Storage.UpdateModelVRAM(status.ActiveModels[0], status.VRAMUsed)
 					}
-				}
 
-				// Clear InProgressPulls if the model is now visible on any node (active or local)
-				b.pullsMu.Lock()
-				for m := range b.InProgressPulls {
-					found := false
-					for _, am := range status.ActiveModels {
-						if am == m {
-							found = true
-							break
-						}
-					}
-					if !found {
-						for _, lm := range status.LocalModels {
-							if lm.Name == m {
+					// Clear InProgressPulls
+					for m := range s.InProgressPulls {
+						found := false
+						for _, am := range status.ActiveModels {
+							if am == m {
 								found = true
 								break
 							}
 						}
+						if !found {
+							for _, lm := range status.LocalModels {
+								if lm.Model == m {
+									found = true
+									break
+								}
+							}
+						}
+						if found {
+							logging.Global.Infof("Model %s discovered on node %s, clearing pull lock", m, a.ID)
+							delete(s.InProgressPulls, m)
+						}
 					}
-					if found {
-						logging.Global.Infof("Model %s discovered on node %s, clearing pull lock", m, a.ID)
-						delete(b.InProgressPulls, m)
-					}
-				}
-				b.pullsMu.Unlock()
+				})
 
 				// Update metrics
 				healthVal := 0.0
@@ -328,15 +307,12 @@ func (b *Balancer) pollAgents() {
 				case models.StateDegraded:
 					healthVal = 1.0
 				default:
-					// panic("unhandled default case")
 					healthVal = 0.0
 				}
-				metrics.NodeHealthStatus.WithLabelValues(a.ID, a.Address).Set(healthVal)
-
-				b.Mu.Unlock()
+				metrics.NodeHealthStatus.WithLabelValues(a.ID, address).Set(healthVal)
 			} else {
-				logging.Global.Errorf("Failed to decode telemetry for agent %s (%s): %v", a.ID, a.Address, err)
+				logging.Global.Errorf("Failed to decode telemetry for agent %s (%s): %v", a.ID, address, err)
 			}
-		}(agent)
+		}(addr, agent)
 	}
 }

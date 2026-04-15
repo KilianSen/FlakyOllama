@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/balancer/storage"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
@@ -12,16 +13,16 @@ import (
 
 // Route finds the best agent for an inference request using adaptive heuristics and session stickiness.
 func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, string, error) {
-	b.pendingMu.RLock()
-	pending := b.PendingRequests[req.Model]
-	b.pendingMu.RUnlock()
+	snapshot := b.State.GetSnapshot()
+	pending := snapshot.PendingRequests[req.Model]
 
 	b.affinityMu.RLock()
 	affinityID := b.ClientAffinity[clientIP]
 	b.affinityMu.RUnlock()
 
-	var bestAgent *models.NodeStatus
+	var bestAgent models.NodeStatus
 	var bestScore = -1000.0
+	var foundBest = false
 
 	// Get model requirements from learned metadata
 	minVRAM, _ := b.Storage.GetModelVRAM(req.Model)
@@ -32,8 +33,7 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 	foundLoaded := false
 	now := time.Now()
 
-	b.Mu.RLock()
-	for _, a := range b.Agents {
+	for addr, a := range snapshot.Agents {
 		// Connectivity and state checks
 		if time.Since(a.LastSeen) > 5*time.Second || a.Draining {
 			continue
@@ -51,7 +51,6 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 		b.perfMu.RUnlock()
 
 		if !ok {
-			// If no performance data exists, default to healthy assumption
 			perf = storage.PerformanceMetric{SuccessRate: 1.0, AvgLatency: 1.0}
 		}
 
@@ -59,9 +58,7 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
 
 		// 2. Least Connections: Penalize nodes with active workloads to prevent thundering herd
-		b.workloadMu.RLock()
-		workload := b.NodeWorkloads[a.Address]
-		b.workloadMu.RUnlock()
+		workload := snapshot.NodeWorkloads[addr]
 		score -= float64(workload) * b.Config.Weights.WorkloadPenalty
 
 		// 3. Thermal Protection
@@ -72,10 +69,10 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 			continue // Critical thermal threshold
 		}
 
-		// 4. Historical Reliability (with Cold-Start defaults)
+		// 4. Historical Reliability
 		successRate := perf.SuccessRate
 		if successRate <= 0 {
-			successRate = 1.0 // Assume healthy for new nodes
+			successRate = 1.0
 		}
 		score *= successRate * b.Config.Weights.SuccessRateWeight
 
@@ -95,10 +92,10 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 
 		// 7. Session Stickiness: Grant bonus for KV Cache locality
 		if a.ID == affinityID {
-			score += 2.0 // Stickiness bonus
+			score += 2.0
 		}
 
-		// 7. Model Residency (Hot vs Warm vs Cold)
+		// 8. Model Residency (Hot vs Warm vs Cold)
 		isHot := false
 		for _, m := range a.ActiveModels {
 			if m == req.Model {
@@ -114,7 +111,7 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 			// Check if model is on disk (Warm)
 			isWarm := false
 			for _, mInfo := range a.LocalModels {
-				if mInfo.Name == req.Model {
+				if mInfo.Model == req.Model {
 					isWarm = true
 					break
 				}
@@ -122,14 +119,11 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 
 			if isWarm {
 				score += b.Config.Weights.LocalModelBonus
-
-				// VRAM Fragmentation Check: Penalize if Ollama must evict models
 				freeVRAM := a.VRAMTotal - a.VRAMUsed
 				if freeVRAM < minVRAM {
 					score -= 1.0 // Eviction penalty
 				}
 			} else {
-				// Cold start required (Pulling over network)
 				score -= 5.0
 			}
 		}
@@ -137,17 +131,14 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 		if score > bestScore {
 			bestScore = score
 			bestAgent = a
+			foundBest = true
 		}
 	}
 
-	if bestAgent != nil {
-		b.workloadMu.Lock()
-		b.NodeWorkloads[bestAgent.Address]++
-		b.workloadMu.Unlock()
-	}
-	b.Mu.RUnlock()
-
-	if bestAgent != nil {
+	if foundBest {
+		b.State.DoAsync(func(s *state.ClusterState) {
+			s.NodeWorkloads[bestAgent.Address]++
+		})
 		b.affinityMu.Lock()
 		b.ClientAffinity[clientIP] = bestAgent.ID
 		b.affinityMu.Unlock()
@@ -158,7 +149,7 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 		b.triggerAllocation(req.Model, minVRAM)
 	}
 
-	if bestAgent == nil {
+	if !foundBest {
 		logging.Global.Warnf("Routing failed: No suitable agent found for model %s (pending: %d)", req.Model, pending)
 		return "", "", fmt.Errorf("no available agents with sufficient capabilities")
 	}
@@ -188,22 +179,27 @@ func estimateVRAMFallback(model string) uint64 {
 }
 
 func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
-	b.pullsMu.Lock()
-	if startTime, ok := b.InProgressPulls[model]; ok {
-		// 10-minute safety timeout for pull lock
-		if time.Since(startTime) < 10*time.Minute {
-			b.pullsMu.Unlock()
-			return
+	var alreadyInProgress bool
+	b.State.Do(func(s *state.ClusterState) {
+		if startTime, ok := s.InProgressPulls[model]; ok {
+			if time.Since(startTime) < 10*time.Minute {
+				alreadyInProgress = true
+				return
+			}
 		}
+		s.InProgressPulls[model] = time.Now()
+	})
+
+	if alreadyInProgress {
+		return
 	}
-	b.InProgressPulls[model] = time.Now()
-	b.pullsMu.Unlock()
 
-	b.Mu.RLock()
-	var bestTarget *models.NodeStatus
+	snapshot := b.State.GetSnapshot()
+	var bestTarget models.NodeStatus
 	var bestScore = -1.0
+	var foundTarget = false
 
-	for _, a := range b.Agents {
+	for _, a := range snapshot.Agents {
 		// Connectivity and basic requirements
 		if time.Since(a.LastSeen) > 5*time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken || a.Draining {
 			continue
@@ -221,7 +217,7 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 			continue
 		}
 		for _, m := range a.LocalModels {
-			if m.Name == model {
+			if m.Model == model {
 				alreadyHas = true
 				break
 			}
@@ -237,11 +233,11 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 		if score > bestScore {
 			bestScore = score
 			bestTarget = a
+			foundTarget = true
 		}
 	}
-	b.Mu.RUnlock()
 
-	if bestTarget != nil {
+	if foundTarget {
 		logging.Global.Infof("Triggering auto-allocation of model %s to agent %s (allocation score: %.2f)", model, bestTarget.ID, bestScore)
 		body, _ := json.Marshal(map[string]string{"model": model})
 		go func(addr, m string, bdy []byte) {
@@ -251,12 +247,17 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 					resp.Body.Close()
 				}
 				logging.Global.Errorf("Auto-allocation of %s to %s failed, clearing lock", m, addr)
-				b.pullsMu.Lock()
-				delete(b.InProgressPulls, m)
-				b.pullsMu.Unlock()
+				b.State.DoAsync(func(s *state.ClusterState) {
+					delete(s.InProgressPulls, m)
+				})
 			} else {
 				resp.Body.Close()
 			}
 		}(bestTarget.Address, model, body)
+	} else {
+		// Clear the lock if we couldn't find a target
+		b.State.DoAsync(func(s *state.ClusterState) {
+			delete(s.InProgressPulls, model)
+		})
 	}
 }

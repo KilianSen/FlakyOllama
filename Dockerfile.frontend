@@ -13,7 +13,7 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /
 COPY frontend/nginx.conf /etc/nginx/nginx.conf
 COPY frontend/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh
 
 WORKDIR /usr/share/nginx/html
 COPY --from=builder /app/dist .

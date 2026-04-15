@@ -36,71 +36,128 @@ export interface ClusterStatus {
   queue_depth: number;
   active_workloads: number;
   all_models: string[];
+  total_vram: number;
+  used_vram: number;
+  total_cpu_cores: number;
+  avg_cpu_usage: number;
+  avg_mem_usage: number;
+  uptime_seconds: number;
 }
 
-const headers = {
-  'Authorization': `Bearer ${BALANCER_TOKEN}`,
-  'Content-Type': 'application/json',
-};
+export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
 
-export const api = {
+export interface Job {
+  id: string;
+  type: string;
+  status: JobStatus;
+  message?: string;
+  progress: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InferenceRequest {
+  model: string;
+  prompt: string;
+  stream?: boolean;
+  node_id?: string;
+  node_addr?: string;
+}
+
+export interface InferenceResponse {
+  agent_id: string;
+  response: string;
+}
+
+class FlakyOllamaSDK {
+  private headers: Record<string, string>;
+
+  constructor(token: string) {
+    this.headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers: { ...this.headers, ...options.headers },
+    });
+    
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(error.error || `Request failed with status ${res.status}`);
+    }
+    
+    if (res.status === 204) return {} as T;
+    return res.json();
+  }
+
+  // Cluster & Nodes
   async getStatus(): Promise<ClusterStatus> {
-    const res = await fetch(`${API_BASE_URL}/api/status`, { headers });
-    if (!res.ok) throw new Error('Failed to fetch status');
-    return res.json();
-  },
+    return this.request<ClusterStatus>('/api/v1/status');
+  }
 
-  async drainNode(addr: string): Promise<void> {
-    await fetch(`${API_BASE_URL}/api/manage/node/drain?addr=${addr}`, { method: 'POST', headers });
-  },
+  async getNodes(): Promise<NodeStatus[]> {
+    return this.request<NodeStatus[]>('/api/v1/nodes');
+  }
 
-  async undrainNode(addr: string): Promise<void> {
-    await fetch(`${API_BASE_URL}/api/manage/node/undrain?addr=${addr}`, { method: 'POST', headers });
-  },
+  async drainNode(id: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/nodes/${id}/drain`, { method: 'POST' });
+  }
 
-  async unloadModel(model: string, addr?: string): Promise<void> {
-    const url = addr
-      ? `${API_BASE_URL}/api/manage/model/unload?addr=${addr}&model=${model}`
-      : `${API_BASE_URL}/api/manage/model/unload?model=${model}`;
-    await fetch(url, { method: 'POST', headers });
-  },
+  async undrainNode(id: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/nodes/${id}/undrain`, { method: 'POST' });
+  }
 
-  async deleteModel(model: string, addr?: string): Promise<void> {
-    const url = addr
-      ? `${API_BASE_URL}/api/manage/model/delete?addr=${addr}&model=${model}`
-      : `${API_BASE_URL}/api/manage/model/delete?model=${model}`;
-    await fetch(url, { method: 'POST', headers });
-  },
-
-  async pullModel(model: string, addr?: string): Promise<void> {
-    const url = addr 
-      ? `${API_BASE_URL}/api/manage/model/pull?addr=${addr}&model=${model}`
-      : `${API_BASE_URL}/api/manage/model/pull?model=${model}`;
-    await fetch(url, { method: 'POST', headers });
-  },
-
-  async runTest(model: string, prompt: string): Promise<{agent_id: string, response: string}> {
-    const res = await fetch(`${API_BASE_URL}/api/manage/test`, {
+  // Models
+  async pullModel(model: string, nodeId?: string): Promise<{ job_id: string; status: string }> {
+    return this.request('/api/v1/models/pull', {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ model, prompt }),
+      body: JSON.stringify({ model, node_id: nodeId }),
     });
-    if (!res.ok) throw new Error('Test failed');
-    return res.json();
-  },
+  }
 
-  async runTestOnNode(model: string, prompt: string, addr: string): Promise<{agent_id: string, response: string}> {
-    const res = await fetch(`${API_BASE_URL}/api/manage/test`, {
+  async deleteModel(name: string): Promise<{ job_id: string; status: string }> {
+    return this.request(`/api/v1/models/${name}`, { method: 'DELETE' });
+  }
+
+  async unloadModel(name: string, nodeId?: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/models/${name}/unload`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ model, prompt, node_addr: addr }),
+      body: JSON.stringify({ node_id: nodeId }),
     });
-    if (!res.ok) throw new Error('Test on node failed');
-    return res.json();
-  },
+  }
 
+  // Jobs
+  async getJob(id: string): Promise<Job> {
+    return this.request<Job>(`/api/v1/jobs/${id}`);
+  }
+
+  async waitForJob(id: string, onProgress?: (job: Job) => void): Promise<Job> {
+    while (true) {
+      const job = await this.getJob(id);
+      if (onProgress) onProgress(job);
+      
+      if (job.status === 'completed') return job;
+      if (job.status === 'failed') throw new Error(job.message || 'Job failed');
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  // Inference
+  async testInference(req: InferenceRequest): Promise<InferenceResponse> {
+    return this.request<InferenceResponse>('/api/v1/test', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    });
+  }
+
+  // Logs
   streamLogs(onMessage: (msg: string) => void): () => void {
-    const eventSource = new EventSource(`${API_BASE_URL}/api/logs`);
+    const eventSource = new EventSource(`${API_BASE_URL}/api/v1/logs`);
     eventSource.onmessage = (event) => {
       onMessage(event.data);
     };
@@ -110,4 +167,7 @@ export const api = {
     };
     return () => eventSource.close();
   }
-};
+}
+
+export const sdk = new FlakyOllamaSDK(BALANCER_TOKEN);
+export default sdk;

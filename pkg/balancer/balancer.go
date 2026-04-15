@@ -1,6 +1,8 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/jobs"
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/balancer/storage"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
@@ -11,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -22,30 +25,23 @@ type metricEntry struct {
 
 // Balancer manages multiple agents and routes requests.
 type Balancer struct {
-	Address         string
-	Agents          map[string]*models.NodeStatus
-	Storage         *storage.SQLiteStorage
-	Config          *config.Config
-	PendingRequests map[string]int // model_name -> count
-	pendingMu       sync.RWMutex
-	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
-	lastUsedMu      sync.RWMutex
-	InProgressPulls map[string]time.Time // model_name -> start_time
-	pullsMu         sync.RWMutex
-	Queue           *RequestQueue
-	NodeWorkloads   map[string]int // agent_addr -> count
-	workloadMu      sync.RWMutex
-	ClientAffinity  map[string]string // client_ip -> agent_id
-	affinityMu      sync.RWMutex
-	PerfCache       map[string]storage.PerformanceMetric // "node_id:model" -> metric
-	perfMu          sync.RWMutex
-	MetricCh        chan metricEntry
-	LogCh           chan models.LogEntry
-	Mu              sync.RWMutex
-	stopCh          chan struct{}
-	logChs          map[chan string]bool
-	logMu           sync.Mutex
-	httpClient      *http.Client
+	Address        string
+	Storage        *storage.SQLiteStorage
+	Config         *config.Config
+	State          *state.ClusterStateActor
+	Jobs           *jobs.JobManager
+	Queue          *RequestQueue
+	ClientAffinity map[string]string // client_ip -> agent_id
+	affinityMu     sync.RWMutex
+	PerfCache      map[string]storage.PerformanceMetric // "node_id:model" -> metric
+	perfMu         sync.RWMutex
+	MetricCh       chan metricEntry
+	LogCh          chan models.LogEntry
+	stopCh         chan struct{}
+	logChs         map[chan string]bool
+	logMu          sync.Mutex
+	httpClient     *http.Client
+	StartTime      time.Time
 }
 
 func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
@@ -59,21 +55,19 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 	}
 
 	b := &Balancer{
-		Address:         address,
-		Agents:          make(map[string]*models.NodeStatus),
-		Storage:         s,
-		Config:          cfg,
-		PendingRequests: make(map[string]int),
-		ModelLastUsed:   make(map[string]time.Time),
-		InProgressPulls: make(map[string]time.Time),
-		Queue:           NewRequestQueue(),
-		NodeWorkloads:   make(map[string]int),
-		ClientAffinity:  make(map[string]string),
-		PerfCache:       make(map[string]storage.PerformanceMetric),
-		MetricCh:        make(chan metricEntry, 1000),
-		LogCh:           make(chan models.LogEntry, 1000),
-		stopCh:          make(chan struct{}),
-		logChs:          make(map[chan string]bool),
+		Address:        address,
+		Storage:        s,
+		Config:         cfg,
+		State:          state.NewClusterStateActor(),
+		Jobs:           jobs.NewJobManager(),
+		Queue:          NewRequestQueue(),
+		ClientAffinity: make(map[string]string),
+		PerfCache:      make(map[string]storage.PerformanceMetric),
+		MetricCh:       make(chan metricEntry, 1000),
+		LogCh:          make(chan models.LogEntry, 1000),
+		stopCh:         make(chan struct{}),
+		logChs:         make(map[chan string]bool),
+		StartTime:      time.Now(),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
@@ -84,6 +78,7 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		},
 	}
 
+	b.State.Start()
 	return b, nil
 }
 
@@ -126,44 +121,77 @@ func (b *Balancer) Serve() error {
 }
 
 // NewMux returns a mux with the balancer's handlers registered.
-func (b *Balancer) NewMux() *http.ServeMux {
+func (b *Balancer) NewMux() *chi.Mux {
 	token := b.Config.AuthToken
-	mux := http.NewServeMux()
+	remoteToken := b.Config.RemoteToken
+	r := chi.NewRouter()
+
+	r.Use(b.CORS)
 
 	// Base
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/metrics", b.HandleMetrics)
 
-	// Ollama Layer
-	mux.HandleFunc("/api/generate", auth.Middleware(token, b.HandleGenerate))
-	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
-	mux.HandleFunc("/api/show", auth.Middleware(token, b.HandleShow))
-	mux.HandleFunc("/api/tags", auth.Middleware(token, b.HandleTags))
-	mux.HandleFunc("/api/embeddings", auth.Middleware(token, b.HandleEmbed))
-	mux.HandleFunc("/api/version", b.HandleVersion)
-	mux.HandleFunc("/api/ps", auth.Middleware(token, b.HandlePS))
-	mux.HandleFunc("/api/pull", auth.Middleware(token, b.HandlePull))
-	mux.HandleFunc("/api/delete", auth.Middleware(token, b.HandleDelete))
-	mux.HandleFunc("/api/create", auth.Middleware(token, b.HandleCreate))
-	mux.HandleFunc("/api/copy", auth.Middleware(token, b.HandleCopy))
-	mux.HandleFunc("/api/push", auth.Middleware(token, b.HandlePush))
+	// Legacy Ollama Layer
+	r.Group(func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return auth.Middleware(token, next.ServeHTTP)
+		})
+		r.Post("/api/generate", b.HandleGenerate)
+		r.Post("/api/chat", b.HandleChat)
+		r.Post("/api/show", b.HandleShow)
+		r.Get("/api/tags", b.HandleTags)
+		r.Post("/api/embeddings", b.HandleEmbed)
+		r.Get("/api/version", b.HandleVersion)
+		r.Get("/api/ps", b.HandlePS)
+		r.Post("/api/pull", b.HandlePull)
+		r.Post("/api/delete", b.HandleDelete)
+		r.Post("/api/create", b.HandleCreate)
+		r.Post("/api/copy", b.HandleCopy)
+		r.Post("/api/push", b.HandlePush)
+	})
 
 	// OpenAI Layer
-	mux.HandleFunc("/v1/chat/completions", auth.Middleware(token, b.HandleOpenAIChat))
-	mux.HandleFunc("/v1/completions", auth.Middleware(token, b.HandleOpenAICompletions))
-	mux.HandleFunc("/v1/models", auth.Middleware(token, b.HandleOpenAIModels))
-	mux.HandleFunc("/v1/embeddings", auth.Middleware(token, b.HandleOpenAIEmbeddings))
+	r.Group(func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return auth.Middleware(token, next.ServeHTTP)
+		})
+		r.Post("/v1/chat/completions", b.HandleOpenAIChat)
+		r.Post("/v1/completions", b.HandleOpenAICompletions)
+		r.Get("/v1/models", b.HandleOpenAIModels)
+		r.Post("/v1/embeddings", b.HandleOpenAIEmbeddings)
+	})
 
-	// Management Layer
-	mux.HandleFunc("/register", auth.Middleware(token, b.HandleRegister))
-	mux.HandleFunc("/api/status", auth.Middleware(token, b.HandleAPIStatus))
-	mux.HandleFunc("/api/logs", auth.Middleware(token, b.HandleLogs))
-	mux.HandleFunc("/api/log/collect", auth.Middleware(token, b.HandleLogCollect))
-	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
-	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
-	mux.HandleFunc("/api/manage/model/unload", auth.Middleware(token, b.HandleModelUnload))
-	mux.HandleFunc("/api/manage/model/pull", auth.Middleware(token, b.HandleModelPull))
-	mux.HandleFunc("/api/manage/model/delete", auth.Middleware(token, b.HandleModelDelete))
-	mux.HandleFunc("/api/manage/test", auth.Middleware(token, b.HandleTestInference))
+	// Management Layer (Legacy compatibility)
+	r.Post("/register", auth.Middleware(remoteToken, b.HandleV1Register))
+	r.Post("/api/log/collect", auth.Middleware(remoteToken, b.HandleV1LogCollect))
+	r.Get("/api/status", auth.Middleware(token, b.HandleV1ClusterStatus))
+	r.Get("/api/logs", auth.Middleware(token, b.HandleV1Logs))
 
-	return mux
+	// Management API (V1 Structured)
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return auth.Middleware(token, next.ServeHTTP)
+		})
+
+		r.Get("/status", b.HandleV1ClusterStatus)
+		r.Get("/logs", b.HandleV1Logs)
+
+		r.Route("/nodes", func(r chi.Router) {
+			r.Get("/", b.HandleV1Nodes)
+			r.Post("/{id}/drain", b.HandleV1NodeDrain)
+			r.Post("/{id}/undrain", b.HandleV1NodeUndrain)
+		})
+
+		r.Route("/models", func(r chi.Router) {
+			r.Post("/pull", b.HandleV1ModelPull)
+			r.Delete("/{name}", b.HandleV1ModelDelete)
+			r.Post("/{name}/unload", b.HandleV1ModelUnload)
+		})
+
+		r.Get("/jobs/{id}", b.HandleV1JobStatus)
+		r.Post("/test", b.HandleV1TestInference)
+	})
+
+	return r
 }

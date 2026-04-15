@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"context"
@@ -52,9 +53,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		}()
 	}()
 
-	b.Mu.RLock()
 	isSaturated := b.Queue.pq.Len() > 0
-	b.Mu.RUnlock()
 
 	// First attempt
 	ctx1, cancel1 := context.WithCancel(ctx)
@@ -171,9 +170,9 @@ func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc,
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		b.recordError(addr)
-		b.workloadMu.Lock()
-		b.NodeWorkloads[addr]--
-		b.workloadMu.Unlock()
+		b.State.DoAsync(func(s *state.ClusterState) {
+			s.NodeWorkloads[addr]--
+		})
 
 		select {
 		case b.MetricCh <- metricEntry{id, modelName, 0, false}:
@@ -184,8 +183,6 @@ func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc,
 	}
 
 	// Wrap body to decrement workload on close.
-	// We ALSO want to call the attempt-specific cancel() when the body is closed
-	// to release any internal resources tied to that attempt's context.
 	wrapped := &workloadBody{ReadCloser: resp.Body, b: b, addr: addr}
 	resp.Body = &cancelBody{ReadCloser: wrapped, cancel: cancel}
 

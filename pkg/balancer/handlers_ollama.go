@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
@@ -24,13 +25,13 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.pendingMu.Lock()
-	b.PendingRequests[req.Model]++
-	b.pendingMu.Unlock()
+	b.State.Do(func(s *state.ClusterState) {
+		s.PendingRequests[req.Model]++
+	})
 	defer func() {
-		b.pendingMu.Lock()
-		b.PendingRequests[req.Model]--
-		b.pendingMu.Unlock()
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[req.Model]--
+		})
 	}()
 
 	body, _ := json.Marshal(req)
@@ -60,13 +61,13 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.pendingMu.Lock()
-	b.PendingRequests[req.Model]++
-	b.pendingMu.Unlock()
+	b.State.Do(func(s *state.ClusterState) {
+		s.PendingRequests[req.Model]++
+	})
 	defer func() {
-		b.pendingMu.Lock()
-		b.PendingRequests[req.Model]--
-		b.pendingMu.Unlock()
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[req.Model]--
+		})
 	}()
 
 	body, _ := json.Marshal(req)
@@ -105,23 +106,22 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleTags(w http.ResponseWriter, _ *http.Request) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
+	snapshot := b.State.GetSnapshot()
 
 	modelMap := make(map[string]models.ModelInfo)
-	for _, agent := range b.Agents {
+	for _, agent := range snapshot.Agents {
 		// Include active models (running)
 		for _, mName := range agent.ActiveModels {
 			if _, ok := modelMap[mName]; !ok {
 				modelMap[mName] = models.ModelInfo{
-					Name:       mName,
+					Model:      mName,
 					ModifiedAt: time.Now(),
 				}
 			}
 		}
 		// Include local models (on disk)
 		for _, mInfo := range agent.LocalModels {
-			modelMap[mInfo.Name] = mInfo
+			modelMap[mInfo.Model] = mInfo
 		}
 	}
 
@@ -165,38 +165,37 @@ func (b *Balancer) HandleVersion(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (b *Balancer) HandlePS(w http.ResponseWriter, _ *http.Request) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
+	snapshot := b.State.GetSnapshot()
 
 	type psModel struct {
 		Name   string `json:"name"`
 		Size   int64  `json:"size"`
 		Digest string `json:"digest"`
 	}
-	var models []psModel
+	var psModels []psModel
 	seen := make(map[string]bool)
 
-	for _, agent := range b.Agents {
+	for _, agent := range snapshot.Agents {
 		for _, mName := range agent.ActiveModels {
 			if !seen[mName] {
-				models = append(models, psModel{Name: mName})
+				psModels = append(psModels, psModel{Name: mName})
 				seen[mName] = true
 			}
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"models": models})
+	json.NewEncoder(w).Encode(map[string]interface{}{"models": psModels})
 }
 
 func (b *Balancer) HandlePull(w http.ResponseWriter, r *http.Request) {
-	// Standard Ollama /api/pull - proxy to HandleModelPull (cluster-wide)
-	b.HandleModelPull(w, r)
+	// Standard Ollama /api/pull - proxy to HandleV1ModelPull (cluster-wide)
+	b.HandleV1ModelPull(w, r)
 }
 
 func (b *Balancer) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	// Standard Ollama /api/delete - proxy to HandleModelDelete (cluster-wide)
-	b.HandleModelDelete(w, r)
+	// Standard Ollama /api/delete - proxy to HandleV1ModelDelete (cluster-wide)
+	b.HandleV1ModelDelete(w, r)
 }
 
 func (b *Balancer) HandleCreate(w http.ResponseWriter, r *http.Request) {

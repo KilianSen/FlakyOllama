@@ -1,18 +1,43 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/jobs"
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
+	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
-func (b *Balancer) HandleLogs(w http.ResponseWriter, r *http.Request) {
+// --- Helpers ---
+
+func (b *Balancer) jsonResponse(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if data != nil {
+		json.NewEncoder(w).Encode(data)
+	}
+}
+
+func (b *Balancer) jsonError(w http.ResponseWriter, status int, message string) {
+	b.jsonResponse(w, status, map[string]string{"error": message})
+}
+
+func generateJobID() string {
+	return fmt.Sprintf("job_%d_%d", time.Now().Unix(), rand.Intn(1000))
+}
+
+// --- Handlers ---
+
+func (b *Balancer) HandleV1Logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -30,7 +55,12 @@ func (b *Balancer) HandleLogs(w http.ResponseWriter, r *http.Request) {
 		close(ch)
 	}()
 
-	flusher, _ := w.(http.Flusher)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
 	for {
 		select {
 		case msg := <-ch:
@@ -44,45 +74,53 @@ func (b *Balancer) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, _ *http.Request) {
+func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request) {
+	snapshot := b.State.GetSnapshot()
+
 	totalWorkloads := 0
-	b.pendingMu.RLock()
-	for _, count := range b.PendingRequests {
-		totalWorkloads += count
-	}
 	pendingRequestsCopy := make(map[string]int)
-	for m, c := range b.PendingRequests {
+	for m, c := range snapshot.PendingRequests {
 		pendingRequestsCopy[m] = c
+		totalWorkloads += c
 	}
-	b.pendingMu.RUnlock()
 
 	modelMap := make(map[string]bool)
-	b.Mu.RLock()
-	for _, agent := range b.Agents {
+	var totalVRAM, usedVRAM uint64
+	var totalCores int
+	var sumCPU, sumMem float64
+	var healthyNodes int
+
+	agentsCopy := make(map[string]*models.NodeStatus)
+	for addr, agent := range snapshot.Agents {
+		a := agent // local copy
+		agentsCopy[addr] = &a
+
+		if agent.State == models.StateHealthy {
+			totalVRAM += agent.VRAMTotal
+			usedVRAM += agent.VRAMUsed
+			totalCores += agent.CPUCores
+			sumCPU += agent.CPUUsage
+			sumMem += agent.MemoryUsage
+			healthyNodes++
+		}
+
 		for _, model := range agent.LocalModels {
-			modelMap[model.Name] = true
+			modelMap[model.Model] = true
 		}
 		for _, model := range agent.ActiveModels {
 			modelMap[model] = true
 		}
 	}
-	agentsCopy := make(map[string]*models.NodeStatus)
-	for addr, agent := range b.Agents {
-		agentsCopy[addr] = agent
-	}
-	b.Mu.RUnlock()
 
-	// Include models currently being pulled for the first time
-	b.pullsMu.RLock()
-	for m := range b.InProgressPulls {
+	var avgCPU, avgMem float64
+	if healthyNodes > 0 {
+		avgCPU = sumCPU / float64(healthyNodes)
+		avgMem = sumMem / float64(healthyNodes)
+	}
+
+	for m := range snapshot.InProgressPulls {
 		modelMap[m] = true
 	}
-	// Copy InProgressPulls
-	pulls := make(map[string]time.Time)
-	for m, t := range b.InProgressPulls {
-		pulls[m] = t
-	}
-	b.pullsMu.RUnlock()
 
 	allModels := make([]string, 0, len(modelMap))
 	for m := range modelMap {
@@ -90,345 +128,319 @@ func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	sort.Strings(allModels)
 
-	// Copy NodeWorkloads
-	b.workloadMu.RLock()
-	workloads := make(map[string]int)
-	for addr, count := range b.NodeWorkloads {
-		workloads[addr] = count
-	}
-	b.workloadMu.RUnlock()
-
 	status := models.ClusterStatus{
 		Nodes:           agentsCopy,
 		PendingRequests: pendingRequestsCopy,
-		InProgressPulls: pulls,
-		NodeWorkloads:   workloads,
+		InProgressPulls: snapshot.InProgressPulls,
+		NodeWorkloads:   snapshot.NodeWorkloads,
 		QueueDepth:      b.Queue.pq.Len(),
 		ActiveWorkloads: totalWorkloads,
 		AllModels:       allModels,
+		TotalVRAM:       totalVRAM,
+		UsedVRAM:        usedVRAM,
+		TotalCPUCores:   totalCores,
+		AvgCPUUsage:     avgCPU,
+		AvgMemoryUsage:  avgMem,
+		UptimeSeconds:   int64(time.Since(b.StartTime).Seconds()),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	b.jsonResponse(w, http.StatusOK, status)
 }
 
-func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	addr := r.URL.Query().Get("addr")
-	b.Mu.Lock()
+func (b *Balancer) HandleV1Nodes(w http.ResponseWriter, r *http.Request) {
+	snapshot := b.State.GetSnapshot()
+	nodes := make([]models.NodeStatus, 0, len(snapshot.Agents))
+	for _, agent := range snapshot.Agents {
+		nodes = append(nodes, agent)
+	}
+
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].Address < nodes[j].Address
+	})
+
+	b.jsonResponse(w, http.StatusOK, nodes)
+}
+
+func (b *Balancer) HandleV1NodeDrain(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		b.jsonError(w, http.StatusBadRequest, "node id required")
+		return
+	}
+
 	found := false
-	for _, a := range b.Agents {
-		if (addr != "" && a.Address == addr) || (id != "" && a.ID == id) {
-			a.Draining = true
-			found = true
-			if addr != "" {
-				break
+	b.State.Do(func(s *state.ClusterState) {
+		for _, a := range s.Agents {
+			if a.ID == id || a.Address == id {
+				a.Draining = true
+				found = true
 			}
 		}
-	}
-	b.Mu.Unlock()
+	})
 
 	if found {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		b.jsonResponse(w, http.StatusOK, map[string]string{"status": "draining", "id": id})
 	} else {
-		http.Error(w, "Node not found", http.StatusNotFound)
+		b.jsonError(w, http.StatusNotFound, "node not found")
 	}
 }
 
-func (b *Balancer) HandleNodeUndrain(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	addr := r.URL.Query().Get("addr")
-	b.Mu.Lock()
+func (b *Balancer) HandleV1NodeUndrain(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		b.jsonError(w, http.StatusBadRequest, "node id required")
+		return
+	}
+
 	found := false
-	for _, a := range b.Agents {
-		if (addr != "" && a.Address == addr) || (id != "" && a.ID == id) {
-			a.Draining = false
-			found = true
-			if addr != "" {
-				break
+	b.State.Do(func(s *state.ClusterState) {
+		for _, a := range s.Agents {
+			if a.ID == id || a.Address == id {
+				a.Draining = false
+				found = true
 			}
 		}
-	}
-	b.Mu.Unlock()
+	})
 
 	if found {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		b.jsonResponse(w, http.StatusOK, map[string]string{"status": "active", "id": id})
 	} else {
-		http.Error(w, "Node not found", http.StatusNotFound)
+		b.jsonError(w, http.StatusNotFound, "node not found")
 	}
 }
 
-func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.URL.Query().Get("id")
-	nodeAddr := r.URL.Query().Get("addr")
-	model := r.URL.Query().Get("model")
+func (b *Balancer) HandleV1JobStatus(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	job, ok := b.Jobs.GetJob(id)
+	if !ok {
+		b.jsonError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, job)
+}
 
-	b.Mu.RLock()
-	var targets []*models.NodeStatus
-	if nodeID != "" || nodeAddr != "" {
-		for _, a := range b.Agents {
-			if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
-				targets = append(targets, a)
-				if nodeAddr != "" {
-					break
-				}
+func (b *Balancer) HandleV1ModelUnload(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var req struct {
+		NodeID   string `json:"node_id"`
+		NodeAddr string `json:"node_addr"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	if name == "" {
+		b.jsonError(w, http.StatusBadRequest, "model name required")
+		return
+	}
+
+	snapshot := b.State.GetSnapshot()
+	var targets []string
+	if req.NodeID != "" || req.NodeAddr != "" {
+		for addr, a := range snapshot.Agents {
+			if a.Address == req.NodeAddr || a.ID == req.NodeID {
+				targets = append(targets, addr)
 			}
 		}
 	} else {
-		for _, a := range b.Agents {
-			targets = append(targets, a)
+		for addr := range snapshot.Agents {
+			targets = append(targets, addr)
 		}
 	}
-	b.Mu.RUnlock()
 
 	if len(targets) == 0 {
-		http.Error(w, "Node not found", http.StatusNotFound)
+		b.jsonError(w, http.StatusNotFound, "no target nodes found")
 		return
 	}
 
-	body, _ := json.Marshal(map[string]string{"model": model})
-	if nodeID != "" || nodeAddr != "" {
-		for _, agent := range targets {
-			logging.Global.Infof("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
-			go b.sendToAgent(agent.Address, "/models/unload", body)
-		}
-	} else {
-		logging.Global.Infof("Unloading model %s cluster-wide", model)
-		b.Broadcast("/models/unload", body)
+	body, _ := json.Marshal(map[string]string{"model": name})
+	for _, addr := range targets {
+		logging.Global.Infof("Unloading model %s from agent %s", name, addr)
+		go b.sendToAgentWithContext(context.Background(), addr, "/models/unload", body)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	b.jsonResponse(w, http.StatusAccepted, map[string]string{"status": "unload_triggered", "model": name})
 }
 
-func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.URL.Query().Get("id")
-	nodeAddr := r.URL.Query().Get("addr")
-	model := r.FormValue("model")
-	if model == "" {
-		model = r.URL.Query().Get("model")
-	}
-	if model == "" {
-		// Try JSON body
-		var req struct {
-			Model string `json:"model"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-		model = req.Model
+func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model    string `json:"model"`
+		NodeID   string `json:"node_id"`
+		NodeAddr string `json:"node_addr"`
 	}
 
-	if model == "" {
-		http.Error(w, "Model name required", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.Model = r.FormValue("model")
+	}
+
+	if req.Model == "" {
+		b.jsonError(w, http.StatusBadRequest, "model name required")
 		return
 	}
 
-	body, _ := json.Marshal(map[string]string{"model": model})
-	if nodeID != "" || nodeAddr != "" {
-		b.Mu.RLock()
-		defer b.Mu.RUnlock()
-		// Single node or group pull
-		for _, agent := range b.Agents {
-			if (nodeAddr != "" && agent.Address == nodeAddr) || (nodeID != "" && agent.ID == nodeID) {
-				logging.Global.Infof("Pulling model %s on agent %s (%s)", model, agent.ID, agent.Address)
-				go b.sendToAgent(agent.Address, "/models/pull", body)
-				if nodeAddr != "" {
+	jobID := generateJobID()
+	b.Jobs.CreateJob(jobID, "model_pull")
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
+		j.Status = jobs.StatusRunning
+		j.Message = "Starting pull for " + req.Model
+	})
+
+	go func() {
+		body, _ := json.Marshal(map[string]string{"model": req.Model})
+		var err error
+		if req.NodeID != "" || req.NodeAddr != "" {
+			snapshot := b.State.GetSnapshot()
+			found := false
+			for addr, agent := range snapshot.Agents {
+				if agent.Address == req.NodeAddr || agent.ID == req.NodeID {
+					_, err = b.sendToAgentWithContext(context.Background(), addr, "/models/pull", body)
+					found = true
 					break
 				}
 			}
-		}
-	} else {
-		// Cluster-wide pull - Idempotency Check
-		b.pullsMu.Lock()
-		if startTime, ok := b.InProgressPulls[model]; ok {
-			if time.Since(startTime) < 10*time.Minute {
-				b.pullsMu.Unlock()
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]string{"status": "ignored", "message": "Pull already in progress"})
-				return
+			if !found {
+				err = fmt.Errorf("node not found")
 			}
+		} else {
+			// Cluster-wide pull
+			b.State.Do(func(s *state.ClusterState) {
+				s.InProgressPulls[req.Model] = time.Now()
+			})
+			b.Broadcast("/models/pull", body)
 		}
-		b.InProgressPulls[model] = time.Now()
-		b.pullsMu.Unlock()
 
-		logging.Global.Infof("Pulling model %s cluster-wide", model)
-		b.Broadcast("/models/pull", body)
-	}
+		b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
+			if err != nil {
+				j.Status = jobs.StatusFailed
+				j.Message = err.Error()
+			} else {
+				j.Status = jobs.StatusCompleted
+				j.Message = "Pull triggered for " + req.Model
+				j.Progress = 1.0
+			}
+		})
+	}()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Pull triggered for " + model})
+	b.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
+		"job_id": jobID,
+		"status": "pull_triggered",
+	})
 }
 
-func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.URL.Query().Get("id")
-	nodeAddr := r.URL.Query().Get("addr")
-	model := r.URL.Query().Get("model")
-
-	b.Mu.RLock()
-	var targets []*models.NodeStatus
-	if nodeID != "" || nodeAddr != "" {
-		for _, a := range b.Agents {
-			if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
-				targets = append(targets, a)
-				if nodeAddr != "" {
-					break
-				}
-			}
-		}
-	} else {
-		for _, a := range b.Agents {
-			targets = append(targets, a)
-		}
-	}
-	b.Mu.RUnlock()
-
-	if len(targets) == 0 {
-		http.Error(w, "Node not found", http.StatusNotFound)
+func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		b.jsonError(w, http.StatusBadRequest, "model name required")
 		return
 	}
 
-	body, _ := json.Marshal(map[string]string{"model": model})
-	if nodeID != "" || nodeAddr != "" {
-		for _, agent := range targets {
-			logging.Global.Infof("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
-			go b.sendToAgent(agent.Address, "/models/delete", body)
-		}
-	} else {
-		logging.Global.Infof("Deleting model %s cluster-wide", model)
+	jobID := generateJobID()
+	b.Jobs.CreateJob(jobID, "model_delete")
+
+	go func() {
+		b.Jobs.UpdateJob(jobID, func(j *jobs.Job) { j.Status = jobs.StatusRunning })
+		body, _ := json.Marshal(map[string]string{"model": name})
 		b.Broadcast("/models/delete", body)
-	}
+		b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
+			j.Status = jobs.StatusCompleted
+			j.Progress = 1.0
+		})
+	}()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	b.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
+		"job_id": jobID,
+		"status": "delete_triggered",
+	})
 }
 
-func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
-	model := r.FormValue("model")
-	prompt := r.FormValue("prompt")
-	nodeID := r.FormValue("node_id")
-	nodeAddr := r.FormValue("node_addr")
-
-	if model == "" || prompt == "" {
-		// Try JSON body
-		var req struct {
-			Model    string `json:"model"`
-			Prompt   string `json:"prompt"`
-			NodeID   string `json:"node_id"`
-			NodeAddr string `json:"node_addr"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
-			model = req.Model
-			prompt = req.Prompt
-			nodeID = req.NodeID
-			nodeAddr = req.NodeAddr
-		}
-	}
-
-	if model == "" || prompt == "" {
-		http.Error(w, "Model and Prompt are required", http.StatusBadRequest)
+func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request) {
+	var req models.InferenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	req := models.InferenceRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: false,
+	if req.Model == "" || req.Prompt == "" {
+		b.jsonError(w, http.StatusBadRequest, "model and prompt are required")
+		return
 	}
 
-	b.pendingMu.Lock()
-	b.PendingRequests[req.Model]++
-	b.pendingMu.Unlock()
+	b.State.Do(func(s *state.ClusterState) {
+		s.PendingRequests[req.Model]++
+	})
 	defer func() {
-		b.pendingMu.Lock()
-		b.PendingRequests[req.Model]--
-		b.pendingMu.Unlock()
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[req.Model]--
+		})
 	}()
 
 	body, _ := json.Marshal(req)
-	var resp *http.Response
-	var agentID string
-	var err error
-
-	if nodeID != "" || nodeAddr != "" {
-		b.Mu.RLock()
-		var target *models.NodeStatus
-		for _, a := range b.Agents {
-			if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
-				target = a
-				break
-			}
-		}
-		b.Mu.RUnlock()
-
-		if target == nil {
-			http.Error(w, "Node not found", http.StatusNotFound)
-			return
-		}
-		agentID = target.ID
-		resp, err = b.sendToAgent(target.Address, "/inference", body)
-	} else {
-		resp, agentID, _, err = b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr, false, 0)
-	}
+	resp, agentID, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr, false, 0)
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	var result models.InferenceResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		http.Error(w, "Failed to decode response", http.StatusInternalServerError)
+		b.jsonError(w, http.StatusInternalServerError, "failed to decode response")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"agent_id": agentID,
 		"response": result.Response,
 	})
 }
 
-func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {
+func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 	var req models.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		b.jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if req.ID == "" || req.Address == "" {
+		b.jsonError(w, http.StatusBadRequest, "id and address are required")
 		return
 	}
 
 	// Address fix for agents registering with 0.0.0.0 or empty address
-	if strings.HasPrefix(req.Address, "0.0.0.0:") || strings.HasPrefix(req.Address, ":") {
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		_, port, _ := net.SplitHostPort(req.Address)
-		req.Address = net.JoinHostPort(host, port)
+	addr := req.Address
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		if host == "0.0.0.0" || host == "" {
+			remoteHost, _, _ := net.SplitHostPort(r.RemoteAddr)
+			addr = net.JoinHostPort(remoteHost, port)
+		}
 	}
 
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
+	b.State.UpsertNode(addr, &models.NodeStatus{
+		ID:       req.ID,
+		Address:  addr,
+		Tier:     req.Tier,
+		State:    models.StateHealthy,
+		Errors:   0,
+		LastSeen: time.Now(),
+	})
 
-	b.Agents[req.Address] = &models.NodeStatus{
-		ID:      req.ID,
-		Address: req.Address,
-		Tier:    req.Tier,
-		State:   models.StateHealthy,
-		Errors:  0,
-	}
-	logging.Global.Infof("Registered agent: %s at %s [Tier: %s] (resetting health)", req.ID, req.Address, req.Tier)
-
-	w.WriteHeader(http.StatusOK)
+	logging.Global.Infof("Registered agent: %s at %s [Tier: %s]", req.ID, addr, req.Tier)
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "registered"})
 }
 
-func (b *Balancer) HandleLogCollect(w http.ResponseWriter, r *http.Request) {
+func (b *Balancer) HandleV1LogCollect(w http.ResponseWriter, r *http.Request) {
 	var entry models.LogEntry
 	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		b.jsonError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
 	}
 
 	select {
 	case b.LogCh <- entry:
 	default:
 	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -1,10 +1,12 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/metrics"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -22,19 +24,26 @@ type workloadBody struct {
 func (w *workloadBody) Close() error {
 	err := w.ReadCloser.Close()
 	w.once.Do(func() {
-		w.b.workloadMu.Lock()
-		w.b.NodeWorkloads[w.addr]--
-		w.b.workloadMu.Unlock()
+		w.b.State.Do(func(s *state.ClusterState) {
+			s.NodeWorkloads[w.addr]--
+		})
 	})
 	return err
 }
 
 func (b *Balancer) sendToAgent(addr, path string, body []byte) (*http.Response, error) {
+	return b.sendToAgentWithContext(context.Background(), addr, path, body)
+}
+
+func (b *Balancer) sendToAgentWithContext(ctx context.Context, addr, path string, body []byte) (*http.Response, error) {
 	scheme := "http"
 	if b.Config.TLS.Enabled {
 		scheme = "https"
 	}
-	req, _ := http.NewRequest("POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if b.Config.RemoteToken != "" {
 		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
@@ -75,49 +84,45 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	case b.MetricCh <- metricEntry{agentAddr, modelName, latency, true}:
 	default:
 	}
-	// We still use ID for some metrics if we want to aggregate by "name",
-	// but here we should probably use Address or ID:Address
+
 	agentID := agentAddr
-	b.Mu.RLock()
-	if a, ok := b.Agents[agentAddr]; ok {
-		agentID = a.ID
-	}
-	b.Mu.RUnlock()
+	b.State.Do(func(s *state.ClusterState) {
+		if a, ok := s.Agents[agentAddr]; ok {
+			agentID = a.ID
+		}
+		s.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
+	})
 
 	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
 	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
-
-	b.lastUsedMu.Lock()
-	b.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
-	b.lastUsedMu.Unlock()
 }
 
 func (b *Balancer) recordError(addr string) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
-	if a, ok := b.Agents[addr]; ok {
-		a.Errors++
-		oldState := a.State
-		if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
-			a.State = models.StateBroken
-			a.CooloffUntil = time.Now().Add(time.Duration(b.Config.CircuitBreaker.CooloffSec) * time.Second)
-		} else {
-			a.State = models.StateDegraded
+	b.State.Do(func(s *state.ClusterState) {
+		if a, ok := s.Agents[addr]; ok {
+			a.Errors++
+			oldState := a.State
+			if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
+				a.State = models.StateBroken
+				a.CooloffUntil = time.Now().Add(time.Duration(b.Config.CircuitBreaker.CooloffSec) * time.Second)
+			} else {
+				a.State = models.StateDegraded
+			}
+			if oldState != a.State {
+				logging.Global.Infof("Node %s (%s) state changed: %s -> %s (errors: %d, cooloff until: %v)", a.ID, addr, oldState.String(), a.State.String(), a.Errors, a.CooloffUntil)
+			}
 		}
-		if oldState != a.State {
-			logging.Global.Infof("Node %s (%s) state changed: %s -> %s (errors: %d, cooloff until: %v)", a.ID, addr, oldState.String(), a.State.String(), a.Errors, a.CooloffUntil)
-		}
-	}
+	})
 }
 
 func (b *Balancer) recordSuccess(addr string) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
-	if a, ok := b.Agents[addr]; ok {
-		if a.State != models.StateHealthy {
-			logging.Global.Infof("Node %s (%s) recovered to Healthy state", a.ID, addr)
+	b.State.Do(func(s *state.ClusterState) {
+		if a, ok := s.Agents[addr]; ok {
+			if a.State != models.StateHealthy {
+				logging.Global.Infof("Node %s (%s) recovered to Healthy state", a.ID, addr)
+			}
+			a.Errors = 0
+			a.State = models.StateHealthy
 		}
-		a.Errors = 0
-		a.State = models.StateHealthy
-	}
+	})
 }

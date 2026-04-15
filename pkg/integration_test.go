@@ -68,13 +68,11 @@ func TestIntegration(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	success := false
 	for time.Now().Before(deadline) {
-		b.Mu.RLock()
-		if agent, ok := b.Agents[a.Address]; ok && len(agent.ActiveModels) > 0 {
+		snapshot := b.State.GetSnapshot()
+		if agent, ok := snapshot.Agents[a.Address]; ok && len(agent.ActiveModels) > 0 {
 			success = true
-			b.Mu.RUnlock()
 			break
 		}
-		b.Mu.RUnlock()
 		time.Sleep(100 * time.Millisecond)
 	}
 

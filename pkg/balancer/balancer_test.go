@@ -19,14 +19,17 @@ func TestBalancer_Route(t *testing.T) {
 	}
 
 	// Test case 2: One agent, model not loaded
-	b.Agents["agent-1"] = &models.NodeStatus{
+	b.State.UpsertNode("localhost:8081", &models.NodeStatus{
 		ID:           "agent-1",
 		Address:      "localhost:8081",
 		CPUUsage:     10.0,
 		VRAMTotal:    10 * 1024 * 1024 * 1024,
 		LastSeen:     time.Now(),
 		ActiveModels: []string{},
-	}
+	})
+
+	// Wait for actor to process upsert
+	time.Sleep(10 * time.Millisecond)
 
 	id, addr, err := b.Route(models.InferenceRequest{Model: "llama2"}, "")
 	if err != nil {
@@ -40,14 +43,16 @@ func TestBalancer_Route(t *testing.T) {
 	}
 
 	// Test case 3: Two agents, one has model loaded
-	b.Agents["agent-2"] = &models.NodeStatus{
+	b.State.UpsertNode("localhost:8082", &models.NodeStatus{
 		ID:           "agent-2",
 		Address:      "localhost:8082",
 		CPUUsage:     20.0,
 		VRAMTotal:    10 * 1024 * 1024 * 1024,
 		LastSeen:     time.Now(),
 		ActiveModels: []string{"llama2"},
-	}
+	})
+
+	time.Sleep(10 * time.Millisecond)
 
 	id, addr, err = b.Route(models.InferenceRequest{Model: "llama2"}, "")
 	if err != nil {
@@ -60,7 +65,12 @@ func TestBalancer_Route(t *testing.T) {
 
 	// Test case 4: Two agents, both have model loaded, pick lowest CPU
 	// Note: agent-2 currently has session affinity from previous test, so it will still be picked due to stickiness bonus.
-	b.Agents["agent-1"].ActiveModels = []string{"llama2"}
+	b.State.UpdateNode("localhost:8081", func(n *models.NodeStatus) {
+		n.ActiveModels = []string{"llama2"}
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
 	id, addr, err = b.Route(models.InferenceRequest{Model: "llama2"}, "")
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
@@ -85,10 +95,11 @@ func TestBalancer_HandleRegister(t *testing.T) {
 		t.Fatalf("Expected status 200, got %d", rr.Code)
 	}
 
-	b.Mu.RLock()
+	time.Sleep(10 * time.Millisecond) // Wait for actor
+
 	expectedAddr := "192.168.1.50:8081"
-	agent, ok := b.Agents[expectedAddr]
-	b.Mu.RUnlock()
+	snapshot := b.State.GetSnapshot()
+	agent, ok := snapshot.Agents[expectedAddr]
 
 	if !ok {
 		t.Fatalf("Agent at %s not registered", expectedAddr)

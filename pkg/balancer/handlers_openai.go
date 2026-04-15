@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/shared/models"
 	"bufio"
 	"encoding/json"
@@ -35,13 +36,13 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.pendingMu.Lock()
-	b.PendingRequests[ollamaReq.Model]++
-	b.pendingMu.Unlock()
+	b.State.Do(func(s *state.ClusterState) {
+		s.PendingRequests[ollamaReq.Model]++
+	})
 	defer func() {
-		b.pendingMu.Lock()
-		b.PendingRequests[ollamaReq.Model]--
-		b.pendingMu.Unlock()
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[ollamaReq.Model]--
+		})
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
@@ -166,13 +167,13 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	b.pendingMu.Lock()
-	b.PendingRequests[ollamaReq.Model]++
-	b.pendingMu.Unlock()
+	b.State.Do(func(s *state.ClusterState) {
+		s.PendingRequests[ollamaReq.Model]++
+	})
 	defer func() {
-		b.pendingMu.Lock()
-		b.PendingRequests[ollamaReq.Model]--
-		b.pendingMu.Unlock()
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[ollamaReq.Model]--
+		})
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
@@ -275,16 +276,15 @@ func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *htt
 }
 
 func (b *Balancer) HandleOpenAIModels(w http.ResponseWriter, r *http.Request) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
+	snapshot := b.State.GetSnapshot()
 
 	modelMap := make(map[string]bool)
-	for _, agent := range b.Agents {
+	for _, agent := range snapshot.Agents {
 		for _, m := range agent.ActiveModels {
 			modelMap[m] = true
 		}
 		for _, m := range agent.LocalModels {
-			modelMap[m.Name] = true
+			modelMap[m.Model] = true
 		}
 	}
 
