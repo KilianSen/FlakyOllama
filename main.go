@@ -50,7 +50,7 @@ func main() {
 			cfg.AuthToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
 		}
 		if cfg.RemoteToken == "" {
-			cfg.RemoteToken = strings.Trim(os.Getenv("BALANCER_TOKEN"), "\"'")
+			cfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
 		}
 	}
 
