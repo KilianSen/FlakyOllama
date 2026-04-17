@@ -91,6 +91,11 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clean model name
+	if strings.HasPrefix(req.Model, "a.") {
+		req.Model = strings.TrimPrefix(req.Model, "a.")
+	}
+
 	body, _ := json.Marshal(req)
 	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body, r.RemoteAddr, false, 0)
 	if err != nil {

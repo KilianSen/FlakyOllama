@@ -221,6 +221,9 @@ func (b *Balancer) HandleV1JobStatus(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleV1ModelUnload(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if strings.HasPrefix(name, "a.") {
+		name = strings.TrimPrefix(name, "a.")
+	}
 	var req struct {
 		NodeID   string `json:"node_id"`
 		NodeAddr string `json:"node_addr"`
@@ -269,6 +272,10 @@ func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		req.Model = r.FormValue("model")
+	}
+
+	if strings.HasPrefix(req.Model, "a.") {
+		req.Model = strings.TrimPrefix(req.Model, "a.")
 	}
 
 	if req.Model == "" {
@@ -327,6 +334,9 @@ func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if strings.HasPrefix(name, "a.") {
+		name = strings.TrimPrefix(name, "a.")
+	}
 	if name == "" {
 		b.jsonError(w, http.StatusBadRequest, "model name required")
 		return

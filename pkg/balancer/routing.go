@@ -13,6 +13,11 @@ import (
 
 // Route finds the best agent for an inference request using adaptive heuristics and session stickiness.
 func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, string, error) {
+	// Clean model name (strip prefixes like a. added by some tools)
+	if strings.HasPrefix(req.Model, "a.") {
+		req.Model = strings.TrimPrefix(req.Model, "a.")
+	}
+
 	snapshot := b.State.GetSnapshot()
 	pending := snapshot.PendingRequests[req.Model]
 
@@ -42,7 +47,12 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 			continue
 		}
 		if a.VRAMTotal < minVRAM {
-			continue
+			// If not enough VRAM, check if we can run on CPU (System RAM)
+			// We allow a small buffer for OS/other processes
+			if a.MemoryTotal < minVRAM+(1024*1024*1024) {
+				continue
+			}
+			// Node qualifies via CPU, but will get a lower score later
 		}
 
 		// Use Performance Cache
@@ -175,7 +185,10 @@ func estimateVRAMFallback(model string) uint64 {
 	if strings.Contains(model, "3b") || strings.Contains(model, "4b") {
 		return 2 * 1024 * 1024 * 1024
 	}
-	return 1 * 1024 * 1024 * 1024 // 1GB minimum
+	if strings.Contains(model, "1b") || strings.Contains(model, "2b") {
+		return 1536 * 1024 * 1024 // 1.5GB to be safe for 1.3GB models
+	}
+	return 512 * 1024 * 1024 // 512MB absolute minimum
 }
 
 func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
@@ -201,7 +214,12 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 
 	for _, a := range snapshot.Agents {
 		// Connectivity and basic requirements
-		if time.Since(a.LastSeen) > 5*time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken || a.Draining {
+		if time.Since(a.LastSeen) > 5*time.Second || a.State == models.StateBroken || a.Draining {
+			continue
+		}
+
+		// Capability check: VRAM or System RAM
+		if a.VRAMTotal < minVRAM && a.MemoryTotal < minVRAM+(1024*1024*1024) {
 			continue
 		}
 

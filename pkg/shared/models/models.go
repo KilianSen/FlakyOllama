@@ -33,6 +33,7 @@ type NodeStatus struct {
 	CPUUsage       float64     `json:"cpu_usage"` // Percentage
 	CPUCores       int         `json:"cpu_cores"`
 	MemoryUsage    float64     `json:"memory_usage"` // Percentage
+	MemoryTotal    uint64      `json:"memory_total"` // Bytes
 	VRAMTotal      uint64      `json:"vram_total"`   // Bytes
 	VRAMUsed       uint64      `json:"vram_used"`    // Bytes
 	GPUModel       string      `json:"gpu_model"`

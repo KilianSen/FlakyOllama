@@ -39,6 +39,7 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 	vm, err := mem.VirtualMemory()
 	if err == nil {
 		status.MemoryUsage = vm.UsedPercent
+		status.MemoryTotal = vm.Total
 	}
 
 	// Real GPU monitoring via nvidia-smi
