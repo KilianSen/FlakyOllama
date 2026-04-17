@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -114,6 +115,7 @@ func (b *Balancer) HandleTags(w http.ResponseWriter, _ *http.Request) {
 		for _, mName := range agent.ActiveModels {
 			if _, ok := modelMap[mName]; !ok {
 				modelMap[mName] = models.ModelInfo{
+					Name:       mName,
 					Model:      mName,
 					ModifiedAt: time.Now(),
 				}
@@ -121,6 +123,10 @@ func (b *Balancer) HandleTags(w http.ResponseWriter, _ *http.Request) {
 		}
 		// Include local models (on disk)
 		for _, mInfo := range agent.LocalModels {
+			// Ensure Name is populated if it came from an older agent or is missing
+			if mInfo.Name == "" {
+				mInfo.Name = mInfo.Model
+			}
 			modelMap[mInfo.Model] = mInfo
 		}
 	}
@@ -129,6 +135,10 @@ func (b *Balancer) HandleTags(w http.ResponseWriter, _ *http.Request) {
 	for _, m := range modelMap {
 		modelList = append(modelList, m)
 	}
+
+	sort.Slice(modelList, func(i, j int) bool {
+		return modelList[i].Name < modelList[j].Name
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models.TagsResponse{Models: modelList})

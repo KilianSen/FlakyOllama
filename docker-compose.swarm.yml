@@ -1,32 +1,6 @@
 version: '3.8'
 
 services:
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}
-    volumes:
-      - openwebui:/app/backend/data
-    ports:
-      - ${OPEN_WEBUI_PORT-3000}:8080
-    environment:
-      - 'OAUTH_ADMIN_ROLES=admins'
-      - 'OAUTH_CLIENT_ID=94e3d3fc-e850-4939-9f0d-e2e299f36cf8'
-      - 'OAUTH_CLIENT_SECRET=vMBZB8P8YD8NJ6gSTjdz7JKjn1cpeRbx'
-      - 'OAUTH_PROVIDER_NAME=OpenID'
-      - 'OAUTH_ROLES_CLAIM=groups'
-      - 'OAUTH_SCOPES=openid email profile groups'
-      - 'OPENID_PROVIDER_URL=https://openid.kiliansen.de/.well-known/openid-configuration'
-      - 'ENABLE_API_KEYS=True'
-      - 'ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS=True'
-      - 'OPENAI_API_BASE_URL=http://balancer:8080/v1'
-      - 'OPENAI_API_KEY=${BALANCER_TOKEN:-your-secret-balancer-token}'
-    restart: unless-stopped
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
-
   balancer:
     image: ghcr.io/kiliansen/flakyollama-balancer:latest
     ports:
