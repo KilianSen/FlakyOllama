@@ -69,6 +69,45 @@ export interface InferenceResponse {
   response: string;
 }
 
+export interface RoutingWeights {
+  cpu_load_weight: number;
+  workload_penalty: number;
+  success_rate_weight: number;
+  latency_weight: number;
+  loaded_model_bonus: number;
+  local_model_bonus: number;
+}
+
+export interface CBConfig {
+  error_threshold: number;
+  cooloff_sec: number;
+}
+
+export interface TLSConfig {
+  enabled: boolean;
+  cert_file: string;
+  key_file: string;
+  insecure_skip_verify: boolean;
+}
+
+export interface Config {
+  port: number;
+  host: string;
+  db_path: string;
+  auth_token: string;
+  remote_token: string;
+  max_queue_depth: number;
+  enable_hedging: boolean;
+  hedging_percentile: number;
+  circuit_breaker: CBConfig;
+  weights: RoutingWeights;
+  stall_timeout_sec: number;
+  stale_threshold: number;
+  keep_alive_duration_sec: number;
+  tls: TLSConfig;
+  poll_interval_ms: number;
+}
+
 class FlakyOllamaSDK {
   private headers: Record<string, string>;
 
@@ -167,7 +206,20 @@ class FlakyOllamaSDK {
     };
     return () => eventSource.close();
   }
+
+  // Config
+  async getConfig(): Promise<Config> {
+    return this.request<Config>('/api/v1/config');
+  }
+
+  async updateConfig(config: Config): Promise<{ status: string }> {
+    return this.request('/api/v1/config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
 }
 
 export const sdk = new FlakyOllamaSDK(BALANCER_TOKEN);
+export const api = sdk;
 export default sdk;

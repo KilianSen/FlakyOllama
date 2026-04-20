@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, Config } from './api';
+import { api, type Config } from './api';
 import { X, Save, Settings } from 'lucide-react';
 
 interface Props {
@@ -16,8 +16,8 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
     if (isOpen) {
       setLoading(true);
       api.getConfig()
-        .then(cfg => setConfig(cfg))
-        .catch(err => console.error(err))
+        .then((cfg: Config) => setConfig(cfg))
+        .catch((err: Error) => console.error(err))
         .finally(() => setLoading(false));
     }
   }, [isOpen]);
@@ -32,14 +32,14 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
     try {
       await api.updateConfig(config);
       onClose();
-    } catch (err) {
+    } catch {
       alert('Failed to save configuration');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleChange = (field: string, value: any) => {
+  const handleChange = (field: string, value: string | number | boolean) => {
     if (!config) return;
     
     // Handle nested weight fields
