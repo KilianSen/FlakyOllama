@@ -17,6 +17,7 @@ type IdleTimeoutReader struct {
 
 	dataCh   chan readResult
 	stopCh   chan struct{}
+	doneCh   chan struct{}
 	once     sync.Once
 	leftover []byte
 }
@@ -33,6 +34,7 @@ func NewIdleTimeoutReader(inner io.ReadCloser, timeout time.Duration) *IdleTimeo
 		timer:   time.NewTimer(timeout),
 		dataCh:  make(chan readResult),
 		stopCh:  make(chan struct{}),
+		doneCh:  make(chan struct{}),
 	}
 }
 
@@ -76,7 +78,7 @@ func (r *IdleTimeoutReader) Read(p []byte) (n int, err error) {
 		return n, nil
 	case <-r.timer.C:
 		r.inner.Close()
-		<-ch // Wait for goroutine to exit to prevent data race
+		<-r.doneCh // Wait for goroutine to exit to prevent data race
 		return 0, ErrStalled
 	case <-r.stopCh:
 		return 0, io.EOF
@@ -84,6 +86,7 @@ func (r *IdleTimeoutReader) Read(p []byte) (n int, err error) {
 }
 
 func (r *IdleTimeoutReader) backgroundRead() {
+	defer close(r.doneCh)
 	defer close(r.dataCh)
 	for {
 		buf := make([]byte, 32*1024)

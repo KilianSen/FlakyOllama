@@ -64,7 +64,7 @@ func main() {
 		if dbPath == "" {
 			dbPath = "flakyollama.db"
 		}
-		b, err := balancer.NewBalancer(addr, dbPath, cfgPath, cfg)
+		b, err := balancer.NewBalancer(addr, dbPath, cfg)
 		if err != nil {
 			logging.Global.Errorf("Failed to initialize balancer: %v", err)
 			os.Exit(1)
