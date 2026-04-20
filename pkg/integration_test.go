@@ -36,7 +36,7 @@ func TestIntegration(t *testing.T) {
 	defer mockOllama.Close()
 
 	// 2. Start Balancer
-	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", nil)
+	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", "", nil)
 	balancerSrv := httptest.NewServer(b.NewMux())
 	defer balancerSrv.Close()
 

@@ -39,7 +39,7 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body)
+	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -47,13 +47,13 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if !oaiReq.Stream {
-		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentID)
+		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentAddr)
 	} else {
-		b.handleOpenAIChatStream(w, resp, oaiReq.Model, agentID)
+		b.handleOpenAIChatStream(w, resp, oaiReq.Model, agentAddr)
 	}
 }
 
-func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentID string) {
+func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
 	// Ollama chat non-stream is actually many chunks if we aren't careful, 
 	// but usually it's one big JSON if stream=false.
 	var ollamaResp struct {
@@ -83,12 +83,12 @@ func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.R
 		},
 	}
 
-	b.recordSuccess(agentID)
+	b.recordSuccess(agentAddr)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(oaiResp)
 }
 
-func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Response, model, agentID string) {
+func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -141,7 +141,7 @@ func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Resp
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-	b.recordSuccess(agentID)
+	b.recordSuccess(agentAddr)
 }
 
 func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +168,7 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body)
+	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -176,13 +176,13 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 	defer resp.Body.Close()
 
 	if !oaiReq.Stream {
-		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentID)
+		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentAddr)
 	} else {
-		b.handleOpenAICompletionStream(w, resp, oaiReq.Model, agentID)
+		b.handleOpenAICompletionStream(w, resp, oaiReq.Model, agentAddr)
 	}
 }
 
-func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *http.Response, model, agentID string) {
+func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
 	var ollamaResp struct {
 		Response string `json:"response"`
 	}
@@ -206,12 +206,12 @@ func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *
 		},
 	}
 
-	b.recordSuccess(agentID)
+	b.recordSuccess(agentAddr)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(oaiResp)
 }
 
-func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *http.Response, model, agentID string) {
+func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -263,7 +263,7 @@ func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *htt
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-	b.recordSuccess(agentID)
+	b.recordSuccess(agentAddr)
 }
 
 func (b *Balancer) HandleOpenAIModels(w http.ResponseWriter, r *http.Request) {

@@ -137,3 +137,9 @@ func (s *SQLiteStorage) GetP90Latency(modelName string) (time.Duration, error) {
 
 	return time.Duration(latencies[index] * float64(time.Second)), nil
 }
+
+func (s *SQLiteStorage) PruneMetrics(days int) error {
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	_, err := s.db.Exec("DELETE FROM metrics WHERE timestamp <= ?", cutoff)
+	return err
+}

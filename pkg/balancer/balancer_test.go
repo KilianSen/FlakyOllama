@@ -10,7 +10,7 @@ import (
 )
 
 func TestBalancer_Route(t *testing.T) {
-	b, _ := NewBalancer(":8080", ":memory:", nil)
+	b, _ := NewBalancer(":8080", ":memory:", "", nil)
 
 	// Test case 1: No agents
 	_, _, err := b.Route(models.InferenceRequest{Model: "llama2"})
@@ -68,7 +68,7 @@ func TestBalancer_Route(t *testing.T) {
 }
 
 func TestBalancer_HandleRegister(t *testing.T) {
-	b, _ := NewBalancer(":8080", ":memory:", nil)
+	b, _ := NewBalancer(":8080", ":memory:", "", nil)
 
 	// Mock registration request from an agent with 0.0.0.0
 	regBody := `{"id": "agent-0", "address": "0.0.0.0:8081"}`
@@ -83,11 +83,11 @@ func TestBalancer_HandleRegister(t *testing.T) {
 	}
 
 	b.Mu.RLock()
-	agent, ok := b.Agents["agent-0"]
+	agent, ok := b.Agents["192.168.1.50:8081"]
 	b.Mu.RUnlock()
 
 	if !ok {
-		t.Fatalf("Agent agent-0 not registered")
+		t.Fatalf("Agent not registered at 192.168.1.50:8081")
 	}
 
 	expectedAddr := "192.168.1.50:8081"

@@ -9,8 +9,10 @@ import {
   XCircle,
   Play,
   Layers,
-  RefreshCw
+  RefreshCw,
+  Settings
 } from 'lucide-react';
+import { SettingsModal } from './SettingsModal';
 
 const StateLabel = ({ state }: { state: number }) => {
   const states = ['Healthy', 'Degraded', 'Broken'];
@@ -44,6 +46,7 @@ const App = () => {
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{agent_id: string, response: string} | null>(null);
   const [testLoading, setTestLoading] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const fetchStatus = async () => {
     try {
@@ -145,7 +148,10 @@ const App = () => {
               <p className="text-lg font-bold text-gray-900 text-left">{status.queue_depth}</p>
             </div>
           </div>
-          <button onClick={fetchStatus} className="p-2 text-gray-500 hover:text-indigo-600 transition-colors">
+          <button onClick={() => setShowSettings(true)} className="p-2 text-gray-500 hover:text-indigo-600 transition-colors" title="Configuration">
+            <Settings className="w-6 h-6" />
+          </button>
+          <button onClick={fetchStatus} className="p-2 text-gray-500 hover:text-indigo-600 transition-colors" title="Refresh Telemetry">
             <RefreshCw className="w-6 h-6" />
           </button>
         </div>
@@ -359,6 +365,8 @@ const App = () => {
           </div>
         </div>
       </div>
+      
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
     </div>
   );
 };

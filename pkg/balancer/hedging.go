@@ -13,9 +13,9 @@ import (
 
 // HedgedResult wraps an HTTP response or an error.
 type HedgedResult struct {
-	Resp    *http.Response
-	AgentID string
-	Err     error
+	Resp      *http.Response
+	AgentAddr string
+	Err       error
 }
 
 // DoHedgedRequest sends a request to one node, and if it doesn't return headers by 'delay',
@@ -27,42 +27,69 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		p90 = 2 * time.Second // Default fallback
 	}
 
-	results := make(chan HedgedResult, 2)
+	b.Mu.RLock()
+	hedgingEnabled := b.Config.EnableHedging
+	b.Mu.RUnlock()
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// First attempt
+	if !hedgingEnabled {
+		results := make(chan HedgedResult, 1)
+		b.singleAttempt(ctx, modelName, path, body, results)
+		res := <-results
+		return res.Resp, res.AgentAddr, res.Err
+	}
+
+	results := make(chan HedgedResult, 2)
+	attempts := 1
 	go b.singleAttempt(ctx, modelName, path, body, results)
 
-	// Timer for second attempt
 	timer := time.NewTimer(p90)
 	defer timer.Stop()
 
 	var firstErr error
 	var secondStarted bool
+	readCount := 0
+
+	defer func() {
+		left := attempts - readCount
+		if left > 0 {
+			go func() {
+				for j := 0; j < left; j++ {
+					res := <-results
+					if res.Resp != nil {
+						io.Copy(io.Discard, res.Resp.Body)
+						res.Resp.Body.Close()
+					}
+				}
+			}()
+		}
+	}()
 
 	for i := 0; i < 2; i++ {
 		select {
 		case res := <-results:
+			readCount++
 			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
-				return res.Resp, res.AgentID, nil
+				return res.Resp, res.AgentAddr, nil
 			}
 
 			if res.Err != nil {
 				firstErr = res.Err
 			} else if res.Resp != nil {
-				firstErr = fmt.Errorf("agent %s returned status %d", res.AgentID, res.Resp.StatusCode)
+				firstErr = fmt.Errorf("agent %s returned status %d", res.AgentAddr, res.Resp.StatusCode)
+				io.Copy(io.Discard, res.Resp.Body)
 				res.Resp.Body.Close()
 			}
 
 			// If this was the first result and it failed, and we haven't started the second one, start it now.
 			if !secondStarted {
 				secondStarted = true
+				attempts++
 				timer.Stop() // No need to wait for timer anymore
 				go b.singleAttempt(ctx, modelName, path, body, results)
-			} else if i == 1 {
-				// This was the second result (either second attempt finished, or first finished after second started)
-				// and it also failed.
+			} else if readCount == attempts {
 				if firstErr != nil {
 					return nil, "", firstErr
 				}
@@ -71,6 +98,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		case <-timer.C:
 			if !secondStarted {
 				secondStarted = true
+				attempts++
 				go b.singleAttempt(ctx, modelName, path, body, results)
 			}
 			// Don't increment i here, we still want to wait for 2 results if possible
@@ -88,7 +116,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 
 func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, body []byte, results chan<- HedgedResult) {
 	// Route
-	id, addr, err := b.Route(models.InferenceRequest{Model: modelName})
+	_, addr, err := b.Route(models.InferenceRequest{Model: modelName})
 	if err != nil {
 		results <- HedgedResult{Err: err}
 		return
@@ -100,10 +128,11 @@ func (b *Balancer) singleAttempt(ctx context.Context, modelName, path string, bo
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
-		b.recordError(id)
-		b.Storage.RecordMetric(id, modelName, 0, false)
+		b.recordError(addr)
+		b.Storage.RecordMetric(addr, modelName, 0, false)
 	}
-	results <- HedgedResult{Resp: resp, AgentID: id, Err: err}
+	results <- HedgedResult{Resp: resp, AgentAddr: addr, Err: err}
 }

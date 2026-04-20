@@ -104,3 +104,11 @@ go.work.sum
 # env file
 .env
 
+.idea/copilot.data.migration.ask2agent.xml
+.idea/discord.xml
+.idea/FlakyOllama.iml
+.idea/git_toolbox_prj.xml
+.idea/modules.xml
+.idea/vcs.xml
+.idea/inspectionProfiles/Project_Default.xml
+.idea/.gitignore

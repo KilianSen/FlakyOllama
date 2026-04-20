@@ -53,6 +53,8 @@ func (r *IdleTimeoutReader) Read(p []byte) (n int, err error) {
 		}
 		return res.n, res.err
 	case <-r.timer.C:
+		r.inner.Close()
+		<-ch // Wait for goroutine to exit to prevent data race
 		return 0, ErrStalled
 	}
 }

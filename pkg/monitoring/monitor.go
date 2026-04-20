@@ -2,7 +2,6 @@ package monitoring
 
 import (
 	"FlakyOllama/pkg/models"
-	"math/rand"
 	"os/exec"
 	"strconv"
 	"strings"

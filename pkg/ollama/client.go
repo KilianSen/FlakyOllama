@@ -3,6 +3,7 @@ package ollama
 import (
 	"FlakyOllama/pkg/models"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,13 +20,19 @@ func NewClient(baseURL string) *Client {
 }
 
 // GenerateStream sends an inference request and returns the streaming response body.
-func (c *Client) GenerateStream(req models.InferenceRequest) (io.ReadCloser, int, error) {
+func (c *Client) GenerateStream(ctx context.Context, req models.InferenceRequest) (io.ReadCloser, int, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	resp, err := http.Post(c.BaseURL+"/api/generate", "application/json", bytes.NewBuffer(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/generate", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -40,13 +47,19 @@ func (c *Client) GenerateStream(req models.InferenceRequest) (io.ReadCloser, int
 }
 
 // ChatStream sends a chat request and returns the streaming response body.
-func (c *Client) ChatStream(req models.ChatRequest) (io.ReadCloser, int, error) {
+func (c *Client) ChatStream(ctx context.Context, req models.ChatRequest) (io.ReadCloser, int, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	resp, err := http.Post(c.BaseURL+"/api/chat", "application/json", bytes.NewBuffer(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/chat", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -106,7 +119,8 @@ func (c *Client) ListLocalModels() ([]models.ModelInfo, error) {
 func (c *Client) Delete(model string) error {
 	req, _ := http.NewRequest("DELETE", c.BaseURL+"/api/delete", bytes.NewBuffer([]byte(fmt.Sprintf(`{"name":"%s"}`, model))))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

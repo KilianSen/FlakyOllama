@@ -65,7 +65,8 @@ func (a *Agent) Register() error {
 		agentReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(agentReq)
+	client := &http.Client{}
+	resp, err := client.Do(agentReq)
 	if err != nil {
 		return err
 	}
@@ -201,7 +202,7 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Starting inference for model %s", req.Model)
 
 	// Propagation of context for cancellation
-	stream, code, err := a.Ollama.GenerateStream(req)
+	stream, code, err := a.Ollama.GenerateStream(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
@@ -235,7 +236,7 @@ func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Starting chat completion for model %s", req.Model)
 
-	stream, code, err := a.Ollama.ChatStream(req)
+	stream, code, err := a.Ollama.ChatStream(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return

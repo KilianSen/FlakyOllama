@@ -7,6 +7,30 @@ export interface ModelInfo {
   size: number;
 }
 
+export interface RoutingWeights {
+  cpu_load_weight: number;
+  latency_weight: number;
+  success_rate_weight: number;
+  loaded_model_bonus: number;
+}
+
+export interface CBConfig {
+  error_threshold: number;
+  cooloff_sec: number;
+}
+
+export interface Config {
+  keep_alive_duration_sec: number;
+  stale_threshold: number;
+  load_threshold: number;
+  poll_interval_ms: number;
+  weights: RoutingWeights;
+  circuit_breaker: CBConfig;
+  stall_timeout_sec: number;
+  enable_hedging: boolean;
+  hedging_percentile: number;
+}
+
 export interface NodeStatus {
   id: string;
   address: string;
@@ -76,5 +100,21 @@ export const api = {
     });
     if (!res.ok) throw new Error('Test failed');
     return res.json();
+  },
+
+  async getConfig(): Promise<Config> {
+    const res = await fetch(`${API_BASE_URL}/api/config`, { headers });
+    if (!res.ok) throw new Error('Failed to fetch config');
+    return res.json();
+  },
+
+  async updateConfig(cfg: Config): Promise<void> {
+    const res = await fetch(`${API_BASE_URL}/api/config`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(cfg),
+    });
+    if (!res.ok) throw new Error('Failed to update config');
   }
 };
+

@@ -14,6 +14,7 @@ type Config struct {
 	Weights              RoutingWeights `json:"weights"`
 	CircuitBreaker       CBConfig       `json:"circuit_breaker"`
 	StallTimeoutSec      int            `json:"stall_timeout_sec"`
+	EnableHedging        bool           `json:"enable_hedging"`
 	HedgingPercentile    float64        `json:"hedging_percentile"`
 }
 
@@ -46,6 +47,7 @@ func DefaultConfig() *Config {
 			CooloffSec:     60,
 		},
 		StallTimeoutSec:   15,
+		EnableHedging:     true,
 		HedgingPercentile: 0.95,
 	}
 }
@@ -63,7 +65,19 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	defer file.Close()
-	
+
 	err = json.NewDecoder(file).Decode(c)
 	return c, err
+}
+
+func (c *Config) SaveConfig(path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(c)
 }

@@ -28,6 +28,7 @@ type Balancer struct {
 	Address         string
 	Agents          map[string]*models.NodeStatus
 	Storage         *storage.SQLiteStorage
+	ConfigPath      string
 	Config          *config.Config
 	PendingRequests map[string]int       // model_name -> count
 	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
@@ -35,7 +36,7 @@ type Balancer struct {
 	Mu              sync.RWMutex
 }
 
-func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
+func NewBalancer(address string, dbPath string, cfgPath string, cfg *config.Config) (*Balancer, error) {
 	s, err := storage.NewSQLiteStorage(dbPath)
 	if err != nil {
 		return nil, err
@@ -49,6 +50,7 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		Address:         address,
 		Agents:          make(map[string]*models.NodeStatus),
 		Storage:         s,
+		ConfigPath:      cfgPath,
 		Config:          cfg,
 		PendingRequests: make(map[string]int),
 		ModelLastUsed:   make(map[string]time.Time),
@@ -59,6 +61,7 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 func (b *Balancer) StartBackgroundTasks() {
 	b.StartPoller()
 	b.StartKeepAliveCleaner()
+	b.StartStorageCleaner()
 	b.StartWorkerPool(10) // 10 workers for routing
 }
 
@@ -72,13 +75,15 @@ func (b *Balancer) worker() {
 	for {
 		select {
 		case <-b.Queue.Wait():
-			req := b.Queue.Pop()
-			if req == nil {
-				continue
-			}
+			for {
+				req := b.Queue.Pop()
+				if req == nil {
+					break
+				}
 
-			id, addr, err := b.Route(req.Request)
-			req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
+				id, addr, err := b.Route(req.Request)
+				req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
+			}
 		}
 	}
 }
@@ -92,6 +97,17 @@ func (b *Balancer) StartKeepAliveCleaner() {
 	}()
 }
 
+func (b *Balancer) StartStorageCleaner() {
+	ticker := time.NewTicker(6 * time.Hour)
+	go func() {
+		for range ticker.C {
+			if err := b.Storage.PruneMetrics(2); err != nil {
+				log.Printf("Failed to prune old metrics: %v", err)
+			}
+		}
+	}()
+}
+
 func (b *Balancer) cleanStaleModels() {
 	b.Mu.Lock()
 	now := time.Now()
@@ -100,13 +116,13 @@ func (b *Balancer) cleanStaleModels() {
 	toUnload := make([]struct{ nodeID, addr, model string }, 0)
 	for key, lastTime := range b.ModelLastUsed {
 		if now.Sub(lastTime) > keepAlive {
-			parts := strings.Split(key, ":")
-			if len(parts) != 2 {
+			idx := strings.LastIndex(key, ":")
+			if idx == -1 {
 				continue
 			}
-			nodeID, modelName := parts[0], parts[1]
-			if agent, ok := b.Agents[nodeID]; ok {
-				toUnload = append(toUnload, struct{ nodeID, addr, model string }{nodeID, agent.Address, modelName})
+			addr, modelName := key[:idx], key[idx+1:]
+			if agent, ok := b.Agents[addr]; ok {
+				toUnload = append(toUnload, struct{ nodeID, addr, model string }{agent.ID, agent.Address, modelName})
 			}
 			delete(b.ModelLastUsed, key)
 		}
@@ -120,13 +136,20 @@ func (b *Balancer) cleanStaleModels() {
 	}
 }
 
-func (b *Balancer) sendToAgent(addr, path string, body []byte) (*http.Response, error) {
+func (b *Balancer) sendToAgent(addr, path string, body []byte) error {
 	req, _ := http.NewRequest("POST", "http://"+addr+path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token := os.Getenv("AGENT_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	return http.DefaultClient.Do(req)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return nil
 }
 
 // Register registers a new agent.
@@ -169,7 +192,8 @@ func (b *Balancer) pollAgents() {
 			if token := os.Getenv("AGENT_TOKEN"); token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
 			}
-			resp, err := http.DefaultClient.Do(req)
+			client := &http.Client{}
+			resp, err := client.Do(req)
 			if err != nil {
 				log.Printf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
 				b.recordError(a.Address)
@@ -407,6 +431,8 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/api/manage/model/pull", auth.Middleware(token, b.HandleModelPull))
 	mux.HandleFunc("/api/manage/model/delete", auth.Middleware(token, b.HandleModelDelete))
 	mux.HandleFunc("/api/manage/test", auth.Middleware(token, b.HandleTestInference))
+	
+	mux.HandleFunc("/api/config", auth.Middleware(token, b.HandleConfig))
 
 	// OpenAI compatibility layer
 	mux.HandleFunc("/v1/chat/completions", auth.Middleware(token, b.HandleOpenAIChat))
@@ -414,6 +440,41 @@ func (b *Balancer) NewMux() *http.ServeMux {
 	mux.HandleFunc("/v1/models", auth.Middleware(token, b.HandleOpenAIModels))
 
 	return mux
+}
+
+func (b *Balancer) HandleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		b.Mu.RLock()
+		cfg := b.Config
+		b.Mu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cfg)
+		return
+	}
+
+	if r.Method == "PUT" || r.Method == "POST" {
+		var newConfig config.Config
+		if err := json.NewDecoder(r.Body).Decode(&newConfig); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		b.Mu.Lock()
+		b.Config = &newConfig
+		if b.ConfigPath != "" {
+			if err := b.Config.SaveConfig(b.ConfigPath); err != nil {
+				log.Printf("Warning: failed to save config to %s: %v", b.ConfigPath, err)
+			}
+		}
+		b.Mu.Unlock()
+		
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
@@ -615,7 +676,7 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -628,9 +689,16 @@ func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	b.Mu.RLock()
+	resolvedAgentID := agentAddr
+	if a, ok := b.Agents[agentAddr]; ok {
+		resolvedAgentID = a.ID
+	}
+	b.Mu.RUnlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"agent_id": agentID,
+		"agent_id": resolvedAgentID,
 		"response": result.Response,
 	})
 }
@@ -731,14 +799,14 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
+	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentID, req.Model)
+	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
 
 func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
@@ -760,7 +828,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(req)
-	resp, agentID, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
+	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
 	if err != nil {
 		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -768,7 +836,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentID, req.Model)
+	b.finalizeProxy(w, resp, agentAddr, req.Model)
 }
 
 func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string) {
