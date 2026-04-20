@@ -3,7 +3,7 @@ package pkg
 import (
 	"FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/balancer"
-	"FlakyOllama/pkg/models"
+	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -18,9 +18,13 @@ func TestIntegration(t *testing.T) {
 	mockOllama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/ps" {
 			json.NewEncoder(w).Encode(struct {
-				Models []struct{ Name string `json:"name"` } `json:"models"`
+				Models []struct {
+					Name string `json:"name"`
+				} `json:"models"`
 			}{
-				Models: []struct{ Name string `json:"name"` }{{Name: "llama2"}},
+				Models: []struct {
+					Name string `json:"name"`
+				}{{Name: "llama2"}},
 			})
 			return
 		}
@@ -36,17 +40,19 @@ func TestIntegration(t *testing.T) {
 	defer mockOllama.Close()
 
 	// 2. Start Balancer
-	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", "", nil)
+	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", nil)
+	b.Config.PollIntervalMs = 100 // Fast polling for test
 	balancerSrv := httptest.NewServer(b.NewMux())
 	defer balancerSrv.Close()
+	defer b.Close()
 
 	// 3. Start Agent
 	// Extract port from httptest URL for Agent's "Address"
 	balancerURL := balancerSrv.URL
-	a := agent.NewAgent("agent-test", "localhost:0", balancerURL, mockOllama.URL)
+	a := agent.NewAgent("agent-test", "localhost:0", balancerURL, mockOllama.URL, nil)
 	agentSrv := httptest.NewServer(a.NewMux())
 	defer agentSrv.Close()
-	
+
 	// Update agent's address to the actual httptest server address
 	a.Address = strings.TrimPrefix(agentSrv.URL, "http://")
 
@@ -57,7 +63,22 @@ func TestIntegration(t *testing.T) {
 
 	// 5. Start background tasks (poller, workers, etc.)
 	b.StartBackgroundTasks()
-	time.Sleep(1000 * time.Millisecond) // Wait for at least one poll
+
+	// Wait for agent to be polled successfully (up to 2 seconds)
+	deadline := time.Now().Add(2 * time.Second)
+	success := false
+	for time.Now().Before(deadline) {
+		snapshot := b.State.GetSnapshot()
+		if agent, ok := snapshot.Agents[a.Address]; ok && len(agent.ActiveModels) > 0 {
+			success = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !success {
+		t.Fatalf("Agent was not polled successfully within timeout")
+	}
 
 	// 6. Send an inference request to the Balancer
 	req := models.InferenceRequest{

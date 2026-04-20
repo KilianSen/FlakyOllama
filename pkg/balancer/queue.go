@@ -1,8 +1,9 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/models"
+	"FlakyOllama/pkg/shared/models"
 	"container/heap"
+	"context"
 	"sync"
 )
 
@@ -10,6 +11,9 @@ import (
 type QueuedRequest struct {
 	Request  models.InferenceRequest
 	Priority int // Higher value means higher priority
+	Sequence int64
+	ClientIP string
+	Ctx      context.Context
 	Response chan QueuedResponse
 	Index    int // The index of the item in the heap.
 }
@@ -26,8 +30,10 @@ type PriorityQueue []*QueuedRequest
 func (pq PriorityQueue) Len() int { return len(pq) }
 
 func (pq PriorityQueue) Less(i, j int) bool {
-	// We want Pop to give us the highest, not lowest, priority so we use greater than here.
-	return pq[i].Priority > pq[j].Priority
+	if pq[i].Priority != pq[j].Priority {
+		return pq[i].Priority > pq[j].Priority
+	}
+	return pq[i].Sequence < pq[j].Sequence
 }
 
 func (pq PriorityQueue) Swap(i, j int) {
@@ -47,46 +53,51 @@ func (pq *PriorityQueue) Pop() interface{} {
 	old := *pq
 	n := len(old)
 	item := old[n-1]
-	old[n-1] = nil  // avoid memory leak
-	item.Index = -1 // for safety
+	old[n-1] = nil
+	item.Index = -1
 	*pq = old[0 : n-1]
 	return item
 }
 
 // RequestQueue handles thread-safe priority queuing.
 type RequestQueue struct {
-	pq PriorityQueue
-	mu sync.Mutex
-	ch chan struct{} // signaled when a new item is pushed
+	pq       PriorityQueue
+	sequence int64
+	mu       sync.Mutex
+	ch       chan struct{} // signaled when a new item is pushed
 }
 
 func NewRequestQueue() *RequestQueue {
 	rq := &RequestQueue{
 		pq: make(PriorityQueue, 0),
-		ch: make(chan struct{}, 1000),
+		ch: make(chan struct{}, 1),
 	}
 	heap.Init(&rq.pq)
 	return rq
 }
 
-func (rq *RequestQueue) Push(req models.InferenceRequest, priority int) chan QueuedResponse {
+func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP string, ctx context.Context) chan QueuedResponse {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
 	resCh := make(chan QueuedResponse, 1)
+	rq.sequence++
 	item := &QueuedRequest{
 		Request:  req,
 		Priority: priority,
+		Sequence: rq.sequence,
+		ClientIP: clientIP,
+		Ctx:      ctx,
 		Response: resCh,
 	}
 	heap.Push(&rq.pq, item)
-	
-	// Signal that an item is available
+
+	// Signal that an item is available (non-blocking)
 	select {
 	case rq.ch <- struct{}{}:
 	default:
 	}
-	
+
 	return resCh
 }
 
@@ -94,12 +105,20 @@ func (rq *RequestQueue) Pop() *QueuedRequest {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
-	if rq.pq.Len() == 0 {
-		return nil
+	for rq.pq.Len() > 0 {
+		item := heap.Pop(&rq.pq).(*QueuedRequest)
+		if item.Ctx != nil && item.Ctx.Err() != nil {
+			continue
+		}
+		return item
 	}
-	return heap.Pop(&rq.pq).(*QueuedRequest)
+	return nil
 }
 
 func (rq *RequestQueue) Wait() <-chan struct{} {
 	return rq.ch
+}
+
+func (rq *RequestQueue) Close() {
+	close(rq.ch)
 }

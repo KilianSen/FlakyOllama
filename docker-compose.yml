@@ -9,8 +9,11 @@ services:
       - DB_PATH=/data/flakyollama.db
       - BALANCER_TOKEN=your-secret-balancer-token
       - AGENT_TOKEN=your-secret-agent-token
+      # - CONFIG_PATH=/data/config.json # Uncomment to use a config file
+      # - TLS_ENABLED=true             # Future: Add direct env mapping for TLS
     volumes:
       - balancer_data:/data
+      # - ./certs:/etc/certs           # Uncomment to mount TLS certificates
     restart: always
 
   frontend:

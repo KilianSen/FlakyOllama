@@ -1,42 +1,50 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/auth"
-	"FlakyOllama/pkg/config"
-	"FlakyOllama/pkg/metrics"
-	"FlakyOllama/pkg/models"
-	"FlakyOllama/pkg/storage"
-	"bytes"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"log"
-	"net"
+	"FlakyOllama/pkg/balancer/jobs"
+	"FlakyOllama/pkg/balancer/state"
+	"FlakyOllama/pkg/balancer/storage"
+	"FlakyOllama/pkg/shared/auth"
+	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/shared/logging"
+	"FlakyOllama/pkg/shared/models"
+	"crypto/tls"
 	"net/http"
-	"os"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Balancer manages multiple agents and routes requests.
-type Balancer struct {
-	Address         string
-	Agents          map[string]*models.NodeStatus
-	Storage         *storage.SQLiteStorage
-	ConfigPath      string
-	Config          *config.Config
-	PendingRequests map[string]int       // model_name -> count
-	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
-	Queue           *RequestQueue
-	Mu              sync.RWMutex
+type metricEntry struct {
+	nodeID, model string
+	latency       time.Duration
+	success       bool
 }
 
-func NewBalancer(address string, dbPath string, cfgPath string, cfg *config.Config) (*Balancer, error) {
+// Balancer manages multiple agents and routes requests.
+type Balancer struct {
+	Address        string
+	Storage        *storage.SQLiteStorage
+	Config         *config.Config
+	State          *state.ClusterStateActor
+	Jobs           *jobs.JobManager
+	Queue          *RequestQueue
+	ClientAffinity map[string]string // client_ip -> agent_id
+	affinityMu     sync.RWMutex
+	PerfCache      map[string]storage.PerformanceMetric // "node_id:model" -> metric
+	perfMu         sync.RWMutex
+	MetricCh       chan metricEntry
+	LogCh          chan models.LogEntry
+	stopCh         chan struct{}
+	logChs         map[chan string]bool
+	logMu          sync.Mutex
+	httpClient     *http.Client
+	StartTime      time.Time
+}
+
+func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
 	s, err := storage.NewSQLiteStorage(dbPath)
 	if err != nil {
 		return nil, err
@@ -46,321 +54,49 @@ func NewBalancer(address string, dbPath string, cfgPath string, cfg *config.Conf
 		cfg = config.DefaultConfig()
 	}
 
-	return &Balancer{
-		Address:         address,
-		Agents:          make(map[string]*models.NodeStatus),
-		Storage:         s,
-		ConfigPath:      cfgPath,
-		Config:          cfg,
-		PendingRequests: make(map[string]int),
-		ModelLastUsed:   make(map[string]time.Time),
-		Queue:           NewRequestQueue(),
-	}, nil
-}
-
-func (b *Balancer) StartBackgroundTasks() {
-	b.StartPoller()
-	b.StartKeepAliveCleaner()
-	b.StartStorageCleaner()
-	b.StartWorkerPool(10) // 10 workers for routing
-}
-
-func (b *Balancer) StartWorkerPool(workers int) {
-	for i := 0; i < workers; i++ {
-		go b.worker()
+	b := &Balancer{
+		Address:        address,
+		Storage:        s,
+		Config:         cfg,
+		State:          state.NewClusterStateActor(),
+		Jobs:           jobs.NewJobManager(),
+		Queue:          NewRequestQueue(),
+		ClientAffinity: make(map[string]string),
+		PerfCache:      make(map[string]storage.PerformanceMetric),
+		MetricCh:       make(chan metricEntry, 1000),
+		LogCh:          make(chan models.LogEntry, 1000),
+		stopCh:         make(chan struct{}),
+		logChs:         make(map[chan string]bool),
+		StartTime:      time.Now(),
+		httpClient: &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
+				},
+			},
+		},
 	}
+
+	b.State.Start()
+	return b, nil
 }
 
-func (b *Balancer) worker() {
-	for {
-		select {
-		case <-b.Queue.Wait():
-			for {
-				req := b.Queue.Pop()
-				if req == nil {
-					break
-				}
-
-				id, addr, err := b.Route(req.Request)
-				req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
-			}
-		}
+func (b *Balancer) Ship(entry models.LogEntry) {
+	select {
+	case b.LogCh <- entry:
+	default:
 	}
 }
 
-func (b *Balancer) StartKeepAliveCleaner() {
-	ticker := time.NewTicker(30 * time.Second)
-	go func() {
-		for range ticker.C {
-			b.cleanStaleModels()
-		}
-	}()
+func (b *Balancer) Close() error {
+	close(b.stopCh)
+	b.Queue.Close()
+	return b.Storage.Close()
 }
 
-func (b *Balancer) StartStorageCleaner() {
-	ticker := time.NewTicker(6 * time.Hour)
-	go func() {
-		for range ticker.C {
-			if err := b.Storage.PruneMetrics(2); err != nil {
-				log.Printf("Failed to prune old metrics: %v", err)
-			}
-		}
-	}()
-}
-
-func (b *Balancer) cleanStaleModels() {
-	b.Mu.Lock()
-	now := time.Now()
-	keepAlive := time.Duration(b.Config.KeepAliveDurationSec) * time.Second
-
-	toUnload := make([]struct{ nodeID, addr, model string }, 0)
-	for key, lastTime := range b.ModelLastUsed {
-		if now.Sub(lastTime) > keepAlive {
-			idx := strings.LastIndex(key, ":")
-			if idx == -1 {
-				continue
-			}
-			addr, modelName := key[:idx], key[idx+1:]
-			if agent, ok := b.Agents[addr]; ok {
-				toUnload = append(toUnload, struct{ nodeID, addr, model string }{agent.ID, agent.Address, modelName})
-			}
-			delete(b.ModelLastUsed, key)
-		}
-	}
-	b.Mu.Unlock()
-
-	for _, item := range toUnload {
-		log.Printf("Unloading stale model %s from agent %s", item.model, item.nodeID)
-		body, _ := json.Marshal(map[string]string{"model": item.model})
-		b.sendToAgent(item.addr, "/models/unload", body)
-	}
-}
-
-func (b *Balancer) sendToAgent(addr, path string, body []byte) error {
-	req, _ := http.NewRequest("POST", "http://"+addr+path, bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	if token := os.Getenv("AGENT_TOKEN"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	return nil
-}
-
-// Register registers a new agent.
-func (b *Balancer) Register(req models.RegisterRequest) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
-
-	b.Agents[req.Address] = &models.NodeStatus{
-		ID:      req.ID,
-		Address: req.Address,
-		State:   models.StateHealthy,
-		Errors:  0,
-	}
-	log.Printf("Registered agent: %s at %s (resetting health)", req.ID, req.Address)
-}
-
-// StartPoller polls registered agents at the configured frequency.
-func (b *Balancer) StartPoller() {
-	interval := time.Duration(b.Config.PollIntervalMs) * time.Millisecond
-	ticker := time.NewTicker(interval)
-	go func() {
-		for range ticker.C {
-			b.pollAgents()
-			metrics.QueueDepth.Set(float64(b.Queue.pq.Len()))
-		}
-	}()
-}
-
-func (b *Balancer) pollAgents() {
-	b.Mu.RLock()
-	agents := make([]*models.NodeStatus, 0, len(b.Agents))
-	for _, a := range b.Agents {
-		agents = append(agents, a)
-	}
-	b.Mu.RUnlock()
-
-	for _, agent := range agents {
-		go func(a *models.NodeStatus) {
-			req, _ := http.NewRequest("GET", "http://"+a.Address+"/telemetry", nil)
-			if token := os.Getenv("AGENT_TOKEN"); token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-			}
-			client := &http.Client{}
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Printf("Failed to poll agent %s (%s): %v", a.ID, a.Address, err)
-				b.recordError(a.Address)
-				return
-			}
-			defer resp.Body.Close()
-
-			var status models.NodeStatus
-			if err := json.NewDecoder(resp.Body).Decode(&status); err == nil {
-				b.Mu.Lock()
-				currentAgent, ok := b.Agents[a.Address]
-				if !ok {
-					b.Mu.Unlock()
-					return
-				}
-
-				// Preserving some internal state, but resetting errors on successful poll
-				status.State = currentAgent.State
-				status.Errors = currentAgent.Errors
-				status.Draining = currentAgent.Draining
-
-				// If we successfully polled but it was broken, consider it healthy again
-				if status.State == models.StateBroken || status.State == models.StateDegraded {
-					log.Printf("Agent %s (%s) recovered via successful poll", a.ID, a.Address)
-					status.State = models.StateHealthy
-					status.Errors = 0
-				}
-
-				status.LastSeen = time.Now()
-
-				b.Agents[a.Address] = &status
-
-				// Update learned VRAM
-				for _, m := range status.ActiveModels {
-					if len(status.ActiveModels) == 1 {
-						// Heuristic: if only one model is loaded, VRAMUsed is a good estimate
-						b.Storage.UpdateModelVRAM(m, status.VRAMUsed)
-					}
-				}
-
-				// Update metrics
-				healthVal := 0.0
-				switch status.State {
-				case models.StateHealthy:
-					healthVal = 2.0
-				case models.StateDegraded:
-					healthVal = 1.0
-				}
-				metrics.NodeHealthStatus.WithLabelValues(a.ID, a.Address).Set(healthVal)
-
-				b.Mu.Unlock()
-			} else {
-				log.Printf("Failed to decode telemetry for agent %s (%s): %v", a.ID, a.Address, err)
-			}
-		}(agent)
-	}
-}
-
-// Route finds the best agent for an inference request.
-func (b *Balancer) Route(req models.InferenceRequest) (string, string, error) {
-	b.Mu.RLock()
-	pending := b.PendingRequests[req.Model]
-
-	var bestAgent *models.NodeStatus
-	var bestScore float64 = -1.0
-
-	// Get model requirements from learned metadata
-	minVRAM, _ := b.Storage.GetModelVRAM(req.Model)
-	if minVRAM == 0 {
-		// Fallback for unknown models
-		if strings.Contains(req.Model, "7b") {
-			minVRAM = 4 * 1024 * 1024 * 1024
-		} else if strings.Contains(req.Model, "70b") {
-			minVRAM = 40 * 1024 * 1024 * 1024
-		}
-	}
-
-	foundLoaded := false
-	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second || a.State == models.StateBroken || a.Draining {
-			continue
-		}
-		if a.VRAMTotal < minVRAM {
-			continue
-		}
-
-		perf, _ := b.Storage.GetPerformance(a.ID, req.Model)
-
-		// Advanced Scoring Engine
-		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
-
-		// Thermal Protection
-		if a.GPUTemperature > 80.0 {
-			score *= 0.5 // Heavy penalty above 80C
-		}
-		if a.GPUTemperature > 90.0 {
-			continue // Skip node if above 90C
-		}
-
-		if perf.SuccessRate > 0 {
-			score *= (perf.SuccessRate * b.Config.Weights.SuccessRateWeight)
-		}
-		if perf.AvgLatency > 0 {
-			score *= ((1.0 / perf.AvgLatency) * b.Config.Weights.LatencyWeight)
-		}
-
-		// Degradation Penalty
-		if a.State == models.StateDegraded {
-			score *= 0.5
-		}
-
-		hasModel := false
-		for _, m := range a.ActiveModels {
-			if m == req.Model {
-				hasModel = true
-				foundLoaded = true
-				break
-			}
-		}
-
-		if hasModel {
-			score *= b.Config.Weights.LoadedModelBonus
-		}
-
-		if score > bestScore {
-			bestScore = score
-			bestAgent = a
-		}
-	}
-	b.Mu.RUnlock()
-
-	// Auto-allocation logic
-	if !foundLoaded || pending > b.Config.StaleThreshold {
-		b.triggerAllocation(req.Model, minVRAM)
-	}
-
-	if bestAgent == nil {
-		log.Printf("Routing failed: No suitable agent found for model %s (pending: %d)", req.Model, pending)
-		return "", "", fmt.Errorf("no available agents with sufficient capabilities")
-	}
-
-	log.Printf("Routed model %s to agent %s (score: %.2f, pending: %d)", req.Model, bestAgent.ID, bestScore, pending)
-	return bestAgent.ID, bestAgent.Address, nil
-}
-
-func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
-	for _, a := range b.Agents {
-		if time.Since(a.LastSeen) > time.Second || a.VRAMTotal < minVRAM || a.State == models.StateBroken || a.Draining {
-			continue
-		}
-		hasModel := false
-		for _, m := range a.ActiveModels {
-			if m == model {
-				hasModel = true
-				break
-			}
-		}
-		if !hasModel {
-			log.Printf("Triggering auto-allocation of model %s to agent %s", model, a.ID)
-			body, _ := json.Marshal(map[string]string{"model": model})
-			go b.sendToAgent(a.Address, "/models/pull", body)
-			return
-		}
-	}
+func (b *Balancer) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+	promhttp.Handler().ServeHTTP(w, r)
 }
 
 func (b *Balancer) CORS(next http.Handler) http.Handler {
@@ -376,538 +112,86 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 	})
 }
 
-func (b *Balancer) HandleAPIStatus(w http.ResponseWriter, r *http.Request) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
-	totalWorkloads := 0
-	for _, count := range b.PendingRequests {
-		totalWorkloads += count
-	}
-
-	modelMap := make(map[string]bool)
-	for _, agent := range b.Agents {
-		for _, model := range agent.LocalModels {
-			modelMap[model.Name] = true
-		}
-		for _, model := range agent.ActiveModels {
-			modelMap[model] = true
-		}
-	}
-	allModels := make([]string, 0, len(modelMap))
-	for m := range modelMap {
-		allModels = append(allModels, m)
-	}
-	sort.Strings(allModels)
-
-	status := models.ClusterStatus{
-		Nodes:           b.Agents,
-		PendingRequests: b.PendingRequests,
-		QueueDepth:      b.Queue.pq.Len(),
-		ActiveWorkloads: totalWorkloads,
-		AllModels:       allModels,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
-}
-
-// NewMux returns a mux with the balancer's handlers registered.
-func (b *Balancer) NewMux() *http.ServeMux {
-	token := os.Getenv("BALANCER_TOKEN")
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("/register", b.HandleRegister) // Register doesn't need auth usually or use a different secret
-	mux.HandleFunc("/api/generate", auth.Middleware(token, b.HandleGenerate))
-	mux.HandleFunc("/api/chat", auth.Middleware(token, b.HandleChat))
-	mux.HandleFunc("/api/show", auth.Middleware(token, b.HandleShow))
-	mux.HandleFunc("/api/tags", auth.Middleware(token, b.HandleTags))
-	mux.HandleFunc("/api/status", auth.Middleware(token, b.HandleAPIStatus))
-	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
-	mux.HandleFunc("/api/manage/node/drain", auth.Middleware(token, b.HandleNodeDrain))
-	mux.HandleFunc("/api/manage/node/undrain", auth.Middleware(token, b.HandleNodeUndrain))
-	mux.HandleFunc("/api/manage/model/unload", auth.Middleware(token, b.HandleModelUnload))
-	mux.HandleFunc("/api/manage/model/pull", auth.Middleware(token, b.HandleModelPull))
-	mux.HandleFunc("/api/manage/model/delete", auth.Middleware(token, b.HandleModelDelete))
-	mux.HandleFunc("/api/manage/test", auth.Middleware(token, b.HandleTestInference))
-	
-	mux.HandleFunc("/api/config", auth.Middleware(token, b.HandleConfig))
-
-	// OpenAI compatibility layer
-	mux.HandleFunc("/v1/chat/completions", auth.Middleware(token, b.HandleOpenAIChat))
-	mux.HandleFunc("/v1/completions", auth.Middleware(token, b.HandleOpenAICompletions))
-	mux.HandleFunc("/v1/models", auth.Middleware(token, b.HandleOpenAIModels))
-
-	return mux
-}
-
-func (b *Balancer) HandleConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		b.Mu.RLock()
-		cfg := b.Config
-		b.Mu.RUnlock()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cfg)
-		return
-	}
-
-	if r.Method == "PUT" || r.Method == "POST" {
-		var newConfig config.Config
-		if err := json.NewDecoder(r.Body).Decode(&newConfig); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		b.Mu.Lock()
-		b.Config = &newConfig
-		if b.ConfigPath != "" {
-			if err := b.Config.SaveConfig(b.ConfigPath); err != nil {
-				log.Printf("Warning: failed to save config to %s: %v", b.ConfigPath, err)
-			}
-		}
-		b.Mu.Unlock()
-		
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
-		return
-	}
-
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-}
-
-func (b *Balancer) HandleNodeDrain(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	addr := r.URL.Query().Get("addr")
-	b.Mu.Lock()
-	found := false
-	for _, a := range b.Agents {
-		if (addr != "" && a.Address == addr) || (id != "" && a.ID == id) {
-			a.Draining = true
-			found = true
-			if addr != "" {
-				break
-			}
-		}
-	}
-	b.Mu.Unlock()
-
-	if found {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	} else {
-		http.Error(w, "Node not found", http.StatusNotFound)
-	}
-}
-
-func (b *Balancer) HandleNodeUndrain(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	addr := r.URL.Query().Get("addr")
-	b.Mu.Lock()
-	found := false
-	for _, a := range b.Agents {
-		if (addr != "" && a.Address == addr) || (id != "" && a.ID == id) {
-			a.Draining = false
-			found = true
-			if addr != "" {
-				break
-			}
-		}
-	}
-	b.Mu.Unlock()
-
-	if found {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	} else {
-		http.Error(w, "Node not found", http.StatusNotFound)
-	}
-}
-
-func (b *Balancer) HandleModelUnload(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.URL.Query().Get("id")
-	nodeAddr := r.URL.Query().Get("addr")
-	model := r.URL.Query().Get("model")
-
-	b.Mu.RLock()
-	var targets []*models.NodeStatus
-	for _, a := range b.Agents {
-		if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
-			targets = append(targets, a)
-			if nodeAddr != "" {
-				break
-			}
-		}
-	}
-	b.Mu.RUnlock()
-
-	if len(targets) == 0 {
-		http.Error(w, "Node not found", http.StatusNotFound)
-		return
-	}
-
-	body, _ := json.Marshal(map[string]string{"model": model})
-	for _, agent := range targets {
-		log.Printf("Unloading model %s from agent %s (%s)", model, agent.ID, agent.Address)
-		b.sendToAgent(agent.Address, "/models/unload", body)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func (b *Balancer) HandleModelPull(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.URL.Query().Get("id")
-	nodeAddr := r.URL.Query().Get("addr")
-	model := r.FormValue("model")
-	if model == "" {
-		model = r.URL.Query().Get("model")
-	}
-	if model == "" {
-		// Try JSON body
-		var req struct {
-			Model string `json:"model"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-		model = req.Model
-	}
-
-	if model == "" {
-		http.Error(w, "Model name required", http.StatusBadRequest)
-		return
-	}
-
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-
-	if nodeID != "" || nodeAddr != "" {
-		// Single node or group pull
-		for _, agent := range b.Agents {
-			if (nodeAddr != "" && agent.Address == nodeAddr) || (nodeID != "" && agent.ID == nodeID) {
-				log.Printf("Pulling model %s on agent %s (%s)", model, agent.ID, agent.Address)
-				body, _ := json.Marshal(map[string]string{"model": model})
-				go b.sendToAgent(agent.Address, "/models/pull", body)
-				if nodeAddr != "" {
-					break
-				}
-			}
-		}
-	} else {
-		// Cluster-wide pull
-		log.Printf("Pulling model %s cluster-wide", model)
-		body, _ := json.Marshal(map[string]string{"model": model})
-		for _, agent := range b.Agents {
-			if !agent.Draining && agent.State != models.StateBroken {
-				go b.sendToAgent(agent.Address, "/models/pull", body)
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Pull triggered for " + model})
-}
-
-func (b *Balancer) HandleModelDelete(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.URL.Query().Get("id")
-	nodeAddr := r.URL.Query().Get("addr")
-	model := r.URL.Query().Get("model")
-
-	b.Mu.RLock()
-	var targets []*models.NodeStatus
-	for _, a := range b.Agents {
-		if (nodeAddr != "" && a.Address == nodeAddr) || (nodeID != "" && a.ID == nodeID) {
-			targets = append(targets, a)
-			if nodeAddr != "" {
-				break
-			}
-		}
-	}
-	b.Mu.RUnlock()
-
-	if len(targets) == 0 {
-		http.Error(w, "Node not found", http.StatusNotFound)
-		return
-	}
-
-	body, _ := json.Marshal(map[string]string{"model": model})
-	for _, agent := range targets {
-		log.Printf("Deleting model %s from disk on agent %s (%s)", model, agent.ID, agent.Address)
-		b.sendToAgent(agent.Address, "/models/delete", body)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func (b *Balancer) HandleTestInference(w http.ResponseWriter, r *http.Request) {
-	model := r.FormValue("model")
-	prompt := r.FormValue("prompt")
-
-	if model == "" || prompt == "" {
-		// Try JSON body
-		var req struct {
-			Model  string `json:"model"`
-			Prompt string `json:"prompt"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-		model = req.Model
-		prompt = req.Prompt
-	}
-
-	if model == "" || prompt == "" {
-		http.Error(w, "Model and Prompt are required", http.StatusBadRequest)
-		return
-	}
-
-	req := models.InferenceRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: false,
-	}
-
-	b.Mu.Lock()
-	b.PendingRequests[req.Model]++
-	b.Mu.Unlock()
-	defer func() {
-		b.Mu.Lock()
-		b.PendingRequests[req.Model]--
-		b.Mu.Unlock()
-	}()
-
-	body, _ := json.Marshal(req)
-	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer resp.Body.Close()
-
-	var result models.InferenceResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		http.Error(w, "Failed to decode response", http.StatusInternalServerError)
-		return
-	}
-
-	b.Mu.RLock()
-	resolvedAgentID := agentAddr
-	if a, ok := b.Agents[agentAddr]; ok {
-		resolvedAgentID = a.ID
-	}
-	b.Mu.RUnlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"agent_id": resolvedAgentID,
-		"response": result.Response,
-	})
-}
-
 func (b *Balancer) Serve() error {
-	log.Printf("Balancer listening on %s", b.Address)
+	logging.Global.Infof("Balancer listening on %s (TLS: %v)", b.Address, b.Config.TLS.Enabled)
+	if b.Config.TLS.Enabled {
+		return http.ListenAndServeTLS(b.Address, b.Config.TLS.CertFile, b.Config.TLS.KeyFile, b.CORS(b.NewMux()))
+	}
 	return http.ListenAndServe(b.Address, b.CORS(b.NewMux()))
 }
 
-func (b *Balancer) HandleRegister(w http.ResponseWriter, r *http.Request) {
-	var req models.RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+// NewMux returns a mux with the balancer's handlers registered.
+func (b *Balancer) NewMux() *chi.Mux {
+	token := b.Config.AuthToken
+	remoteToken := b.Config.RemoteToken
+	r := chi.NewRouter()
 
-	// Address fix for agents registering with 0.0.0.0 or empty address
-	if strings.HasPrefix(req.Address, "0.0.0.0:") || strings.HasPrefix(req.Address, ":") {
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		_, port, _ := net.SplitHostPort(req.Address)
-		req.Address = net.JoinHostPort(host, port)
-	}
+	r.Use(b.CORS)
 
-	b.Register(req)
-	w.WriteHeader(http.StatusOK)
-}
+	// Base
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/metrics", b.HandleMetrics)
 
-func (b *Balancer) HandleTags(w http.ResponseWriter, r *http.Request) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
+	// Legacy Ollama Layer
+	r.Group(func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return auth.Middleware(token, next.ServeHTTP)
+		})
+		r.Post("/api/generate", b.HandleGenerate)
+		r.Post("/api/chat", b.HandleChat)
+		r.Post("/api/show", b.HandleShow)
+		r.Get("/api/tags", b.HandleTags)
+		r.Post("/api/embeddings", b.HandleEmbed)
+		r.Get("/api/version", b.HandleVersion)
+		r.Get("/api/ps", b.HandlePS)
+		r.Post("/api/pull", b.HandlePull)
+		r.Post("/api/delete", b.HandleDelete)
+		r.Post("/api/create", b.HandleCreate)
+		r.Post("/api/copy", b.HandleCopy)
+		r.Post("/api/push", b.HandlePush)
+	})
 
-	modelMap := make(map[string]models.ModelInfo)
-	for _, agent := range b.Agents {
-		// Include active models (running)
-		for _, mName := range agent.ActiveModels {
-			if _, ok := modelMap[mName]; !ok {
-				modelMap[mName] = models.ModelInfo{
-					Name:       mName,
-					ModifiedAt: time.Now(),
-				}
-			}
-		}
-		// Include local models (on disk)
-		for _, mInfo := range agent.LocalModels {
-			modelMap[mInfo.Name] = mInfo
-		}
-	}
+	// OpenAI Layer
+	r.Group(func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return auth.Middleware(token, next.ServeHTTP)
+		})
+		r.Post("/v1/chat/completions", b.HandleOpenAIChat)
+		r.Post("/v1/completions", b.HandleOpenAICompletions)
+		r.Get("/v1/models", b.HandleOpenAIModels)
+		r.Post("/v1/embeddings", b.HandleOpenAIEmbeddings)
+	})
 
-	var modelList []models.ModelInfo
-	for _, m := range modelMap {
-		modelList = append(modelList, m)
-	}
+	// Management Layer (Legacy compatibility)
+	r.Post("/register", auth.Middleware(remoteToken, b.HandleV1Register))
+	r.Post("/api/log/collect", auth.Middleware(remoteToken, b.HandleV1LogCollect))
+	r.Get("/api/status", auth.Middleware(token, b.HandleV1ClusterStatus))
+	r.Get("/api/logs", auth.Middleware(token, b.HandleV1Logs))
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models.TagsResponse{Models: modelList})
-}
+	// Management API (V1 Structured)
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return auth.Middleware(token, next.ServeHTTP)
+		})
 
-func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Model string `json:"model"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+		r.Get("/status", b.HandleV1ClusterStatus)
+		r.Get("/logs", b.HandleV1Logs)
 
-	body, _ := json.Marshal(req)
-	resp, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/show", body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer resp.Body.Close()
+		r.Route("/nodes", func(r chi.Router) {
+			r.Get("/", b.HandleV1Nodes)
+			r.Post("/{id}/drain", b.HandleV1NodeDrain)
+			r.Post("/{id}/undrain", b.HandleV1NodeUndrain)
+		})
 
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-}
+		r.Route("/models", func(r chi.Router) {
+			r.Post("/pull", b.HandleV1ModelPull)
+			r.Delete("/{name}", b.HandleV1ModelDelete)
+			r.Post("/{name}/unload", b.HandleV1ModelUnload)
+		})
 
-func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
-	var req models.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+		r.Get("/jobs/{id}", b.HandleV1JobStatus)
+		r.Post("/test", b.HandleV1TestInference)
+	})
 
-	log.Printf("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
-
-	b.Mu.Lock()
-	b.PendingRequests[req.Model]++
-	b.Mu.Unlock()
-	defer func() {
-		b.Mu.Lock()
-		b.PendingRequests[req.Model]--
-		b.Mu.Unlock()
-	}()
-
-	body, _ := json.Marshal(req)
-	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer resp.Body.Close()
-
-	b.finalizeProxy(w, resp, agentAddr, req.Model)
-}
-
-func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
-	var req models.InferenceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	log.Printf("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
-
-	b.Mu.Lock()
-	b.PendingRequests[req.Model]++
-	b.Mu.Unlock()
-	defer func() {
-		b.Mu.Lock()
-		b.PendingRequests[req.Model]--
-		b.Mu.Unlock()
-	}()
-
-	body, _ := json.Marshal(req)
-	resp, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body)
-	if err != nil {
-		log.Printf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer resp.Body.Close()
-
-	b.finalizeProxy(w, resp, agentAddr, req.Model)
-}
-
-func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string) {
-	start := time.Now()
-	// Wrap with Stall Protection
-	stallTimeout := time.Duration(b.Config.StallTimeoutSec) * time.Second
-	reader := NewIdleTimeoutReader(resp.Body, stallTimeout)
-	defer reader.Close()
-
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-
-	_, err := io.Copy(w, reader)
-	latency := time.Since(start)
-	if err != nil {
-		b.recordError(agentAddr)
-		b.Storage.RecordMetric(agentAddr, modelName, latency, false)
-		if errors.Is(err, ErrStalled) {
-			log.Printf("Agent %s stalled during stream for model %s", agentAddr, modelName)
-		} else {
-			log.Printf("Stream error from %s: %v", agentAddr, err)
-		}
-		return
-	}
-
-	b.recordSuccess(agentAddr)
-	b.Storage.RecordMetric(agentAddr, modelName, latency, true)
-	// We still use ID for some metrics if we want to aggregate by "name",
-	// but here we should probably use Address or ID:Address
-	agentID := agentAddr
-	b.Mu.RLock()
-	if a, ok := b.Agents[agentAddr]; ok {
-		agentID = a.ID
-	}
-	b.Mu.RUnlock()
-
-	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
-	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
-
-	b.Mu.Lock()
-	b.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
-	b.Mu.Unlock()
-}
-
-func (b *Balancer) recordError(addr string) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
-	if a, ok := b.Agents[addr]; ok {
-		a.Errors++
-		oldState := a.State
-		if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
-			a.State = models.StateBroken
-		} else {
-			a.State = models.StateDegraded
-		}
-		if oldState != a.State {
-			log.Printf("Node %s (%s) state changed: %s -> %s (errors: %d)", a.ID, addr, oldState.String(), a.State.String(), a.Errors)
-		}
-	}
-}
-
-func (b *Balancer) recordSuccess(addr string) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
-	if a, ok := b.Agents[addr]; ok {
-		if a.State != models.StateHealthy {
-			log.Printf("Node %s (%s) recovered to Healthy state", a.ID, addr)
-		}
-		a.Errors = 0
-		a.State = models.StateHealthy
-	}
+	return r
 }

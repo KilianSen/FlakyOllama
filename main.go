@@ -3,9 +3,10 @@ package main
 import (
 	"FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/balancer"
-	"FlakyOllama/pkg/config"
-	"log"
+	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/shared/logging"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -15,11 +16,42 @@ func main() {
 		role = "balancer" // Default role
 	}
 
+	nodeID := os.Getenv("AGENT_ID")
+	if nodeID == "" {
+		if role == "balancer" {
+			nodeID = "balancer"
+		} else {
+			hostname, _ := os.Hostname()
+			if hostname != "" {
+				nodeID = hostname
+			} else {
+				nodeID = "agent-1"
+			}
+		}
+	}
+	logging.InitGlobal(nodeID, role)
+
 	cfgPath := os.Getenv("CONFIG_PATH")
 	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
-		log.Printf("Failed to load config, using defaults: %v", err)
+		logging.Global.Infof("Failed to load config, using defaults: %v", err)
 		cfg = config.DefaultConfig()
+	}
+
+	if role == "balancer" {
+		if cfg.AuthToken == "" {
+			cfg.AuthToken = strings.Trim(os.Getenv("BALANCER_TOKEN"), "\"'")
+		}
+		if cfg.RemoteToken == "" {
+			cfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
+		}
+	} else {
+		if cfg.AuthToken == "" {
+			cfg.AuthToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
+		}
+		if cfg.RemoteToken == "" {
+			cfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
+		}
 	}
 
 	switch role {
@@ -34,23 +66,18 @@ func main() {
 		}
 		b, err := balancer.NewBalancer(addr, dbPath, cfgPath, cfg)
 		if err != nil {
-			log.Fatalf("Failed to initialize balancer: %v", err)
+			logging.Global.Errorf("Failed to initialize balancer: %v", err)
+			os.Exit(1)
 		}
+		logging.Global.SetSink(b)
 		b.StartBackgroundTasks()
 		if err := b.Serve(); err != nil {
-			log.Fatalf("Balancer failed: %v", err)
+			logging.Global.Errorf("Balancer failed: %v", err)
+			os.Exit(1)
 		}
 
 	case "agent":
-		id := os.Getenv("AGENT_ID")
-		if id == "" {
-			hostname, _ := os.Hostname()
-			if hostname != "" {
-				id = hostname
-			} else {
-				id = "agent-1"
-			}
-		}
+		id := nodeID
 		addr := os.Getenv("AGENT_ADDR")
 		if addr == "" {
 			addr = "0.0.0.0:8081"
@@ -65,9 +92,11 @@ func main() {
 		}
 		dbPath := os.Getenv("DB_PATH")
 
-		a := agent.NewAgent(id, addr, balancerURL, ollamaURL)
+		a := agent.NewAgent(id, addr, balancerURL, ollamaURL, cfg)
+		logging.Global.SetSink(a)
+
 		if dbPath != "" {
-			log.Printf("Agent %s using storage at %s", id, dbPath)
+			logging.Global.Infof("Agent %s using storage at %s", id, dbPath)
 			// Future use: a.SetStorage(dbPath)
 		}
 
@@ -75,20 +104,22 @@ func main() {
 		go func() {
 			for {
 				if err := a.Register(); err == nil {
-					log.Printf("Agent registered successfully")
+					logging.Global.Infof("Agent registered successfully")
 					break
 				} else {
-					log.Printf("Failed to register, retrying in 5s: %v", err)
+					logging.Global.Infof("Failed to register, retrying in 5s: %v", err)
 					time.Sleep(5 * time.Second)
 				}
 			}
 		}()
 
 		if err := a.Serve(); err != nil {
-			log.Fatalf("Agent failed: %v", err)
+			logging.Global.Errorf("Agent failed: %v", err)
+			os.Exit(1)
 		}
 
 	default:
-		log.Fatalf("Unknown role: %s", role)
+		logging.Global.Errorf("Unknown role: %s", role)
+		os.Exit(1)
 	}
 }
