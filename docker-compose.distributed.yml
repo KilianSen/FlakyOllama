@@ -1,0 +1,58 @@
+services:
+  balancer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - ROLE=balancer
+      - BALANCER_ADDR=0.0.0.0:8080
+      - DB_PATH=/data/flakyollama.db
+      - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+      - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
+    volumes:
+      - balancer_data:/data
+    restart: always
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    network_mode: host
+    environment:
+      - BACKEND_URL=http://localhost:8080
+      - VITE_BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+    restart: always
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - ROLE=agent
+      - AGENT_ID=${HOSTNAME:-agent-1}
+      - BALANCER_URL=http://localhost:8080 # Update to Balancer IP if on different nodes
+      - OLLAMA_URL=http://localhost:11434  # Reaches Ollama on host or in container via host network
+      - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
+      - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+    restart: always
+
+  # Comment out the ollama service if you are running Ollama externally (on the metal)
+  ollama:
+    image: ollama/ollama:latest
+    network_mode: host
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
+
+volumes:
+  balancer_data:
+  ollama_data:
