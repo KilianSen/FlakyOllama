@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Key, Coins, Zap, User, Box, 
-  Info, TrendingUp
+  Info, TrendingUp, CheckCircle2
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import sdk, { type Catalog, type Identity } from '../api';
 
