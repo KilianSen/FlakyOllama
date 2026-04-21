@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"FlakyOllama/pkg/shared/models"
 	"database/sql"
-	_ "github.com/mattn/go-sqlite3"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // PerformanceMetric stores historical data for a node and model.
