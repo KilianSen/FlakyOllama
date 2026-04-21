@@ -69,7 +69,6 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		logChs:         make(map[chan string]bool),
 		StartTime:      time.Now(),
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
 					InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,

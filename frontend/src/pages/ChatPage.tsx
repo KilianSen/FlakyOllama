@@ -11,19 +11,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { toast } from 'sonner';
 import { Ollama } from 'ollama/browser';
 import OpenAI from 'openai';
+import { getOllamaClient, getOpenAIClient } from '../api';
 import { useCluster } from '../ClusterContext';
 import {
   computeRoutability, LATENCY_HINTS,
 } from '../lib/modelUtils';
-
-const BALANCER_TOKEN = import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
-
-const ollamaClient = new Ollama({ host: window.location.origin });
-const openaiClient = new OpenAI({
-  baseURL: `${window.location.origin}/v1`,
-  apiKey: BALANCER_TOKEN,
-  dangerouslyAllowBrowser: true,
-});
 
 type Role = 'user' | 'assistant' | 'system';
 type SDKMode = 'ollama' | 'openai';
@@ -100,6 +92,10 @@ function MessageBubble({ msg }: { msg: Message }) {
 
 export const ChatPage: React.FC = () => {
   const { status } = useCluster();
+
+  const ollamaClient = React.useMemo(() => getOllamaClient(), []);
+  const openaiClient = React.useMemo(() => getOpenAIClient(), []);
+
   const [sdkMode, setSdkMode] = useState<SDKMode>('openai');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');

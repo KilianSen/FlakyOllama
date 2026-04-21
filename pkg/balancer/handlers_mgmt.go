@@ -64,6 +64,17 @@ func (b *Balancer) HandleV1Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Initial message to confirm connection
+	initEntry, _ := json.Marshal(models.LogEntry{
+		Timestamp: time.Now(),
+		NodeID:    "balancer",
+		Level:     models.LevelInfo,
+		Component: "balancer",
+		Message:   "Cloud sync established. Streaming live telemetry...",
+	})
+	fmt.Fprintf(w, "data: %s\n\n", string(initEntry))
+	flusher.Flush()
+
 	for {
 		select {
 		case msg := <-ch:
@@ -385,8 +396,11 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 		})
 	}()
 
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
+	defer cancel()
+
 	body, _ := json.Marshal(req)
-	resp, agentID, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/inference", body, r.RemoteAddr, false, 0)
+	resp, agentID, _, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, false, 0)
 
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())

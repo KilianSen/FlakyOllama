@@ -22,25 +22,41 @@ func (b *Balancer) StartBackgroundTasks() {
 }
 
 func (b *Balancer) StartLogProcessor() {
+	ticker := time.NewTicker(30 * time.Second)
 	go func() {
 		for {
 			select {
 			case entry := <-b.LogCh:
 				data, _ := json.Marshal(entry)
 				msg := string(data)
-				b.logMu.Lock()
-				for ch := range b.logChs {
-					select {
-					case ch <- msg:
-					default:
-					}
-				}
-				b.logMu.Unlock()
+				b.broadcastLog(msg)
+			case <-ticker.C:
+				// Heartbeat to keep SSE alive
+				heartbeat, _ := json.Marshal(models.LogEntry{
+					Timestamp: time.Now(),
+					NodeID:    "balancer",
+					Level:     models.LevelDebug,
+					Component: "system",
+					Message:   "heartbeat",
+				})
+				b.broadcastLog(string(heartbeat))
 			case <-b.stopCh:
+				ticker.Stop()
 				return
 			}
 		}
 	}()
+}
+
+func (b *Balancer) broadcastLog(msg string) {
+	b.logMu.Lock()
+	defer b.logMu.Unlock()
+	for ch := range b.logChs {
+		select {
+		case ch <- msg:
+		default:
+		}
+	}
 }
 
 func (b *Balancer) StartMetricProcessor() {

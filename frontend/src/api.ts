@@ -1,5 +1,23 @@
-const API_BASE_URL = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || ''; 
-const BALANCER_TOKEN = localStorage.getItem('BALANCER_TOKEN') || import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
+import { Ollama } from 'ollama/browser';
+import OpenAI from 'openai';
+
+const getBaseUrl = () => localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
+const getToken = () => localStorage.getItem('BALANCER_TOKEN') || import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
+
+export const getOllamaClient = () => {
+  const host = getBaseUrl();
+  return new Ollama({ host: host || window.location.origin });
+};
+
+export const getOpenAIClient = () => {
+  const host = getBaseUrl();
+  const token = getToken();
+  return new OpenAI({
+    baseURL: host ? `${host}/v1` : `${window.location.origin}/v1`,
+    apiKey: token,
+    dangerouslyAllowBrowser: true,
+  });
+};
 
 export interface ModelInfo {
   name: string;
@@ -109,19 +127,19 @@ export interface Config {
 }
 
 class FlakyOllamaSDK {
-  private headers: Record<string, string>;
-
-  constructor(token: string) {
-    this.headers = {
+  private getHeaders(): Record<string, string> {
+    const token = getToken();
+    return {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
     };
   }
 
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    const baseUrl = getBaseUrl();
+    const res = await fetch(`${baseUrl}${path}`, {
       ...options,
-      headers: { ...this.headers, ...options.headers },
+      headers: { ...this.getHeaders(), ...options.headers },
     });
     
     if (!res.ok) {
@@ -196,21 +214,48 @@ class FlakyOllamaSDK {
 
   // Logs
   streamLogs(onMessage: (msg: string) => void): () => void {
-    let logUrl = `${API_BASE_URL}/api/v1/logs`;
+    const baseUrl = getBaseUrl();
+    const token = getToken();
+    let logUrl = `${baseUrl}/api/v1/logs`;
     if (!logUrl.startsWith('http')) {
       logUrl = new URL(logUrl, window.location.origin).toString();
     }
     const url = new URL(logUrl);
-    url.searchParams.set('token', BALANCER_TOKEN);
-    const eventSource = new EventSource(url.toString());
-    eventSource.onmessage = (event) => {
-      onMessage(event.data);
+    url.searchParams.set('token', token);
+
+    let eventSource: EventSource | null = null;
+    let retryTimeout: any = null;
+
+    const connect = () => {
+      console.log(`[SSE] Connecting to ${url.toString()}...`);
+      eventSource = new EventSource(url.toString());
+      
+      eventSource.onopen = () => {
+        console.log('[SSE] Connection established');
+      };
+
+      eventSource.onmessage = (event) => {
+        console.debug('[SSE] Received message:', event.data);
+        onMessage(event.data);
+      };
+
+      eventSource.onerror = (err) => {
+        console.error('[SSE] EventSource failed:', err);
+        if (eventSource) eventSource.close();
+        
+        // Retry after 3s
+        clearTimeout(retryTimeout);
+        retryTimeout = setTimeout(connect, 3000);
+      };
     };
-    eventSource.onerror = (err) => {
-      console.error('EventSource failed:', err);
-      eventSource.close();
+
+    connect();
+
+    return () => {
+      console.log('[SSE] Closing connection');
+      if (eventSource) eventSource.close();
+      clearTimeout(retryTimeout);
     };
-    return () => eventSource.close();
   }
 
   // Config
@@ -226,6 +271,6 @@ class FlakyOllamaSDK {
   }
 }
 
-export const sdk = new FlakyOllamaSDK(BALANCER_TOKEN);
+export const sdk = new FlakyOllamaSDK();
 export const api = sdk;
 export default sdk;

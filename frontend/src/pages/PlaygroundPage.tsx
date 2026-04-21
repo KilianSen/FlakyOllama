@@ -13,25 +13,19 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { toast } from 'sonner';
 import { Ollama } from 'ollama/browser';
 import OpenAI from 'openai';
-import sdk from '../api';
+import sdk, { getOllamaClient, getOpenAIClient } from '../api';
 import { useCluster } from '../ClusterContext';
 import type { NodeStatus } from '../api';
 import { ModelSelector } from '../components/ModelSelector';
 
 type SDKMode = 'flakyollama' | 'ollama' | 'openai';
 
-const BALANCER_TOKEN = import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
-
-// SDK clients pointed at the local vite proxy (or nginx in production)
-const ollamaClient = new Ollama({ host: window.location.origin });
-const openaiClient = new OpenAI({
-  baseURL: `${window.location.origin}/v1`,
-  apiKey: BALANCER_TOKEN,
-  dangerouslyAllowBrowser: true,
-});
-
 export const PlaygroundPage: React.FC = () => {
   const { status } = useCluster();
+  
+  const ollamaClient = React.useMemo(() => getOllamaClient(), []);
+  const openaiClient = React.useMemo(() => getOpenAIClient(), []);
+
   const [sdkMode, setSdkMode] = useState<SDKMode>('ollama');
   const [loading, setLoading] = useState(false);
   const [streamedText, setStreamedText] = useState('');
