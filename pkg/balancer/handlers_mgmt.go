@@ -44,7 +44,6 @@ func (b *Balancer) HandleV1Logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	ch := make(chan string, 100)
 	b.logMu.Lock()
@@ -73,6 +72,22 @@ func (b *Balancer) HandleV1Logs(w http.ResponseWriter, r *http.Request) {
 		Message:   "Cloud sync established. Streaming live telemetry...",
 	})
 	fmt.Fprintf(w, "data: %s\n\n", string(initEntry))
+
+	// Historic logs
+	if recent, err := b.Storage.GetRecentLogs(100); err == nil {
+		// Reverse to show in chronological order
+		for i := len(recent) - 1; i >= 0; i-- {
+			l := recent[i]
+			entry, _ := json.Marshal(models.LogEntry{
+				Timestamp: l.Timestamp,
+				NodeID:    l.NodeID,
+				Level:     models.LogLevel(l.Level),
+				Component: l.Component,
+				Message:   l.Message,
+			})
+			fmt.Fprintf(w, "data: %s\n\n", string(entry))
+		}
+	}
 	flusher.Flush()
 
 	for {

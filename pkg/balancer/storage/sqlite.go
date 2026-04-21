@@ -41,6 +41,15 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			updated_at DATETIME
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics (timestamp);`,
+		`CREATE TABLE IF NOT EXISTS logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME,
+			node_id TEXT,
+			level TEXT,
+			component TEXT,
+			message TEXT
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs (timestamp);`,
 	}
 	for _, q := range queries {
 		if _, err = db.Exec(q); err != nil {
@@ -49,6 +58,53 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 	}
 
 	return &SQLiteStorage{db: db}, nil
+}
+
+func (s *SQLiteStorage) RecordLog(nodeID, level, component, message string) error {
+	_, err := s.db.Exec("INSERT INTO logs (timestamp, node_id, level, component, message) VALUES (?, ?, ?, ?, ?)",
+		time.Now(), nodeID, level, component, message)
+	return err
+}
+
+func (s *SQLiteStorage) GetRecentLogs(limit int) ([]struct {
+	Timestamp time.Time
+	NodeID    string
+	Level     string
+	Component string
+	Message   string
+}, error) {
+	rows, err := s.db.Query("SELECT timestamp, node_id, level, component, message FROM logs ORDER BY timestamp DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []struct {
+		Timestamp time.Time
+		NodeID    string
+		Level     string
+		Component string
+		Message   string
+	}
+	for rows.Next() {
+		var l struct {
+			Timestamp time.Time
+			NodeID    string
+			Level     string
+			Component string
+			Message   string
+		}
+		if err := rows.Scan(&l.Timestamp, &l.NodeID, &l.Level, &l.Component, &l.Message); err != nil {
+			return nil, err
+		}
+		logs = append(logs, l)
+	}
+	return logs, nil
+}
+
+func (s *SQLiteStorage) PruneLogs(keep int) error {
+	_, err := s.db.Exec("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY timestamp DESC LIMIT ?)", keep)
+	return err
 }
 
 func (s *SQLiteStorage) Close() error {

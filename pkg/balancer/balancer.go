@@ -102,7 +102,7 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Node-Id, X-Requested-With")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -114,9 +114,9 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 func (b *Balancer) Serve() error {
 	logging.Global.Infof("Balancer listening on %s (TLS: %v)", b.Address, b.Config.TLS.Enabled)
 	if b.Config.TLS.Enabled {
-		return http.ListenAndServeTLS(b.Address, b.Config.TLS.CertFile, b.Config.TLS.KeyFile, b.CORS(b.NewMux()))
+		return http.ListenAndServeTLS(b.Address, b.Config.TLS.CertFile, b.Config.TLS.KeyFile, b.NewMux())
 	}
-	return http.ListenAndServe(b.Address, b.CORS(b.NewMux()))
+	return http.ListenAndServe(b.Address, b.NewMux())
 }
 
 // NewMux returns a mux with the balancer's handlers registered.

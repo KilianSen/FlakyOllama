@@ -27,6 +27,13 @@ func (b *Balancer) StartLogProcessor() {
 		for {
 			select {
 			case entry := <-b.LogCh:
+				// Record to DB (async to not block broadcaster)
+				go func(e models.LogEntry) {
+					if err := b.Storage.RecordLog(e.NodeID, string(e.Level), e.Component, e.Message); err != nil {
+						logging.Global.Debugf("Failed to record log to DB: %v", err)
+					}
+				}(entry)
+
 				data, _ := json.Marshal(entry)
 				msg := string(data)
 				b.broadcastLog(msg)
@@ -160,6 +167,9 @@ func (b *Balancer) StartKeepAliveCleaner() {
 			case <-pruneTicker.C:
 				if err := b.Storage.PruneOldMetrics(2); err != nil {
 					logging.Global.Errorf("Failed to prune old metrics: %v", err)
+				}
+				if err := b.Storage.PruneLogs(1000); err != nil {
+					logging.Global.Errorf("Failed to prune logs: %v", err)
 				}
 			case <-b.stopCh:
 				ticker.Stop()
