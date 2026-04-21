@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Zap, Cpu, MoreHorizontal, ChevronRight } from 'lucide-react';
+import { Zap, Cpu, MoreHorizontal, ChevronRight, TrendingUp } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';

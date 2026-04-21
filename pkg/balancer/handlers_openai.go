@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/balancer/state"
+	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/models"
 	"bufio"
 	"encoding/json"
@@ -55,13 +56,13 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if !oaiReq.Stream {
-		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentAddr)
+		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentAddr, r)
 	} else {
-		b.handleOpenAIChatStream(w, resp, oaiReq.Model, agentAddr)
+		b.handleOpenAIChatStream(w, resp, oaiReq.Model, agentAddr, r)
 	}
 }
 
-func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
+func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
 	var ollamaResp struct {
 		Message         models.ChatMessage `json:"message"`
 		PromptEvalCount int                `json:"prompt_eval_count"`
@@ -125,7 +126,7 @@ func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.R
 		clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
 
 		select {
-		case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, reward, cost, clientKey}:
+		case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, reward, cost, 0, 0, clientKey}:
 		default:
 		}
 	}
@@ -135,7 +136,7 @@ func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.R
 	json.NewEncoder(w).Encode(oaiResp)
 }
 
-func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
+func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -191,7 +192,7 @@ func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Resp
 			clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
 
 			select {
-			case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaChunk.PromptEvalCount, ollamaChunk.EvalCount, reward, cost, clientKey}:
+			case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaChunk.PromptEvalCount, ollamaChunk.EvalCount, reward, cost, 0, 0, clientKey}:
 			default:
 			}
 		}
@@ -260,7 +261,8 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body, r.RemoteAddr, ollamaReq.AllowHedging, ollamaReq.Priority)
+	priority := b.getRequestPriority(r)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body, r.RemoteAddr, ollamaReq.AllowHedging, priority)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -268,13 +270,13 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 	defer resp.Body.Close()
 
 	if !oaiReq.Stream {
-		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentAddr)
+		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentAddr, r)
 	} else {
-		b.handleOpenAICompletionStream(w, resp, oaiReq.Model, agentAddr)
+		b.handleOpenAICompletionStream(w, resp, oaiReq.Model, agentAddr, r)
 	}
 }
 
-func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
+func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
 	var ollamaResp struct {
 		Response        string `json:"response"`
 		PromptEvalCount int    `json:"prompt_eval_count"`
@@ -336,7 +338,7 @@ func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *
 		clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
 
 		select {
-		case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, reward, cost, clientKey}:
+		case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, reward, cost, 0, 0, clientKey}:
 		default:
 		}
 	}
@@ -346,7 +348,7 @@ func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *
 	json.NewEncoder(w).Encode(oaiResp)
 }
 
-func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
+func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -402,7 +404,7 @@ func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *htt
 			clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
 
 			select {
-			case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaChunk.PromptEvalCount, ollamaChunk.EvalCount, reward, cost, clientKey}:
+			case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaChunk.PromptEvalCount, ollamaChunk.EvalCount, reward, cost, 0, 0, clientKey}:
 			default:
 			}
 		}

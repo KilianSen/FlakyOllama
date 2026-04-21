@@ -55,6 +55,7 @@ export interface NodeStatus {
   input_tokens: number;
   output_tokens: number;
   token_reward: number;
+  reputation: number;
 }
 
 export interface ClusterStatus {
@@ -199,14 +200,6 @@ export interface Config {
 }
 
 class FlakyOllamaSDK {
-  private getHeaders(): Record<string, string> {
-    const token = getToken();
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    };
-  }
-
   private async request<T>(path: string, options: RequestInit = {}, tokenOverride?: string): Promise<T> {
     const baseUrl = getBaseUrl();
     const token = tokenOverride || getToken();

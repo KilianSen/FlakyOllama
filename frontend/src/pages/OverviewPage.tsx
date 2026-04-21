@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Zap, Cpu, Server, Activity, Database, Layers, Coins } from 'lucide-react';
-
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip as RechartTooltip, ResponsiveContainer

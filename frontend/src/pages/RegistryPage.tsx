@@ -1,16 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Search, Download, Trash2, CheckCircle2, XCircle, Clock, Box, 
-  Database, ExternalLink, ShieldAlert, Cpu, Zap, RefreshCw, 
-  ShieldCheck, ShieldX, Pin, PinOff, Filter
+  Search, Download, Trash2, CheckCircle2, Box, RefreshCw, ShieldX, Pin
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
@@ -84,7 +81,7 @@ export const RegistryPage: React.FC = () => {
     try {
       // Note: Backend might need update to support node-specific delete via SDK
       await sdk.deleteModel(model);
-      toast.success(`Delete triggered for ${model}`);
+      toast.success(`Delete triggered for ${model}${nodeID ? ` on ${nodeID}` : ''}`);
       refresh();
     } catch (err: any) { toast.error(err.message); }
   };

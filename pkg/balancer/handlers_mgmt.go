@@ -134,7 +134,7 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 
 	agentsCopy := make(map[string]*models.NodeStatus)
 	for addr, agent := range snapshot.Agents {
-		a := *agent // full copy
+		a := agent // snapshot.Agents already contains values, not pointers
 		if stats, ok := tokenStats[agent.ID]; ok {
 			a.InputTokens = int(stats.Input)
 			a.OutputTokens = int(stats.Output)
@@ -727,7 +727,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	// Capture usage
 	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	go b.captureUsage(agentID, req.Model, bodyBytes, clientKey)
+	go b.captureUsage(agentID, req.Model, bodyBytes, clientKey, 0, 0)
 
 	var result models.InferenceResponse
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {

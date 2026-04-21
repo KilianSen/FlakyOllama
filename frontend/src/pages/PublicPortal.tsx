@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Key, Search, Coins, Zap, Shield, User, Box, 
-  ArrowRight, Info, AlertCircle, CheckCircle2,
-  TrendingUp, Activity, Database
+  Key, Coins, Zap, User, Box, 
+  Info, TrendingUp
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';

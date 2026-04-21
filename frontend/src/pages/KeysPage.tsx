@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Key, Plus, Shield, User, Database, Check, Copy, Trash2, Activity, Zap, Coins } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Plus, User, Check, Copy, Zap } from 'lucide-react';
+import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';

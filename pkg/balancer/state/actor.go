@@ -23,6 +23,7 @@ type StateSnapshot struct {
 	InProgressPulls map[string]time.Time
 	NodeWorkloads   map[string]int
 	ModelPolicies   map[string]map[string]struct{ Banned, Pinned bool }
+	AllModels       []string
 }
 
 // Message types for the Actor
@@ -116,6 +117,21 @@ func (a *ClusterStateActor) GetSnapshot() StateSnapshot {
 			for nodeID, policy := range nodes {
 				snapshot.ModelPolicies[m][nodeID] = policy
 			}
+		}
+
+		// Calculate all unique models
+		modelMap := make(map[string]bool)
+		for _, a := range s.Agents {
+			for _, m := range a.ActiveModels {
+				modelMap[m] = true
+			}
+			for _, m := range a.LocalModels {
+				modelMap[m.Model] = true
+			}
+		}
+		snapshot.AllModels = make([]string, 0, len(modelMap))
+		for m := range modelMap {
+			snapshot.AllModels = append(snapshot.AllModels, m)
 		}
 	})
 	return snapshot
