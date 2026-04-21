@@ -264,7 +264,7 @@ func (b *Balancer) pollAgents() {
 			resp, err := b.httpClient.Do(req)
 			if err != nil {
 				logging.Global.Errorf("Failed to poll agent %s (%s): %v", a.ID, address, err)
-				b.recordError(address)
+				b.recordError(address, "poll_error")
 				return
 			}
 			defer resp.Body.Close()

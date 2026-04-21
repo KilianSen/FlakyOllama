@@ -74,12 +74,16 @@ func (a *Agent) Register() error {
 		tier = "dedicated"
 	}
 
+	status, _ := a.Monitor.GetStatus()
+
 	req := models.RegisterRequest{
-		ID:      a.ID,
-		Address: a.EffectiveAddress,
-		Tier:    tier,
+		ID:       a.ID,
+		Address:  a.EffectiveAddress,
+		Tier:     tier,
+		HasGPU:   status.HasGPU,
+		GPUModel: status.GPUModel,
 	}
-	logging.Global.Infof("Registering agent %s with address %s", a.ID, a.EffectiveAddress)
+	logging.Global.Infof("Registering agent %s with address %s [GPU: %v (%s)]", a.ID, a.EffectiveAddress, req.HasGPU, req.GPUModel)
 	body, _ := json.Marshal(req)
 
 	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
@@ -133,11 +137,37 @@ func (a *Agent) NewMux() *http.ServeMux {
 // Serve starts the HTTP server.
 func (a *Agent) Serve() error {
 	logging.Global.Infof("Agent %s listening on %s (TLS: %v)", a.ID, a.Address, a.Config.TLS.Enabled)
+
+	// Start background tasks
 	go a.StartLogShipper()
+	go a.StartRegistrationLoop()
+
 	if a.Config.TLS.Enabled {
 		return http.ListenAndServeTLS(a.Address, a.Config.TLS.CertFile, a.Config.TLS.KeyFile, a.NewMux())
 	}
 	return http.ListenAndServe(a.Address, a.NewMux())
+}
+
+// StartRegistrationLoop ensures the agent stays registered even if the balancer restarts.
+func (a *Agent) StartRegistrationLoop() {
+	// Register immediately on start
+	if err := a.Register(); err != nil {
+		logging.Global.Errorf("Initial registration failed: %v", err)
+	}
+
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := a.Register(); err != nil {
+				logging.Global.Debugf("Periodic re-registration failed: %v", err)
+			}
+		case <-a.stopCh:
+			return
+		}
+	}
 }
 
 func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {

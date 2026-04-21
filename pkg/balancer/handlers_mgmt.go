@@ -461,12 +461,14 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		ID:       req.ID,
 		Address:  addr,
 		Tier:     req.Tier,
+		HasGPU:   req.HasGPU,
+		GPUModel: req.GPUModel,
 		State:    models.StateHealthy,
 		Errors:   0,
 		LastSeen: time.Now(),
 	})
 
-	logging.Global.Infof("Registered agent: %s at %s [Tier: %s]", req.ID, addr, req.Tier)
+	logging.Global.Infof("Registered agent: %s at %s [Tier: %s, GPU: %v (%s)]", req.ID, addr, req.Tier, req.HasGPU, req.GPUModel)
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "registered"})
 }
 

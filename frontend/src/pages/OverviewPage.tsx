@@ -40,9 +40,12 @@ export const OverviewPage: React.FC = () => {
 
   const vramData = useMemo(() => nodes.map(n => ({
     name: n.id.split('-').pop() ?? n.id,
-    used: parseFloat((n.vram_used / 1e9).toFixed(1)),
-    total: parseFloat((n.vram_total / 1e9).toFixed(1)),
-    free: parseFloat(((n.vram_total - n.vram_used) / 1e9).toFixed(1)),
+    used: parseFloat(((n.has_gpu ? n.vram_used : (n.memory_usage / 100 * n.memory_total)) / 1e9).toFixed(1)),
+    total: parseFloat(((n.has_gpu ? n.vram_total : n.memory_total) / 1e9).toFixed(1)),
+    isGPU: n.has_gpu
+  })).map(d => ({
+    ...d,
+    free: Math.max(0, d.total - d.used)
   })), [nodes]);
 
   const cpuData = useMemo(() => nodes.map(n => ({
@@ -50,6 +53,9 @@ export const OverviewPage: React.FC = () => {
     cpu: parseFloat(n.cpu_usage.toFixed(1)),
     mem: parseFloat(n.memory_usage.toFixed(1)),
   })), [nodes]);
+
+  const clusterTotalRAM = nodes.reduce((acc, n) => acc + (n.memory_total || 0), 0);
+  const clusterUsedRAM = nodes.reduce((acc, n) => acc + ((n.memory_usage / 100) * (n.memory_total || 0)), 0);
 
   const kpis = [
     {
@@ -60,11 +66,18 @@ export const OverviewPage: React.FC = () => {
       color: 'text-blue-400',
     },
     {
-      title: 'Total VRAM',
+      title: 'Accelerator (VRAM)',
       value: formatBytes(status.total_vram),
-      sub: `${formatBytes(status.used_vram)} used`,
-      icon: Layers,
+      sub: `${formatBytes(status.used_vram)} in use`,
+      icon: Zap,
       color: 'text-purple-400',
+    },
+    {
+      title: 'System RAM',
+      value: formatBytes(clusterTotalRAM),
+      sub: `${formatBytes(clusterUsedRAM)} in use`,
+      icon: Layers,
+      color: 'text-emerald-400',
     },
     {
       title: 'Active Workloads',
@@ -87,13 +100,6 @@ export const OverviewPage: React.FC = () => {
       sub: 'across all nodes',
       icon: Database,
       color: 'text-indigo-400',
-    },
-    {
-      title: 'Uptime',
-      value: formatUptime(status.uptime_seconds),
-      sub: 'balancer runtime',
-      icon: Clock,
-      color: 'text-teal-400',
     },
   ];
 
@@ -190,11 +196,11 @@ export const OverviewPage: React.FC = () => {
         <Card className="lg:col-span-3 bg-card border-border/50">
           <CardHeader className="py-3 border-b border-border/50">
             <CardTitle className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-2">
-              <Layers size={12} className="text-purple-400" /> VRAM Utilization per Node
+              <Zap size={12} className="text-purple-400" /> Accelerated Resource Utilization
             </CardTitle>
           </CardHeader>
           <CardContent className="p-4">
-            {vramData.some(d => d.total > 0) ? (
+            {vramData.length > 0 ? (
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={vramData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="oklch(1 0 0 / 5%)" />
@@ -204,7 +210,11 @@ export const OverviewPage: React.FC = () => {
                     contentStyle={{ background: 'oklch(0.175 0 0)', border: '1px solid oklch(1 0 0 / 8%)', borderRadius: 8, fontSize: 11 }}
                     labelStyle={{ color: 'oklch(0.985 0 0)', fontWeight: 700 }}
                     itemStyle={{ color: 'oklch(0.65 0 0)' }}
-                    formatter={(val: unknown) => [`${val} GB`]}
+                    formatter={(val: any, name: any, props: any) => {
+                       const node = props.payload;
+                       const label = node.isGPU ? `VRAM ${name}` : `RAM ${name}`;
+                       return [`${val} GB`, label];
+                    }}
                   />
                   <Bar dataKey="used" name="Used" fill="oklch(0.7 0.15 250)" radius={[3, 3, 0, 0]} />
                   <Bar dataKey="free" name="Free" fill="oklch(0.22 0 0)" radius={[3, 3, 0, 0]} />

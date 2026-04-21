@@ -42,7 +42,8 @@ type NodeStatus struct {
 	LocalModels    []ModelInfo `json:"local_models"`  // Models available on disk
 	LastSeen       time.Time   `json:"last_seen"`
 	State          NodeState   `json:"state"`
-	Errors         int         `json:"errors"` // Consecutive errors
+	Errors         int         `json:"errors"`  // Consecutive errors
+	Message        string      `json:"message"` // Status message
 	CooloffUntil   time.Time   `json:"cooloff_until"`
 	Draining       bool        `json:"draining"`
 }
@@ -108,9 +109,11 @@ type ModelDetails struct {
 
 // RegisterRequest is sent by an Agent to the Balancer.
 type RegisterRequest struct {
-	ID      string `json:"id"`
-	Address string `json:"address"`
-	Tier    string `json:"tier"`
+	ID       string `json:"id"`
+	Address  string `json:"address"`
+	Tier     string `json:"tier"`
+	HasGPU   bool   `json:"has_gpu"`
+	GPUModel string `json:"gpu_model"`
 }
 
 // ClusterStatus represents the complete state of the cluster for the dashboard.

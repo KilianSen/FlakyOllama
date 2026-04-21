@@ -169,7 +169,7 @@ func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc,
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
-		b.recordError(addr)
+		b.recordError(addr, "http_error")
 		b.State.DoAsync(func(s *state.ClusterState) {
 			s.NodeWorkloads[addr]--
 		})

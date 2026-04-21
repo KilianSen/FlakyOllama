@@ -97,10 +97,10 @@ export const FleetPage: React.FC = () => {
                   </TableCell>
                   <TableCell>
                     <div>
-                      <Badge variant="outline" className="text-[9px] font-bold h-4 mb-1">{node.tier}</Badge>
-                      {node.has_gpu && node.gpu_model && (
-                        <p className="text-[9px] text-muted-foreground truncate max-w-[140px]">{node.gpu_model}</p>
-                      )}
+                      <Badge variant="outline" className="text-[9px] font-bold h-4 mb-1 uppercase tracking-tighter">{node.tier}</Badge>
+                      <p className="text-[9px] text-muted-foreground truncate max-w-[140px]">
+                        {node.has_gpu ? (node.gpu_model || 'Unknown GPU') : 'CPU ONLY'}
+                      </p>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -193,6 +193,22 @@ export const FleetPage: React.FC = () => {
               </SheetHeader>
               <ScrollArea className="h-[calc(100vh-120px)]">
                 <div className="p-6 space-y-6">
+                  {/* Status Message */}
+                  {selectedNode.message && (
+                    <div className={`p-4 rounded-xl border ${
+                      selectedNode.state === 2 ? 'bg-red-500/5 border-red-500/20' : 
+                      selectedNode.state === 1 ? 'bg-amber-500/5 border-amber-500/20' : 
+                      'bg-emerald-500/5 border-emerald-500/20'
+                    }`}>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-1">Status Message</p>
+                      <p className={`text-xs font-bold ${
+                        selectedNode.state === 2 ? 'text-red-400' : 
+                        selectedNode.state === 1 ? 'text-amber-400' : 
+                        'text-emerald-400'
+                      }`}>{selectedNode.message}</p>
+                    </div>
+                  )}
+
                   {/* Hardware */}
                   <div>
                     <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-3">Hardware</p>

@@ -66,15 +66,17 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	_, err := io.Copy(w, reader)
 	latency := time.Since(start)
 	if err != nil {
-		b.recordError(agentAddr)
-		select {
-		case b.MetricCh <- metricEntry{agentAddr, modelName, latency, false}:
-		default:
-		}
+		reason := "stream_error"
 		if errors.Is(err, ErrStalled) {
+			reason = "stalled"
 			logging.Global.Warnf("Agent %s stalled during stream for model %s", agentAddr, modelName)
 		} else {
 			logging.Global.Errorf("Stream error from %s: %v", agentAddr, err)
+		}
+		b.recordError(agentAddr, reason)
+		select {
+		case b.MetricCh <- metricEntry{agentAddr, modelName, latency, false}:
+		default:
 		}
 		return
 	}
@@ -97,19 +99,22 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
 }
 
-func (b *Balancer) recordError(addr string) {
+func (b *Balancer) recordError(addr string, reason string) {
 	b.State.Do(func(s *state.ClusterState) {
 		if a, ok := s.Agents[addr]; ok {
 			a.Errors++
+			a.Message = "Error: " + reason
 			oldState := a.State
 			if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
 				a.State = models.StateBroken
 				a.CooloffUntil = time.Now().Add(time.Duration(b.Config.CircuitBreaker.CooloffSec) * time.Second)
+				a.Message = "Broken: too many errors (" + reason + ")"
 			} else {
 				a.State = models.StateDegraded
 			}
 			if oldState != a.State {
-				logging.Global.Infof("Node %s (%s) state changed: %s -> %s (errors: %d, cooloff until: %v)", a.ID, addr, oldState.String(), a.State.String(), a.Errors, a.CooloffUntil)
+				logging.Global.Infof("Node %s (%s) state changed: %s -> %s (reason: %s, errors: %d, cooloff until: %v)",
+					a.ID, addr, oldState.String(), a.State.String(), reason, a.Errors, a.CooloffUntil)
 			}
 		}
 	})
@@ -123,6 +128,7 @@ func (b *Balancer) recordSuccess(addr string) {
 			}
 			a.Errors = 0
 			a.State = models.StateHealthy
+			a.Message = "Ready"
 		}
 	})
 }
