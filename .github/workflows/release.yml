@@ -43,7 +43,11 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          tags: ${{ steps.meta-core.outputs.tags }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-balancer:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-balancer:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-agent:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-agent:${{ github.sha }}
           labels: ${{ steps.meta-core.outputs.labels }}
 
 
