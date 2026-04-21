@@ -9,7 +9,6 @@ import { Slider } from '@/components/ui/slider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { toast } from 'sonner';
-import { Ollama } from 'ollama/browser';
 import OpenAI from 'openai';
 import { getOllamaClient, getOpenAIClient } from '../api';
 import { useCluster } from '../ClusterContext';

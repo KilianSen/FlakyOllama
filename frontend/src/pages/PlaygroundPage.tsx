@@ -11,8 +11,6 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { toast } from 'sonner';
-import { Ollama } from 'ollama/browser';
-import OpenAI from 'openai';
 import sdk, { getOllamaClient, getOpenAIClient } from '../api';
 import { useCluster } from '../ClusterContext';
 import type { NodeStatus } from '../api';
