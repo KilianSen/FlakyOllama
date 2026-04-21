@@ -54,6 +54,18 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
       });
       return;
     }
+
+    if (field.startsWith('circuit_breaker.')) {
+      const key = field.split('.')[1];
+      setConfig({
+        ...config,
+        circuit_breaker: {
+          ...config.circuit_breaker,
+          [key]: value
+        }
+      });
+      return;
+    }
     
     setConfig({ ...config, [field]: value });
   };
@@ -129,6 +141,29 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     <label className="block text-sm font-medium text-gray-700">Loaded Model Bonus</label>
                     <input type="number" step="0.1" value={config.weights.loaded_model_bonus} onChange={(e) => handleChange('weight.loaded_model_bonus', parseFloat(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Workload Penalty</label>
+                    <input type="number" step="0.1" value={config.weights.workload_penalty} onChange={(e) => handleChange('weight.workload_penalty', parseFloat(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Local Model Bonus</label>
+                    <input type="number" step="0.1" value={config.weights.local_model_bonus} onChange={(e) => handleChange('weight.local_model_bonus', parseFloat(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Circuit Breaker Section */}
+              <div>
+                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4 border-b pb-2">Circuit Breaker</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Error Threshold</label>
+                    <input type="number" value={config.circuit_breaker.error_threshold} onChange={(e) => handleChange('circuit_breaker.error_threshold', parseInt(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Cooloff (Seconds)</label>
+                    <input type="number" value={config.circuit_breaker.cooloff_sec} onChange={(e) => handleChange('circuit_breaker.cooloff_sec', parseInt(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
+                  </div>
                 </div>
               </div>
               
@@ -137,12 +172,24 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4 border-b pb-2">System Limits</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
+                    <label className="block text-sm font-medium text-gray-700">Max Queue Depth</label>
+                    <input type="number" value={config.max_queue_depth} onChange={(e) => handleChange('max_queue_depth', parseInt(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
+                  </div>
+                  <div>
                     <label className="block text-sm font-medium text-gray-700">Stall Timeout (Seconds)</label>
                     <input type="number" value={config.stall_timeout_sec} onChange={(e) => handleChange('stall_timeout_sec', parseInt(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Keep Alive Duration (Seconds)</label>
                     <input type="number" value={config.keep_alive_duration_sec} onChange={(e) => handleChange('keep_alive_duration_sec', parseInt(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Stale Threshold</label>
+                    <input type="number" value={config.stale_threshold} onChange={(e) => handleChange('stale_threshold', parseInt(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Poll Interval (ms)</label>
+                    <input type="number" value={config.poll_interval_ms} onChange={(e) => handleChange('poll_interval_ms', parseInt(e.target.value))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
                   </div>
                 </div>
               </div>

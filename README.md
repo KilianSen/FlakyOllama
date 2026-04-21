@@ -32,7 +32,7 @@ The system is built upon two distinct components: the Agent and the Balancer.
 - **Agent**: Deployed on each node, the Agent acts as a bridge between the local Ollama instance and the Balancer. It monitors local hardware capabilities and performance, relaying telemetry back to the central Balancer.
 - **Balancer**: The brain of the operation. It aggregates telemetry from all Agents and orchestrates workload distribution. The Balancer communicates strictly with Agents—never directly with the Ollama nodes—ensuring a clean, secure, and scalable architecture.
 
-_Note: Both components are packaged into a single Docker image, toggleable via an environment variable. Additionally, we provide the `FlakyOllama-integrated` image, which bundles the Agent directly alongside the official Ollama runtime for frictionless deployment on worker nodes._
+_Note: Both components are packaged into a single Docker image, toggleable via an environment variable._
 
 ---
 

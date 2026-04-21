@@ -27,16 +27,9 @@ services:
       - VITE_BALANCER_TOKEN=your-secret-balancer-token
     restart: always
 
-  agent-1:
-    image: ghcr.io/kiliansen/flakyollama-integrated:latest
-    environment:
-      - ROLE=agent
-      - AGENT_ID=gpu-node-1
-      - BALANCER_URL=http://balancer:8080
-      - AGENT_TOKEN=your-secret-agent-token
-      - BALANCER_TOKEN=your-secret-balancer-token
+  ollama-1:
+    image: ollama/ollama:latest
     volumes:
-      - agent1_data:/data
       - agent1_ollama:/root/.ollama
     deploy:
       resources:
@@ -47,17 +40,40 @@ services:
               capabilities: [gpu]
     restart: always
 
+  agent-1:
+    image: ghcr.io/kiliansen/flakyollama-agent:latest
+    environment:
+      - ROLE=agent
+      - AGENT_ID=gpu-node-1
+      - BALANCER_URL=http://balancer:8080
+      - OLLAMA_URL=http://ollama-1:11434
+      - AGENT_TOKEN=your-secret-agent-token
+      - BALANCER_TOKEN=your-secret-balancer-token
+    volumes:
+      - agent1_data:/data
+    depends_on:
+      - ollama-1
+    restart: always
+
+  ollama-2:
+    image: ollama/ollama:latest
+    volumes:
+      - agent2_ollama:/root/.ollama
+    restart: always
+
   agent-2:
-    image: ghcr.io/kiliansen/flakyollama-integrated:latest
+    image: ghcr.io/kiliansen/flakyollama-agent:latest
     environment:
       - ROLE=agent
       - AGENT_ID=cpu-node-2
       - BALANCER_URL=http://balancer:8080
+      - OLLAMA_URL=http://ollama-2:11434
       - AGENT_TOKEN=your-secret-agent-token
       - BALANCER_TOKEN=your-secret-balancer-token
     volumes:
       - agent2_data:/data
-      - agent2_ollama:/root/.ollama
+    depends_on:
+      - ollama-2
     restart: always
 
 volumes:

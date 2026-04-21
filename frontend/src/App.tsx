@@ -11,6 +11,7 @@ import { DistributedRegistry } from './components/dashboard/DistributedRegistry'
 import { InfrastructureFleet } from './components/dashboard/InfrastructureFleet';
 import { InferencePlayground } from './components/dashboard/InferencePlayground';
 import { LogStream } from './components/dashboard/LogStream';
+import { SettingsModal } from './SettingsModal';
 
 // Shadcn UI Components
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import { Separator } from "@/components/ui/separator";
 const App = () => {
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const fetchStatus = async () => {
     try {
@@ -55,6 +57,7 @@ const App = () => {
   return (
     <div className="min-h-screen bg-slate-50/30 flex flex-col font-sans selection:bg-primary/10 text-slate-900">
       <Toaster position="top-center" richColors closeButton />
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       
       <header className="border-b bg-background/80 backdrop-blur-md px-8 h-14 flex items-center justify-between shrink-0 sticky top-0 z-50">
         <div className="flex items-center gap-4">
@@ -77,6 +80,9 @@ const App = () => {
           </div>
           <Separator orientation="vertical" className="h-6" />
           <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsSettingsOpen(true)}>
+              <Settings size={14} />
+            </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={fetchStatus}>
               <RefreshCw size={14} />
             </Button>

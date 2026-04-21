@@ -39,17 +39,26 @@ services:
       restart_policy:
         condition: any
 
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - agent_ollama:/root/.ollama
+    deploy:
+      mode: global
+      restart_policy:
+        condition: any
+
   agent:
-    image: ghcr.io/kiliansen/flakyollama-integrated:latest
+    image: ghcr.io/kiliansen/flakyollama-agent:latest
     environment:
       - ROLE=agent
       - AGENT_ID={{.Node.Hostname}}{{.Task.Slot}}
       - BALANCER_URL=http://balancer:8080
+      - OLLAMA_URL=http://ollama:11434
       - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
       - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
     volumes:
       - agent_data:/data
-      - agent_ollama:/root/.ollama
     deploy:
       mode: global # One agent per node in the cluster
       restart_policy:
