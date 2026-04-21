@@ -9,7 +9,7 @@ import { Slider } from '@/components/ui/slider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { toast } from 'sonner';
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { getOllamaClient, getOpenAIClient } from '../api';
 import { useCluster } from '../ClusterContext';
 import {
@@ -220,7 +220,7 @@ export const ChatPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [input, selectedModel, loading, sdkMode, messages, systemPrompt, temperature]);
+  }, [input, selectedModel, loading, sdkMode, messages, systemPrompt, temperature, ollamaClient, openaiClient]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
