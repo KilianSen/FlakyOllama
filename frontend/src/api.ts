@@ -228,7 +228,7 @@ class FlakyOllamaSDK {
 
     const connect = () => {
       console.log(`[SSE] Connecting to ${url.toString()}...`);
-      eventSource = new EventSource(url.toString());
+      eventSource = new EventSource(url.toString(), { withCredentials: false });
       
       eventSource.onopen = () => {
         console.log('[SSE] Connection established');

@@ -101,17 +101,17 @@ func (b *Balancer) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "" {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		} else {
+		if origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Vary", "Origin")
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Node-Id, X-Requested-With, User-Agent, Accept-Encoding, Accept-Language")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Node-Id, X-Requested-With, User-Agent, Accept-Encoding, Accept-Language, Last-Event-ID")
 		w.Header().Set("Access-Control-Allow-Private-Network", "true")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if r.Method == "OPTIONS" {
 			w.Header().Set("Access-Control-Max-Age", "86400")
