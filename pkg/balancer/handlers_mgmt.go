@@ -41,6 +41,7 @@ func generateJobID() string {
 // --- Handlers ---
 
 func (b *Balancer) HandleV1Logs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
