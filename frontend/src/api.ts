@@ -6,7 +6,13 @@ const getToken = () => localStorage.getItem('BALANCER_TOKEN') || import.meta.env
 
 export const getOllamaClient = () => {
   const host = getBaseUrl();
-  return new Ollama({ host: host || window.location.origin });
+  const token = getToken();
+  return new Ollama({ 
+    host: host || window.location.origin,
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  });
 };
 
 export const getOpenAIClient = () => {
