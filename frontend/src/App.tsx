@@ -2,7 +2,7 @@ import { NavLink, Outlet } from 'react-router';
 import { useCluster } from './ClusterContext';
 import {
   LayoutDashboard, Server, Database, Terminal, ScrollText,
-  Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare,
+  Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare, Key,
 } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -13,11 +13,11 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { ClusterStatus } from './api';
-
 const navItems = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/fleet', label: 'Fleet', icon: Server },
   { to: '/registry', label: 'Registry', icon: Database },
+  { to: '/keys', label: 'Access', icon: Key },
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/logs', label: 'Logs', icon: ScrollText },
@@ -43,8 +43,9 @@ const App = () => {
   )?.label ?? 'Dashboard';
 
   const isConfigPage = location.pathname === '/config';
+  const isPortalPage = location.pathname === '/portal';
 
-  if (!status && !isConfigPage) {
+  if (!status && !isConfigPage && !isPortalPage) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
         <Toaster position="top-right" theme="dark" richColors />

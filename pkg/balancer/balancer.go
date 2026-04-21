@@ -23,6 +23,14 @@ type metricEntry struct {
 	success       bool
 }
 
+type tokenUsageEntry struct {
+	nodeID, model  string
+	input, output  int
+	reward, cost   float64
+	ttft, duration int64
+	clientKey      string
+}
+
 // Balancer manages multiple agents and routes requests.
 type Balancer struct {
 	Address        string
@@ -37,6 +45,7 @@ type Balancer struct {
 	perfMu         sync.RWMutex
 	MetricCh       chan metricEntry
 	LogCh          chan models.LogEntry
+	TokenCh        chan tokenUsageEntry
 	stopCh         chan struct{}
 	logChs         map[chan string]bool
 	logMu          sync.Mutex
@@ -65,6 +74,7 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 		PerfCache:      make(map[string]storage.PerformanceMetric),
 		MetricCh:       make(chan metricEntry, 1000),
 		LogCh:          make(chan models.LogEntry, 1000),
+		TokenCh:        make(chan tokenUsageEntry, 1000),
 		stopCh:         make(chan struct{}),
 		logChs:         make(map[chan string]bool),
 		StartTime:      time.Now(),
@@ -79,6 +89,22 @@ func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, 
 
 	b.State.Start()
 	return b, nil
+}
+
+func (b *Balancer) getRequestPriority(r *http.Request) int {
+	if ck, ok := r.Context().Value(auth.ContextKeyClientData).(models.ClientKey); ok {
+		// Priority is based on credit balance
+		// We cap it at 1000 for routing purposes
+		p := int(ck.Credits)
+		if p < 0 {
+			p = 0
+		}
+		if p > 1000 {
+			p = 1000
+		}
+		return p
+	}
+	return 0
 }
 
 func (b *Balancer) Ship(entry models.LogEntry) {
@@ -179,17 +205,16 @@ func (b *Balancer) NewMux() *chi.Mux {
 	})
 
 	// Management Layer (Legacy compatibility)
-	r.Post("/register", auth.Middleware(remoteToken, b.HandleV1Register))
-	r.Post("/api/log/collect", auth.Middleware(remoteToken, b.HandleV1LogCollect))
-	r.Get("/api/status", auth.Middleware(token, b.HandleV1ClusterStatus))
-	r.Get("/api/logs", auth.Middleware(token, b.HandleV1Logs))
+	r.Post("/register", auth.Middleware(remoteToken, b.Storage, b.HandleV1Register))
+	r.Post("/api/log/collect", auth.Middleware(remoteToken, b.Storage, b.HandleV1LogCollect))
+	r.Get("/api/status", auth.Middleware(token, b.Storage, b.HandleV1ClusterStatus))
+	r.Get("/api/logs", auth.Middleware(token, b.Storage, b.HandleV1Logs))
 
 	// Management API (V1 Structured)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
-			return auth.Middleware(token, next.ServeHTTP)
+			return auth.Middleware(token, b.Storage, next.ServeHTTP)
 		})
-
 		r.Get("/status", b.HandleV1ClusterStatus)
 		r.Get("/logs", b.HandleV1Logs)
 
@@ -210,6 +235,22 @@ func (b *Balancer) NewMux() *chi.Mux {
 			r.Post("/{id}/approve", b.HandleV1ModelRequestApprove)
 			r.Post("/{id}/decline", b.HandleV1ModelRequestDecline)
 		})
+
+		r.Post("/policies", b.HandleV1ModelPolicySet)
+
+		r.Route("/keys", func(r chi.Router) {
+			r.Route("/clients", func(r chi.Router) {
+				r.Get("/", b.HandleV1ClientKeysList)
+				r.Post("/", b.HandleV1ClientKeyCreate)
+			})
+			r.Route("/agents", func(r chi.Router) {
+				r.Get("/", b.HandleV1AgentKeysList)
+				r.Post("/", b.HandleV1AgentKeyCreate)
+			})
+		})
+
+		r.Get("/catalog", b.HandleV1Catalog)
+		r.Get("/me", b.HandleV1Me)
 
 		r.Get("/jobs/{id}", b.HandleV1JobStatus)
 		r.Post("/test", b.HandleV1TestInference)

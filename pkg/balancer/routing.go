@@ -39,6 +39,13 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 	now := time.Now()
 
 	for addr, a := range snapshot.Agents {
+		// 0. Policy Check: Is model banned on this node?
+		if policy, ok := snapshot.ModelPolicies[req.Model]; ok {
+			if p, ok := policy[a.ID]; ok && p.Banned {
+				continue
+			}
+		}
+
 		// Connectivity and state checks
 		if time.Since(a.LastSeen) > 5*time.Second || a.Draining {
 			continue
@@ -88,6 +95,11 @@ func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, 
 
 		if perf.AvgLatency > 0 {
 			score *= (1.0 / perf.AvgLatency) * b.Config.Weights.LatencyWeight
+		}
+
+		// 4.1 Reputation System (Ecosystem Penalty/Bonus)
+		if a.Reputation > 0 {
+			score *= a.Reputation
 		}
 
 		// 5. Degradation Penalty
@@ -213,6 +225,13 @@ func (b *Balancer) triggerAllocation(model string, minVRAM uint64) {
 	var foundTarget = false
 
 	for _, a := range snapshot.Agents {
+		// 0. Policy Check
+		if policy, ok := snapshot.ModelPolicies[model]; ok {
+			if p, ok := policy[a.ID]; ok && p.Banned {
+				continue
+			}
+		}
+
 		// Connectivity and basic requirements
 		if time.Since(a.LastSeen) > 5*time.Second || a.State == models.StateBroken || a.Draining {
 			continue

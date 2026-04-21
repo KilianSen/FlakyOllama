@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, RefreshCw, Shield, Zap, BarChart2, Clock } from 'lucide-react';
+import { Save, RefreshCw, Shield, Zap, BarChart2, Clock, Trash2, TrendingUp } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -57,6 +57,47 @@ function NumberField({
       }}
       className="h-8 bg-muted/50 border-border/50 text-xs font-mono text-right"
     />
+  );
+}
+
+function FactorTable({ title, factors, onUpdate }: { title: string, factors: Record<string, number>, onUpdate: (f: Record<string, number>) => void }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+         <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">{title}</p>
+         <Button 
+           variant="outline" size="sm" className="h-6 text-[8px] font-black uppercase"
+           onClick={() => {
+             const m = prompt('Enter model name:');
+             if (m) onUpdate({ ...factors, [m]: 1.0 });
+           }}
+         >+ Add</Button>
+      </div>
+      <div className="space-y-2">
+        {Object.entries(factors).map(([model, factor]) => (
+          <div key={model} className="flex items-center gap-2 bg-muted/20 p-2 rounded-lg border border-border/30 group">
+            <span className="text-[9px] font-mono font-black flex-1 truncate">{model}</span>
+            <Input
+              type="number"
+              className="h-6 w-16 bg-background text-[9px] font-black p-1"
+              value={factor}
+              onChange={e => onUpdate({ ...factors, [model]: parseFloat(e.target.value) })}
+            />
+            <Button 
+              variant="ghost" size="sm" className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100"
+              onClick={() => {
+                const next = { ...factors };
+                delete next[model];
+                onUpdate(next);
+              }}
+            ><Trash2 size={10} /></Button>
+          </div>
+        ))}
+        {Object.keys(factors).length === 0 && (
+          <p className="text-[9px] italic text-muted-foreground/40 text-center py-2">No custom factors defined</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -138,7 +179,7 @@ export const ConfigPage: React.FC = () => {
         </div>
       </div>
 
-      <Accordion type="multiple" defaultValue={['conn', 'hedging', 'routing', 'circuit', 'limits']} className="space-y-3">
+      <Accordion type="multiple" defaultValue={['conn', 'hedging', 'routing', 'circuit', 'limits', 'econ']} className="space-y-3">
 
         {/* Connection */}
         <AccordionItem value="conn" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
@@ -189,7 +230,7 @@ export const ConfigPage: React.FC = () => {
             {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}
           </div>
         ) : error ? (
-          <div className="p-12 text-center bg-card border border-dashed border-border rounded-xl">
+          <div className="p-12 text-center bg-card border border-dashed border-border rounded-xl mt-3">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Failed to connect to cluster</p>
             <p className="text-[10px] text-muted-foreground/60 mt-2">Check your connection settings above and retry</p>
             <Button variant="outline" size="sm" className="mt-4 h-8 text-xs font-bold" onClick={load}>
@@ -198,138 +239,253 @@ export const ConfigPage: React.FC = () => {
           </div>
         ) : config && (
           <>
+            {/* Economics */}
+            <AccordionItem value="econ" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+              <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+                <div className="flex items-center gap-2">
+                  <BarChart2 size={14} className="text-amber-400" />
+                  Cluster Economics
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-4">
+                <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+                  Configure how agents earn credits (Reward) and how clients are charged (Cost). 
+                  Total = tokens * model_factor * global_multiplier.
+                </p>
+
+                <div className="grid grid-cols-2 gap-8">
+                   {/* Agent Side */}
+                   <div className="space-y-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-400/80">Agent Rewards</p>
+                      <FieldRow label="Global Multiplier" description="Base reward for all nodes">
+                        <NumberField 
+                          value={config.global_reward_multiplier} 
+                          onChange={v => set('global_reward_multiplier', v)} 
+                          step={0.1} min={0}
+                        />
+                      </FieldRow>
+                      <Separator className="bg-border/30" />
+                      <FactorTable 
+                        title="Model Reward Factors"
+                        factors={config.model_reward_factors || {}}
+                        onUpdate={(next) => set('model_reward_factors', next)}
+                      />
+                   </div>
+
+                   {/* Client Side */}
+                   <div className="space-y-4 border-l border-border/30 pl-8">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-blue-400/80">Client Costs</p>
+                      <FieldRow label="Global Multiplier" description="Base charge for all clients">
+                        <NumberField 
+                          value={config.global_cost_multiplier} 
+                          onChange={v => set('global_cost_multiplier', v)} 
+                          step={0.1} min={0}
+                        />
+                      </FieldRow>
+                      <Separator className="bg-border/30" />
+                      <FactorTable 
+                        title="Model Cost Factors"
+                        factors={config.model_cost_factors || {}}
+                        onUpdate={(next) => set('model_cost_factors', next)}
+                      />
+                   </div>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
             {/* Hedging */}
             <AccordionItem value="hedging" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
-          <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
-            <div className="flex items-center gap-2">
-              <Zap size={14} className="text-primary" />
-              Request Hedging
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="pb-4">
-            <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
-              Duplicate delayed requests on an alternate node to reduce tail latency. The percentile threshold determines when a request is considered stale enough to hedge.
-            </p>
-            <Separator className="mb-4 bg-border/50" />
-            <FieldRow label="Enable Hedging" description="Activate request duplication on slow nodes">
-              <div className="flex justify-end">
-                <Switch
-                  checked={config.enable_hedging}
-                  onCheckedChange={v => set('enable_hedging', v)}
-                />
-              </div>
-            </FieldRow>
-            <FieldRow label="Percentile Threshold" description="Latency percentile above which hedging triggers (0.0–1.0)">
-              <div className="space-y-2">
-                <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
-                  <span>0.0</span>
-                  <span className="text-foreground font-black">{config.hedging_percentile.toFixed(2)}</span>
-                  <span>1.0</span>
+              <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+                <div className="flex items-center gap-2">
+                  <Zap size={14} className="text-primary" />
+                  Request Hedging
                 </div>
-                <Slider
-                  disabled={!config.enable_hedging}
-                  value={[config.hedging_percentile]}
-                  onValueChange={([v]) => set('hedging_percentile', v)}
-                  min={0} max={1} step={0.01}
-                  className="w-full"
-                />
-              </div>
-            </FieldRow>
-          </AccordionContent>
-        </AccordionItem>
-
-        {/* Routing Weights */}
-        <AccordionItem value="routing" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
-          <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
-            <div className="flex items-center gap-2">
-              <BarChart2 size={14} className="text-purple-400" />
-              Routing Heuristics
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="pb-4">
-            <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
-              Scoring weights used by the routing algorithm. Higher values increase a factor's influence on node selection.
-            </p>
-            <Separator className="mb-4 bg-border/50" />
-            {[
-              { key: 'weights.cpu_load_weight', label: 'CPU Load Weight', desc: 'Penalizes high CPU utilization' },
-              { key: 'weights.latency_weight', label: 'Latency Weight', desc: 'Favors historically faster nodes' },
-              { key: 'weights.success_rate_weight', label: 'Success Rate Weight', desc: 'Prioritizes reliable nodes' },
-              { key: 'weights.loaded_model_bonus', label: 'Loaded Model Bonus', desc: 'Rewards nodes with the model in VRAM' },
-              { key: 'weights.workload_penalty', label: 'Workload Penalty', desc: 'Penalizes nodes with many active requests' },
-              { key: 'weights.local_model_bonus', label: 'Local Model Bonus', desc: 'Rewards nodes with model on disk' },
-            ].map(({ key, label, desc }) => {
-              const val = key.startsWith('weights.') ? config.weights[key.slice(8) as keyof typeof config.weights] : 0;
-              return (
-                <FieldRow key={key} label={label} description={desc}>
-                  <NumberField value={val} onChange={v => set(key, v)} step={0.1} min={0} />
+              </AccordionTrigger>
+              <AccordionContent className="pb-4">
+                <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+                  Duplicate delayed requests on an alternate node to reduce tail latency. The percentile threshold determines when a request is considered stale enough to hedge.
+                </p>
+                <Separator className="mb-4 bg-border/50" />
+                <FieldRow label="Enable Hedging" description="Activate request duplication on slow nodes">
+                  <div className="flex justify-end">
+                    <Switch
+                      checked={config.enable_hedging}
+                      onCheckedChange={v => set('enable_hedging', v)}
+                    />
+                  </div>
                 </FieldRow>
-              );
-            })}
-          </AccordionContent>
-        </AccordionItem>
+                <FieldRow label="Percentile Threshold" description="Latency percentile above which hedging triggers (0.0–1.0)">
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
+                      <span>0.0</span>
+                      <span className="text-foreground font-black">{config.hedging_percentile.toFixed(2)}</span>
+                      <span>1.0</span>
+                    </div>
+                    <Slider
+                      disabled={!config.enable_hedging}
+                      value={[config.hedging_percentile]}
+                      onValueChange={([v]) => set('hedging_percentile', v)}
+                      min={0} max={1} step={0.01}
+                      className="w-full"
+                    />
+                  </div>
+                </FieldRow>
+              </AccordionContent>
+            </AccordionItem>
 
-        {/* Circuit Breaker */}
-        <AccordionItem value="circuit" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
-          <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
-            <div className="flex items-center gap-2">
-              <Shield size={14} className="text-red-400" />
-              Circuit Breaker
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="pb-4">
-            <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
-              Automatically isolates unhealthy nodes after repeated failures, preventing cascading errors across the fleet.
-            </p>
-            <Separator className="mb-4 bg-border/50" />
-            <FieldRow label="Error Threshold" description="Consecutive errors before a node is put in cooloff">
-              <NumberField value={config.circuit_breaker.error_threshold} onChange={v => set('circuit_breaker.error_threshold', v)} min={1} />
-            </FieldRow>
-            <FieldRow label="Cooloff Duration" description="Seconds a node stays in cooloff before retrying">
-              <NumberField value={config.circuit_breaker.cooloff_sec} onChange={v => set('circuit_breaker.cooloff_sec', v)} min={1} />
-            </FieldRow>
-          </AccordionContent>
-        </AccordionItem>
+            {/* Routing Weights */}
+            <AccordionItem value="routing" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+              <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+                <div className="flex items-center gap-2">
+                  <BarChart2 size={14} className="text-purple-400" />
+                  Routing Heuristics
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-4">
+                <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+                  Scoring weights used by the routing algorithm. Higher values increase a factor's influence on node selection.
+                </p>
+                <Separator className="mb-4 bg-border/50" />
+                {[
+                  { key: 'weights.cpu_load_weight', label: 'CPU Load Weight', desc: 'Penalizes high CPU utilization' },
+                  { key: 'weights.latency_weight', label: 'Latency Weight', desc: 'Favors historically faster nodes' },
+                  { key: 'weights.success_rate_weight', label: 'Success Rate Weight', desc: 'Prioritizes reliable nodes' },
+                  { key: 'weights.loaded_model_bonus', label: 'Loaded Model Bonus', desc: 'Rewards nodes with the model in VRAM' },
+                  { key: 'weights.workload_penalty', label: 'Workload Penalty', desc: 'Penalizes nodes with many active requests' },
+                  { key: 'weights.local_model_bonus', label: 'Local Model Bonus', desc: 'Rewards nodes with model on disk' },
+                ].map(({ key, label, desc }) => {
+                  const val = key.startsWith('weights.') ? config.weights[key.slice(8) as keyof typeof config.weights] : 0;
+                  return (
+                    <FieldRow key={key} label={label} description={desc}>
+                      <NumberField value={val} onChange={v => set(key, v)} step={0.1} min={0} />
+                    </FieldRow>
+                  );
+                })}
+              </AccordionContent>
+            </AccordionItem>
 
-        {/* System Limits */}
-        <AccordionItem value="limits" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
-          <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
-            <div className="flex items-center gap-2">
-              <Clock size={14} className="text-teal-400" />
-              System Limits & Timers
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="pb-4">
-            <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
-              Queue depths, timeouts, and polling intervals that control balancer throughput and responsiveness.
-            </p>
-            <Separator className="mb-4 bg-border/50" />
-            <FieldRow label="Max Queue Depth" description="Maximum number of requests held in queue">
-              <NumberField value={config.max_queue_depth} onChange={v => set('max_queue_depth', v)} min={1} />
-            </FieldRow>
-            <FieldRow label="Stall Timeout (s)" description="Seconds before a stalled request is retried or failed">
-              <NumberField value={config.stall_timeout_sec} onChange={v => set('stall_timeout_sec', v)} min={1} />
-            </FieldRow>
-            <FieldRow label="Keep Alive Duration (s)" description="Seconds a model stays resident in VRAM when idle">
-              <NumberField value={config.keep_alive_duration_sec} onChange={v => set('keep_alive_duration_sec', v)} min={0} />
-            </FieldRow>
-            <FieldRow label="Stale Threshold" description="Queue depth at which a model is replicated to another node">
-              <NumberField value={config.stale_threshold} onChange={v => set('stale_threshold', v)} min={1} />
-            </FieldRow>
-            <FieldRow label="Poll Interval (ms)" description="How frequently agents report telemetry to the balancer">
-              <NumberField value={config.poll_interval_ms} onChange={v => set('poll_interval_ms', v)} min={50} />
-            </FieldRow>
-            <Separator className="my-2 bg-border/30" />
-            <FieldRow label="Enable Model Approval" description="Require manual approval for pulling or deleting models">
-              <div className="flex justify-end">
-                <Switch
-                  checked={config.enable_model_approval}
-                  onCheckedChange={v => set('enable_model_approval', v)}
-                />
-              </div>
-            </FieldRow>
-          </AccordionContent>
-        </AccordionItem>
+            {/* Circuit Breaker */}
+            <AccordionItem value="circuit" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+              <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+                <div className="flex items-center gap-2">
+                  <Shield size={14} className="text-red-400" />
+                  Circuit Breaker
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-4">
+                <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+                  Automatically isolates unhealthy nodes after repeated failures, preventing cascading errors across the fleet.
+                </p>
+                <Separator className="mb-4 bg-border/50" />
+                <FieldRow label="Error Threshold" description="Consecutive errors before a node is put in cooloff">
+                  <NumberField value={config.circuit_breaker.error_threshold} onChange={v => set('circuit_breaker.error_threshold', v)} min={1} />
+                </FieldRow>
+                <FieldRow label="Cooloff Duration" description="Seconds a node stays in cooloff before retrying">
+                  <NumberField value={config.circuit_breaker.cooloff_sec} onChange={v => set('circuit_breaker.cooloff_sec', v)} min={1} />
+                </FieldRow>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* System Limits */}
+            <AccordionItem value="limits" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+              <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+                <div className="flex items-center gap-2">
+                  <Clock size={14} className="text-teal-400" />
+                  System Limits & Timers
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-4">
+                <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+                  Queue depths, timeouts, and polling intervals that control balancer throughput and responsiveness.
+                </p>
+                <Separator className="mb-4 bg-border/50" />
+                <FieldRow label="Max Queue Depth" description="Maximum number of requests held in queue">
+                  <NumberField value={config.max_queue_depth} onChange={v => set('max_queue_depth', v)} min={1} />
+                </FieldRow>
+                <FieldRow label="Stall Timeout (s)" description="Seconds before a stalled request is retried or failed">
+                  <NumberField value={config.stall_timeout_sec} onChange={v => set('stall_timeout_sec', v)} min={1} />
+                </FieldRow>
+                <FieldRow label="Keep Alive Duration (s)" description="Seconds a model stays resident in VRAM when idle">
+                  <NumberField value={config.keep_alive_duration_sec} onChange={v => set('keep_alive_duration_sec', v)} min={0} />
+                </FieldRow>
+                <FieldRow label="Stale Threshold" description="Queue depth at which a model is replicated to another node">
+                  <NumberField value={config.stale_threshold} onChange={v => set('stale_threshold', v)} min={1} />
+                </FieldRow>
+                <FieldRow label="Poll Interval (ms)" description="How frequently agents report telemetry to the balancer">
+                  <NumberField value={config.poll_interval_ms} onChange={v => set('poll_interval_ms', v)} min={50} />
+                </FieldRow>
+                <Separator className="my-2 bg-border/30" />
+                <FieldRow label="Enable Model Approval" description="Require manual approval for pulling or deleting models">
+                  <div className="flex justify-end">
+                    <Switch
+                      checked={config.enable_model_approval}
+                      onCheckedChange={v => set('enable_model_approval', v)}
+                    />
+                  </div>
+                </FieldRow>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Auto-Scaling */}
+            <AccordionItem value="autoscaling" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+              <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+                <div className="flex items-center gap-2">
+                  <TrendingUp size={14} className="text-pink-400" />
+                  Auto-Scaling Policy
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-4">
+                <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+                  Automatically deploy models to healthy nodes when queue pressure increases. This ignores manual approval for scaling events.
+                </p>
+                <Separator className="mb-4 bg-border/50" />
+                <FieldRow label="Enable Auto-Scaling" description="Automatically provision models based on demand">
+                  <div className="flex justify-end">
+                    <Switch
+                      checked={config.enable_auto_scaling}
+                      onCheckedChange={v => set('enable_auto_scaling', v)}
+                    />
+                  </div>
+                </FieldRow>
+                <FieldRow label="Scaling Threshold" description="Queue depth per model that triggers an auto-pull">
+                  <NumberField 
+                    value={config.auto_scale_threshold} 
+                    onChange={v => set('auto_scale_threshold', v)} 
+                    min={1} 
+                  />
+                </FieldRow>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Agent Control */}
+            <AccordionItem value="agentcaps" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+              <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+                <div className="flex items-center gap-2">
+                  <Cpu size={14} className="text-orange-400" />
+                  Agent Resource Control
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-4">
+                <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+                  Limits applied to all agents. Useful for ensuring agents don't consume the entire host machine. 0 means unlimited.
+                </p>
+                <Separator className="mb-4 bg-border/50" />
+                <FieldRow label="Max VRAM Allocated (GB)" description="Cap total VRAM reported/used per agent">
+                  <NumberField 
+                    value={config.max_vram_allocated / 1e9} 
+                    onChange={v => set('max_vram_allocated', v * 1e9)} 
+                    step={1} min={0}
+                  />
+                </FieldRow>
+                <FieldRow label="Max CPU Cores" description="Cap total CPU cores reported/used per agent">
+                  <NumberField 
+                    value={config.max_cpu_allocated} 
+                    onChange={v => set('max_cpu_allocated', v)} 
+                    min={0}
+                  />
+                </FieldRow>
+              </AccordionContent>
+            </AccordionItem>
           </>
         )}
 

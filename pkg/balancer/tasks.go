@@ -18,7 +18,80 @@ func (b *Balancer) StartBackgroundTasks() {
 	b.StartPerfCacheRefresher()
 	b.StartMetricProcessor()
 	b.StartLogProcessor()
+	b.StartAutoScaler()
 	b.StartWorkerPool(10) // 10 workers for routing
+}
+
+func (b *Balancer) StartAutoScaler() {
+	ticker := time.NewTicker(10 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				if b.Config.EnableAutoScaling {
+					b.runAutoScaling()
+				}
+			case <-b.stopCh:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+func (b *Balancer) runAutoScaling() {
+	snapshot := b.State.GetSnapshot()
+
+	for model, depth := range snapshot.PendingRequests {
+		if depth >= b.Config.AutoScaleThreshold {
+			// Check if already in progress
+			if _, ok := snapshot.InProgressPulls[model]; ok {
+				continue
+			}
+
+			logging.Global.Infof("Auto-scaling trigger for model %s (queue depth: %d)", model, depth)
+
+			// Find a suitable node
+			// For now, we use a simple heuristic: node with most free VRAM that doesn't have the model
+			var bestNode *models.NodeStatus
+			var maxFree uint64
+
+			for _, a := range snapshot.Agents {
+				// Enforce policy
+				if policy, ok := snapshot.ModelPolicies[model]; ok {
+					if p, ok := policy[a.ID]; ok && p.Banned {
+						continue
+					}
+				}
+
+				// Check if node already has it
+				hasIt := false
+				for _, m := range a.LocalModels {
+					if m.Model == model {
+						hasIt = true
+						break
+					}
+				}
+				if hasIt {
+					continue
+				}
+
+				free := a.VRAMTotal - a.VRAMUsed
+				if free > maxFree {
+					maxFree = free
+					bestNode = &a
+				}
+			}
+
+			if bestNode != nil {
+				logging.Global.Infof("Auto-deploying model %s to node %s", model, bestNode.ID)
+				// We call executePull directly, bypassing approval for auto-scaling
+				jobID := "auto-" + model + "-" + bestNode.ID
+				b.Jobs.CreateJob(jobID, "auto_pull")
+				go b.executePull(jobID, model, bestNode.ID, "")
+			}
+		}
+	}
 }
 
 func (b *Balancer) StartLogProcessor() {
@@ -72,6 +145,10 @@ func (b *Balancer) StartMetricProcessor() {
 			select {
 			case m := <-b.MetricCh:
 				b.Storage.RecordMetric(m.nodeID, m.model, m.latency, m.success)
+			case t := <-b.TokenCh:
+				if err := b.Storage.RecordTokenUsage(t.nodeID, t.model, t.input, t.output, t.reward, t.cost, t.ttft, t.duration, t.clientKey); err != nil {
+					logging.Global.Errorf("Failed to record token usage: %v", err)
+				}
 			case <-b.stopCh:
 				return
 			}

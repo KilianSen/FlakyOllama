@@ -2,14 +2,18 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/balancer/state"
+	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/metrics"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -51,20 +55,64 @@ func (b *Balancer) sendToAgentWithContext(ctx context.Context, addr, path string
 	return b.httpClient.Do(req)
 }
 
-func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string) {
+type ttftTrackingReader struct {
+	io.Reader
+	onFirstByte func()
+	once        sync.Once
+}
+
+func (t *ttftTrackingReader) Read(p []byte) (int, error) {
+	n, err := t.Reader.Read(p)
+	if n > 0 {
+		t.once.Do(t.onFirstByte)
+	}
+	return n, err
+}
+
+func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request) {
 	start := time.Now()
+	// Get client key from context
+	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
 	// Wrap with Stall Protection
 	stallTimeout := time.Duration(b.Config.StallTimeoutSec) * time.Second
 	reader := NewIdleTimeoutReader(resp.Body, stallTimeout)
 	defer reader.Close()
+
+	// Instrument for TTFT
+	ttftRecorded := false
+	var ttft time.Duration
+	trackingReader := &ttftTrackingReader{
+		Reader: reader,
+		onFirstByte: func() {
+			if !ttftRecorded {
+				ttft = time.Since(start)
+				ttftRecorded = true
+			}
+		},
+	}
 
 	for k, v := range resp.Header {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
 
-	_, err := io.Copy(w, reader)
-	latency := time.Since(start)
+	// Use a pipe to capture the response for usage parsing if it's not a stream error
+	var usageBuf bytes.Buffer
+	multiWriter := io.MultiWriter(w, &usageBuf)
+
+	var finalReader io.Reader = trackingReader
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(trackingReader)
+		if err == nil {
+			defer gz.Close()
+			finalReader = gz
+		}
+	}
+
+	_, err := io.Copy(multiWriter, finalReader)
+	duration := time.Since(start)
+
 	if err != nil {
 		reason := "stream_error"
 		if errors.Is(err, ErrStalled) {
@@ -75,15 +123,18 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		}
 		b.recordError(agentAddr, reason)
 		select {
-		case b.MetricCh <- metricEntry{agentAddr, modelName, latency, false}:
+		case b.MetricCh <- metricEntry{agentAddr, modelName, duration, false}:
 		default:
 		}
 		return
 	}
 
+	// Try to parse usage from the captured response (Ollama format)
+	go b.captureUsage(agentAddr, modelName, usageBuf.Bytes(), clientKey, ttft.Milliseconds(), duration.Milliseconds())
+
 	b.recordSuccess(agentAddr)
 	select {
-	case b.MetricCh <- metricEntry{agentAddr, modelName, latency, true}:
+	case b.MetricCh <- metricEntry{agentAddr, modelName, duration, true}:
 	default:
 	}
 
@@ -96,7 +147,88 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	})
 
 	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
-	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(latency.Seconds())
+	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(duration.Seconds())
+}
+
+func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey string, ttft, duration int64) {
+	if len(body) == 0 {
+		return
+	}
+
+	var input, output int
+
+	// Try to unmarshal the entire body first (non-streaming or very small stream)
+	var usage struct {
+		PromptEvalCount int `json:"prompt_eval_count"`
+		EvalCount       int `json:"eval_count"`
+	}
+	if err := json.Unmarshal(body, &usage); err == nil && (usage.PromptEvalCount > 0 || usage.EvalCount > 0) {
+		input = usage.PromptEvalCount
+		output = usage.EvalCount
+	} else {
+		// Streaming case: the usage is in the last JSON object of the stream.
+		lastOpenBrace := -1
+		for i := len(body) - 1; i >= 0; i-- {
+			if body[i] == '{' {
+				lastOpenBrace = i
+				var streamUsage struct {
+					PromptEvalCount int `json:"prompt_eval_count"`
+					EvalCount       int `json:"eval_count"`
+				}
+				if err := json.Unmarshal(body[lastOpenBrace:], &streamUsage); err == nil {
+					if streamUsage.PromptEvalCount > 0 || streamUsage.EvalCount > 0 {
+						input = streamUsage.PromptEvalCount
+						output = streamUsage.EvalCount
+						break
+					}
+				}
+				if len(body)-i > 2048 {
+					break
+				}
+			}
+		}
+	}
+
+	if input > 0 || output > 0 {
+		agentID := addr
+		rewardKey := ""
+		b.State.Do(func(s *state.ClusterState) {
+			if a, ok := s.Agents[addr]; ok {
+				agentID = a.ID
+				rewardKey = a.AgentKey
+			}
+		})
+
+		// Calculate surge multiplier based on queue depth
+		// Every 5 items in queue add 10% premium (1.0 + queue/50)
+		queueDepth := b.Queue.QueueDepth()
+		surge := 1.0 + (float64(queueDepth) * 0.02)
+
+		// Calculate reward (Agent)
+		rFactor := 1.0
+		if f, ok := b.Config.ModelRewardFactors[model]; ok {
+			rFactor = f
+		}
+		reward := float64(input+output) * rFactor * b.Config.GlobalRewardMultiplier * surge
+
+		// Calculate cost (Client)
+		cFactor := 1.0
+		if f, ok := b.Config.ModelCostFactors[model]; ok {
+			cFactor = f
+		}
+		cost := float64(input+output) * cFactor * b.Config.GlobalCostMultiplier * surge
+
+		// For reward recording, we prefer the specific AgentKey if provided
+		trackingID := agentID
+		if rewardKey != "" {
+			trackingID = rewardKey
+		}
+
+		select {
+		case b.TokenCh <- tokenUsageEntry{trackingID, model, input, output, reward, cost, ttft, duration, clientKey}:
+		default:
+		}
+	}
 }
 
 func (b *Balancer) recordError(addr string, reason string) {

@@ -61,6 +61,43 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			requested_at DATETIME,
 			approved_at DATETIME
 		);`,
+		`CREATE TABLE IF NOT EXISTS model_policies (
+			model TEXT,
+			node_id TEXT,
+			is_banned BOOLEAN DEFAULT 0,
+			is_pinned BOOLEAN DEFAULT 0,
+			PRIMARY KEY (model, node_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS token_usage (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME,
+			node_id TEXT,
+			model TEXT,
+			input_tokens INTEGER,
+			output_tokens INTEGER,
+			reward REAL DEFAULT 0,
+			cost REAL DEFAULT 0,
+			ttft_ms INTEGER DEFAULT 0,
+			duration_ms INTEGER DEFAULT 0,
+			client_key TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS client_keys (
+			key TEXT PRIMARY KEY,
+			label TEXT,
+			quota_limit INTEGER DEFAULT -1,
+			quota_used INTEGER DEFAULT 0,
+			credits REAL DEFAULT 0,
+			active BOOLEAN DEFAULT 1
+		);`,
+		`CREATE TABLE IF NOT EXISTS agent_keys (
+			key TEXT PRIMARY KEY,
+			label TEXT,
+			node_id TEXT,
+			credits_earned REAL DEFAULT 0,
+			reputation REAL DEFAULT 1.0,
+			active BOOLEAN DEFAULT 1
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_node ON token_usage (node_id);`,
 	}
 	for _, q := range queries {
 		if _, err = db.Exec(q); err != nil {
@@ -134,6 +171,208 @@ func (s *SQLiteStorage) UpdateModelRequestStatus(id string, status models.ModelR
 	}
 	_, err := s.db.Exec("UPDATE model_requests SET status = ?, approved_at = ? WHERE id = ?", status, approvedAt, id)
 	return err
+}
+
+func (s *SQLiteStorage) SetModelPolicy(model, nodeID string, banned, pinned bool) error {
+	_, err := s.db.Exec(`
+		INSERT INTO model_policies (model, node_id, is_banned, is_pinned) 
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(model, node_id) DO UPDATE SET is_banned = excluded.is_banned, is_pinned = excluded.is_pinned`,
+		model, nodeID, banned, pinned)
+	return err
+}
+
+func (s *SQLiteStorage) RecordTokenUsage(nodeID, model string, input, output int, reward, cost float64, ttft, duration int64, clientKey string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// 1. Record the usage
+	_, err = tx.Exec(`
+		INSERT INTO token_usage (timestamp, node_id, model, input_tokens, output_tokens, reward, cost, ttft_ms, duration_ms, client_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now(), nodeID, model, input, output, reward, cost, ttft, duration, clientKey)
+	if err != nil {
+		return err
+	}
+
+	// 2. Update Client Key Quota (if key provided)
+	if clientKey != "" {
+		_, err = tx.Exec(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ?`,
+			int64(input+output), cost, clientKey)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 3. Update Agent Key Reward
+	_, err = tx.Exec(`UPDATE agent_keys SET credits_earned = credits_earned + ? WHERE key = ?`,
+		reward, nodeID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStorage) GetTotalTokenStats() (map[string]struct {
+	Input, Output int64
+	Reward        float64
+	Cost          float64
+}, error) {
+	rows, err := s.db.Query("SELECT node_id, SUM(input_tokens), SUM(output_tokens), SUM(reward), SUM(cost) FROM token_usage GROUP BY node_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make(map[string]struct {
+		Input, Output int64
+		Reward        float64
+		Cost          float64
+	})
+	for rows.Next() {
+		var nodeID string
+		var input, output int64
+		var reward, cost float64
+		if err := rows.Scan(&nodeID, &input, &output, &reward, &cost); err != nil {
+			return nil, err
+		}
+		stats[nodeID] = struct {
+			Input, Output int64
+			Reward        float64
+			Cost          float64
+		}{Input: input, Output: output, Reward: reward, Cost: cost}
+	}
+	return stats, nil
+}
+
+func (s *SQLiteStorage) GetPerformanceAnalytics() (map[string]struct {
+	AvgTTFT     float64
+	AvgDuration float64
+	Requests    int
+}, error) {
+	rows, err := s.db.Query(`
+		SELECT model, AVG(ttft_ms), AVG(duration_ms), COUNT(*) 
+		FROM token_usage 
+		WHERE timestamp >= datetime('now', '-24 hours')
+		GROUP BY model`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	analytics := make(map[string]struct {
+		AvgTTFT     float64
+		AvgDuration float64
+		Requests    int
+	})
+	for rows.Next() {
+		var model string
+		var ttft, duration float64
+		var count int
+		if err := rows.Scan(&model, &ttft, &duration, &count); err != nil {
+			return nil, err
+		}
+		analytics[model] = struct {
+			AvgTTFT     float64
+			AvgDuration float64
+			Requests    int
+		}{AvgTTFT: ttft, AvgDuration: duration, Requests: count}
+	}
+	return analytics, nil
+}
+
+// Client Key Management
+func (s *SQLiteStorage) CreateClientKey(k models.ClientKey) error {
+	_, err := s.db.Exec(`INSERT INTO client_keys (key, label, quota_limit, credits) VALUES (?, ?, ?, ?)`,
+		k.Key, k.Label, k.QuotaLimit, k.Credits)
+	return err
+}
+
+func (s *SQLiteStorage) GetClientKey(key string) (models.ClientKey, error) {
+	var k models.ClientKey
+	err := s.db.QueryRow(`SELECT key, label, quota_limit, quota_used, credits, active FROM client_keys WHERE key = ?`, key).
+		Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active)
+	return k, err
+}
+
+func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
+	rows, err := s.db.Query(`SELECT key, label, quota_limit, quota_used, credits, active FROM client_keys`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []models.ClientKey
+	for rows.Next() {
+		var k models.ClientKey
+		if err := rows.Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// Agent Key Management
+func (s *SQLiteStorage) CreateAgentKey(k models.AgentKey) error {
+	_, err := s.db.Exec(`INSERT INTO agent_keys (key, label, node_id) VALUES (?, ?, ?)`,
+		k.Key, k.Label, k.NodeID)
+	return err
+}
+
+func (s *SQLiteStorage) RecordReputation(key string, change float64) error {
+	_, err := s.db.Exec(`UPDATE agent_keys SET reputation = MAX(0.1, MIN(5.0, reputation + ?)) WHERE key = ?`,
+		change, key)
+	return err
+}
+
+func (s *SQLiteStorage) GetAgentKey(key string) (models.AgentKey, error) {
+	var k models.AgentKey
+	err := s.db.QueryRow(`SELECT key, label, node_id, credits_earned, reputation, active FROM agent_keys WHERE key = ?`, key).
+		Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active)
+	return k, err
+}
+
+func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
+	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active FROM agent_keys`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []models.AgentKey
+	for rows.Next() {
+		var k models.AgentKey
+		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+func (s *SQLiteStorage) GetModelPolicies() (map[string]map[string]struct{ Banned, Pinned bool }, error) {
+	rows, err := s.db.Query("SELECT model, node_id, is_banned, is_pinned FROM model_policies")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	policies := make(map[string]map[string]struct{ Banned, Pinned bool })
+	for rows.Next() {
+		var model, nodeID string
+		var banned, pinned bool
+		if err := rows.Scan(&model, &nodeID, &banned, &pinned); err != nil {
+			return nil, err
+		}
+		if _, ok := policies[model]; !ok {
+			policies[model] = make(map[string]struct{ Banned, Pinned bool })
+		}
+		policies[model][nodeID] = struct{ Banned, Pinned bool }{Banned: banned, Pinned: pinned}
+	}
+	return policies, nil
 }
 
 func (s *SQLiteStorage) RecordLog(nodeID, level, component, message string) error {

@@ -119,6 +119,12 @@ func (rq *RequestQueue) Wait() <-chan struct{} {
 	return rq.ch
 }
 
+func (rq *RequestQueue) QueueDepth() int {
+	rq.mu.Lock()
+	defer rq.mu.Unlock()
+	return rq.pq.Len()
+}
+
 func (rq *RequestQueue) Close() {
 	close(rq.ch)
 }

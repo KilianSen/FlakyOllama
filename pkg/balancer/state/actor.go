@@ -9,10 +9,11 @@ import (
 // ClusterState holds the authoritative state of the cluster.
 type ClusterState struct {
 	Agents          map[string]*models.NodeStatus
-	PendingRequests map[string]int       // model_name -> count
-	InProgressPulls map[string]time.Time // model_name -> start_time
-	NodeWorkloads   map[string]int       // agent_addr -> count
-	ModelLastUsed   map[string]time.Time // "node_id:model_name" -> last_time
+	PendingRequests map[string]int                                      // model_name -> count
+	InProgressPulls map[string]time.Time                                // model_name -> start_time
+	NodeWorkloads   map[string]int                                      // agent_addr -> count
+	ModelLastUsed   map[string]time.Time                                // "node_id:model_name" -> last_time
+	ModelPolicies   map[string]map[string]struct{ Banned, Pinned bool } // model -> node_id -> policy
 }
 
 // StateSnapshot is a point-in-time copy of the cluster state for reading.
@@ -21,6 +22,7 @@ type StateSnapshot struct {
 	PendingRequests map[string]int
 	InProgressPulls map[string]time.Time
 	NodeWorkloads   map[string]int
+	ModelPolicies   map[string]map[string]struct{ Banned, Pinned bool }
 }
 
 // Message types for the Actor
@@ -41,6 +43,7 @@ func NewClusterStateActor() *ClusterStateActor {
 			InProgressPulls: make(map[string]time.Time),
 			NodeWorkloads:   make(map[string]int),
 			ModelLastUsed:   make(map[string]time.Time),
+			ModelPolicies:   make(map[string]map[string]struct{ Banned, Pinned bool }),
 		},
 		actions: make(chan Action, 100),
 		stopCh:  make(chan struct{}),
@@ -106,6 +109,13 @@ func (a *ClusterStateActor) GetSnapshot() StateSnapshot {
 		}
 		for addr, c := range s.NodeWorkloads {
 			snapshot.NodeWorkloads[addr] = c
+		}
+		snapshot.ModelPolicies = make(map[string]map[string]struct{ Banned, Pinned bool })
+		for m, nodes := range s.ModelPolicies {
+			snapshot.ModelPolicies[m] = make(map[string]struct{ Banned, Pinned bool })
+			for nodeID, policy := range nodes {
+				snapshot.ModelPolicies[m][nodeID] = policy
+			}
 		}
 	})
 	return snapshot

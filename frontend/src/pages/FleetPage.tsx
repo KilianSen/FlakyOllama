@@ -72,6 +72,7 @@ export const FleetPage: React.FC = () => {
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Tier / Hardware</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">CPU</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">VRAM / RAM</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Reputation</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Models</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Status</TableHead>
                 <TableHead className="text-right text-[9px] font-black uppercase tracking-widest text-muted-foreground">Actions</TableHead>
@@ -128,6 +129,12 @@ export const FleetPage: React.FC = () => {
                           <Progress value={node.memory_usage} className="h-1" />
                         </>
                       )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                       <TrendingUp size={12} className={(node.reputation || 1.0) >= 1.0 ? 'text-emerald-400' : 'text-amber-400'} />
+                       <span className="text-[11px] font-black">{(node.reputation || 1.0).toFixed(2)}</span>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -220,7 +227,7 @@ export const FleetPage: React.FC = () => {
                         { label: 'GPU Model', val: selectedNode.gpu_model || '—' },
                         { label: 'GPU Temp', val: selectedNode.gpu_temp ? `${selectedNode.gpu_temp}°C` : '—' },
                         { label: 'Total VRAM', val: formatBytes(selectedNode.vram_total) },
-                        { label: 'Used VRAM', val: formatBytes(selectedNode.vram_used) },
+                        { label: 'Reputation', val: `${(selectedNode.reputation || 1.0).toFixed(2)} pts` },
                         { label: 'Errors', val: selectedNode.errors },
                       ].map(({ label, val }) => (
                         <div key={label} className="bg-muted/30 rounded-lg p-3">
@@ -230,6 +237,26 @@ export const FleetPage: React.FC = () => {
                       ))}
                     </div>
                   </div>
+
+                  {/* Throughput */}
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-3">Total Throughput</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
+                         <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Input Tokens</p>
+                         <p className="text-xs font-black text-emerald-400">{selectedNode.input_tokens?.toLocaleString() || 0}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-blue-500/5 border border-blue-500/10">
+                         <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Output Tokens</p>
+                         <p className="text-xs font-black text-blue-400">{selectedNode.output_tokens?.toLocaleString() || 0}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/10 col-span-2">
+                         <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Earned Credits</p>
+                         <p className="text-xs font-black text-amber-400">{selectedNode.token_reward?.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) || 0} φ</p>
+                      </div>
+                    </div>
+                  </div>
+
                   <Separator className="bg-border/50" />
                   {/* Resources */}
                   <div>

@@ -19,14 +19,17 @@ func NewMonitor() *Monitor {
 	return &Monitor{}
 }
 
-// GetStatus returns the current hardware status.
-func (m *Monitor) GetStatus() (models.NodeStatus, error) {
+// GetStatus returns the current hardware status, applying caps if provided.
+func (m *Monitor) GetStatus(maxVRAM uint64, maxCPU int) (models.NodeStatus, error) {
 	var status models.NodeStatus
 
 	// Get CPU cores
 	count, err := cpu.Counts(true)
 	if err == nil {
 		status.CPUCores = count
+		if maxCPU > 0 && status.CPUCores > maxCPU {
+			status.CPUCores = maxCPU
+		}
 	}
 
 	// Get CPU usage
@@ -45,7 +48,6 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 	// Real GPU monitoring via nvidia-smi
 	err = m.collectGPUMetrics(&status)
 	if err != nil {
-		// Mocking GPU if nvidia-smi fails
 		status.HasGPU = false
 		status.GPUModel = "CPU Only"
 		status.VRAMTotal = 0
@@ -53,6 +55,12 @@ func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 		status.GPUTemperature = 0
 	} else {
 		status.HasGPU = true
+		if maxVRAM > 0 && status.VRAMTotal > maxVRAM {
+			status.VRAMTotal = maxVRAM
+			if status.VRAMUsed > status.VRAMTotal {
+				status.VRAMUsed = status.VRAMTotal
+			}
+		}
 	}
 
 	return status, nil
@@ -81,7 +89,7 @@ func (m *Monitor) collectGPUMetrics(status *models.NodeStatus) error {
 	used, _ := strconv.ParseUint(strings.TrimSpace(parts[2]), 10, 64)
 	temp, _ := strconv.ParseFloat(strings.TrimSpace(parts[3]), 64)
 
-	status.VRAMTotal = total * 1024 * 1024 // nvidia-smi returns MiB
+	status.VRAMTotal = total * 1024 * 1024 // MiB -> Bytes
 	status.VRAMUsed = used * 1024 * 1024
 	status.GPUTemperature = temp
 

@@ -23,6 +23,7 @@ import (
 // Agent handles local telemetry and proxies requests to Ollama.
 type Agent struct {
 	ID               string
+	AgentKey         string // Identity for rewards
 	Address          string
 	EffectiveAddress string
 	BalancerURL      string
@@ -44,6 +45,7 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 	}
 	return &Agent{
 		ID:               id,
+		AgentKey:         os.Getenv("AGENT_KEY"),
 		Address:          address,
 		EffectiveAddress: address, // Default to listening address
 		BalancerURL:      balancerURL,
@@ -74,7 +76,7 @@ func (a *Agent) Register() error {
 		tier = "dedicated"
 	}
 
-	status, _ := a.Monitor.GetStatus()
+	status, _ := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
 
 	req := models.RegisterRequest{
 		ID:       a.ID,
@@ -88,8 +90,14 @@ func (a *Agent) Register() error {
 
 	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
 	agentReq.Header.Set("Content-Type", "application/json")
-	if a.Config.RemoteToken != "" {
-		agentReq.Header.Set("Authorization", "Bearer "+a.Config.RemoteToken)
+
+	// Auth: Prefer AgentKey, fallback to RemoteToken
+	token := a.AgentKey
+	if token == "" {
+		token = a.Config.RemoteToken
+	}
+	if token != "" {
+		agentReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	client := &http.Client{
@@ -180,7 +188,7 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := a.Monitor.GetStatus()
+	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -469,8 +477,14 @@ func (a *Agent) StartLogShipper() {
 			body, _ := json.Marshal(entry)
 			req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
-			if a.Config.RemoteToken != "" {
-				req.Header.Set("Authorization", "Bearer "+a.Config.RemoteToken)
+
+			// Auth: Prefer AgentKey, fallback to RemoteToken
+			token := a.AgentKey
+			if token == "" {
+				token = a.Config.RemoteToken
+			}
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
 			}
 
 			resp, err := client.Do(req)

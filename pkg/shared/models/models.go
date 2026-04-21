@@ -27,6 +27,7 @@ func (s NodeState) String() string {
 // NodeStatus represents the current state of an Agent node.
 type NodeStatus struct {
 	ID             string      `json:"id"`
+	AgentKey       string      `json:"agent_key,omitempty"`
 	Address        string      `json:"address"`
 	Tier           string      `json:"tier"` // "dedicated" or "shared"
 	HasGPU         bool        `json:"has_gpu"`
@@ -44,6 +45,7 @@ type NodeStatus struct {
 	State          NodeState   `json:"state"`
 	Errors         int         `json:"errors"`  // Consecutive errors
 	Message        string      `json:"message"` // Status message
+	Reputation     float64     `json:"reputation"`
 	CooloffUntil   time.Time   `json:"cooloff_until"`
 	Draining       bool        `json:"draining"`
 }
@@ -133,6 +135,19 @@ type ClusterStatus struct {
 	AvgCPUUsage    float64 `json:"avg_cpu_usage"`   // Average CPU usage percentage
 	AvgMemoryUsage float64 `json:"avg_mem_usage"`   // Average Memory usage percentage
 	UptimeSeconds  int64   `json:"uptime_seconds"`
+
+	TotalInputTokens  int     `json:"total_input_tokens"`
+	TotalOutputTokens int     `json:"total_output_tokens"`
+	TotalReward       float64 `json:"total_reward"`
+	TotalCost         float64 `json:"total_cost"`
+
+	Performance map[string]struct {
+		AvgTTFT     float64 `json:"avg_ttft_ms"`
+		AvgDuration float64 `json:"avg_duration_ms"`
+		Requests    int     `json:"requests"`
+	} `json:"performance"`
+
+	ModelPolicies map[string]map[string]struct{ Banned, Pinned bool } `json:"model_policies"` // model -> node_id -> policy
 }
 
 type LogLevel string
@@ -176,4 +191,22 @@ type ModelRequest struct {
 	Status      ModelRequestStatus `json:"status"`
 	RequestedAt time.Time          `json:"requested_at"`
 	ApprovedAt  *time.Time         `json:"approved_at,omitempty"`
+}
+
+type ClientKey struct {
+	Key        string  `json:"key"`
+	Label      string  `json:"label"`
+	QuotaLimit int64   `json:"quota_limit"` // Max tokens/credits allowed (-1 for unlimited)
+	QuotaUsed  int64   `json:"quota_used"`
+	Credits    float64 `json:"credits"` // Balance if using a credit system
+	Active     bool    `json:"active"`
+}
+
+type AgentKey struct {
+	Key           string  `json:"key"`
+	Label         string  `json:"label"`
+	NodeID        string  `json:"node_id"` // Node associated with this key
+	CreditsEarned float64 `json:"credits_earned"`
+	Reputation    float64 `json:"reputation"`
+	Active        bool    `json:"active"`
 }

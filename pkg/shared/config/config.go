@@ -7,20 +7,32 @@ import (
 
 // Config represents the application configuration.
 type Config struct {
-	KeepAliveDurationSec int            `json:"keep_alive_duration_sec"`
-	StaleThreshold       int            `json:"stale_threshold"` // Pending requests per model
-	LoadThreshold        float64        `json:"load_threshold"`  // CPU Load percentage
-	PollIntervalMs       int            `json:"poll_interval_ms"`
-	Weights              RoutingWeights `json:"weights"`
-	CircuitBreaker       CBConfig       `json:"circuit_breaker"`
-	StallTimeoutSec      int            `json:"stall_timeout_sec"`
-	EnableHedging        bool           `json:"enable_hedging"`
-	HedgingPercentile    float64        `json:"hedging_percentile"`
-	MaxQueueDepth        int            `json:"max_queue_depth"`
-	TLS                  TLSConfig      `json:"tls"`
-	AuthToken            string         `json:"auth_token"`   // Token expected from clients
-	RemoteToken          string         `json:"remote_token"` // Token to send to agents/balancer
-	EnableModelApproval  bool           `json:"enable_model_approval"`
+	KeepAliveDurationSec   int                `json:"keep_alive_duration_sec"`
+	StaleThreshold         int                `json:"stale_threshold"` // Pending requests per model
+	LoadThreshold          float64            `json:"load_threshold"`  // CPU Load percentage
+	PollIntervalMs         int                `json:"poll_interval_ms"`
+	Weights                RoutingWeights     `json:"weights"`
+	CircuitBreaker         CBConfig           `json:"circuit_breaker"`
+	StallTimeoutSec        int                `json:"stall_timeout_sec"`
+	EnableHedging          bool               `json:"enable_hedging"`
+	HedgingPercentile      float64            `json:"hedging_percentile"`
+	MaxQueueDepth          int                `json:"max_queue_depth"`
+	TLS                    TLSConfig          `json:"tls"`
+	AuthToken              string             `json:"auth_token"`   // Token expected from clients
+	RemoteToken            string             `json:"remote_token"` // Token to send to agents/balancer
+	EnableModelApproval    bool               `json:"enable_model_approval"`
+	ModelRewardFactors     map[string]float64 `json:"model_reward_factors"`     // Agent multipliers
+	ModelCostFactors       map[string]float64 `json:"model_cost_factors"`       // Client multipliers
+	GlobalRewardMultiplier float64            `json:"global_reward_multiplier"` // Global agent bonus
+	GlobalCostMultiplier   float64            `json:"global_cost_multiplier"`   // Global client charge
+
+	// Agent-side capping
+	MaxVRAMAllocated uint64 `json:"max_vram_allocated"` // 0 for unlimited
+	MaxCPUAllocated  int    `json:"max_cpu_allocated"`  // 0 for unlimited
+
+	// Auto-scaling
+	EnableAutoScaling  bool `json:"enable_auto_scaling"`
+	AutoScaleThreshold int  `json:"auto_scale_threshold"` // Queue depth per model
 }
 
 type TLSConfig struct {
@@ -62,11 +74,17 @@ func DefaultConfig() *Config {
 			ErrorThreshold: 3,
 			CooloffSec:     60,
 		},
-		StallTimeoutSec:     15,
-		EnableHedging:       true,
-		HedgingPercentile:   0.95,
-		MaxQueueDepth:       100,
-		EnableModelApproval: true,
+		StallTimeoutSec:        15,
+		EnableHedging:          true,
+		HedgingPercentile:      0.95,
+		MaxQueueDepth:          100,
+		EnableModelApproval:    true,
+		GlobalRewardMultiplier: 1.1,
+		GlobalCostMultiplier:   1.0,
+		ModelRewardFactors:     make(map[string]float64),
+		ModelCostFactors:       make(map[string]float64),
+		EnableAutoScaling:      true,
+		AutoScaleThreshold:     5,
 	}
 }
 

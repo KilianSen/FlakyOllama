@@ -18,11 +18,24 @@ type HedgedResult struct {
 	AgentID   string
 	AgentAddr string
 	Err       error
-	Cancel    context.CancelFunc // Function to cancel this specific attempt's context
+	Cancel    context.CancelFunc
 }
 
-// DoHedgedRequest sends a request to one node, and if it doesn't return headers by 'delay',
-// it sends a second request to another node.
+// peekReader signals when the first byte is read
+type peekReader struct {
+	io.ReadCloser
+	onFirstByte func()
+	once        sync.Once
+}
+
+func (p *peekReader) Read(buf []byte) (int, error) {
+	n, err := p.ReadCloser.Read(buf)
+	if n > 0 {
+		p.once.Do(p.onFirstByte)
+	}
+	return n, err
+}
+
 func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte, clientIP string, allowHedging bool, priority int) (*http.Response, string, string, error) {
 	p90, _ := b.Storage.GetP90Latency(modelName)
 	if p90 == 0 {
@@ -30,101 +43,82 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	}
 
 	results := make(chan HedgedResult, 2)
-
-	// Track which attempt won to avoid canceling its context prematurely
 	var winningAddr string
-
-	// Cleanup goroutine to ensure no response bodies are leaked
-	defer func() {
-		go func() {
-			for i := 0; i < 2; i++ {
-				select {
-				case res := <-results:
-					if res.AgentAddr != winningAddr && res.Resp != nil {
-						res.Resp.Body.Close()
-					}
-					if res.AgentAddr != winningAddr && res.Cancel != nil {
-						res.Cancel()
-					}
-				case <-time.After(5 * time.Minute):
-					return
-				}
-			}
-		}()
-	}()
-
-	isSaturated := b.Queue.pq.Len() > 0
+	var mu sync.Mutex
 
 	// First attempt
 	ctx1, cancel1 := context.WithCancel(ctx)
-	go b.singleAttempt(ctx1, cancel1, modelName, path, body, clientIP, priority, results)
+	go b.singleAttemptSpeculative(ctx1, cancel1, modelName, path, body, clientIP, priority, results)
 
-	shouldHedge := allowHedging && !isSaturated
-
-	if !shouldHedge {
-		select {
-		case res := <-results:
-			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
-				winningAddr = res.AgentAddr
-				return res.Resp, res.AgentID, res.AgentAddr, nil
-			}
-			if res.Resp != nil {
-				res.Resp.Body.Close()
-			}
-			if res.Cancel != nil {
-				res.Cancel()
-			}
-			if res.Err != nil {
-				return nil, "", "", res.Err
-			}
-			return nil, "", "", fmt.Errorf("agent %s returned status %d", res.AgentID, res.Resp.StatusCode)
-		case <-ctx.Done():
-			return nil, "", "", ctx.Err()
-		}
-	}
+	shouldHedge := allowHedging && b.Queue.pq.Len() == 0
 
 	timer := time.NewTimer(p90)
 	defer timer.Stop()
 
 	var firstErr error
 	var secondStarted bool
-
-	for i := 0; i < 2; i++ {
-		select {
-		case res := <-results:
-			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
+for i := 0; i < 2; i++ {
+	select {
+	case res := <-results:
+		if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
+			mu.Lock()
+			if winningAddr == "" {
 				winningAddr = res.AgentAddr
+				mu.Unlock()
+
+				// Record Reputation Change: Winner
+				go func(addr string, data chan HedgedResult) {
+					// Record win
+					b.State.Do(func(s *state.ClusterState) {
+						if a, ok := s.Agents[addr]; ok && a.AgentKey != "" {
+							b.Storage.RecordReputation(a.AgentKey, 0.01)
+						}
+					})
+
+					// Record loss for the other if it eventually finishes
+					if secondStarted {
+						select {
+						case other := <-data:
+							if other.AgentAddr != addr && other.AgentAddr != "" {
+								b.State.Do(func(s *state.ClusterState) {
+									if a, ok := s.Agents[other.AgentAddr]; ok && a.AgentKey != "" {
+										b.Storage.RecordReputation(a.AgentKey, -0.05)
+									}
+								})
+							}
+						case <-time.After(10 * time.Second):
+						}
+					}
+				}(res.AgentAddr, results)
+
 				return res.Resp, res.AgentID, res.AgentAddr, nil
 			}
+			mu.Unlock()
+...
 
-			if res.Resp != nil {
 				res.Resp.Body.Close()
-			}
-			if res.Cancel != nil {
-				res.Cancel()
-			}
-			if res.Err != nil {
-				firstErr = res.Err
-			} else if res.Resp != nil {
-				firstErr = fmt.Errorf("agent %s returned status %d", res.AgentID, res.Resp.StatusCode)
+				if res.Cancel != nil { res.Cancel() }
+				continue
 			}
 
-			if !secondStarted {
+			if res.Resp != nil { res.Resp.Body.Close() }
+			if res.Cancel != nil { res.Cancel() }
+			
+			if res.Err != nil { firstErr = res.Err }
+
+			if !secondStarted && shouldHedge {
 				secondStarted = true
 				timer.Stop()
 				ctx2, cancel2 := context.WithCancel(ctx)
-				go b.singleAttempt(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
-			} else if i == 1 {
-				if firstErr != nil {
-					return nil, "", "", firstErr
-				}
-				return nil, "", "", fmt.Errorf("all attempts failed")
+				go b.singleAttemptSpeculative(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
+			} else if i == 1 || !shouldHedge {
+				return nil, "", "", firstErr
 			}
 		case <-timer.C:
-			if !secondStarted {
+			if !secondStarted && shouldHedge {
 				secondStarted = true
 				ctx2, cancel2 := context.WithCancel(ctx)
-				go b.singleAttempt(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
+				go b.singleAttemptSpeculative(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
 			}
 			i--
 		case <-ctx.Done():
@@ -132,13 +126,10 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 		}
 	}
 
-	if firstErr != nil {
-		return nil, "", "", firstErr
-	}
-	return nil, "", "", io.EOF
+	return nil, "", "", firstErr
 }
 
-func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc, modelName, path string, body []byte, clientIP string, priority int, results chan<- HedgedResult) {
+func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.CancelFunc, modelName, path string, body []byte, clientIP string, priority int, results chan<- HedgedResult) {
 	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, priority, clientIP, ctx)
 
 	var qr QueuedResponse
@@ -153,15 +144,10 @@ func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc,
 		}
 	}
 
-	id := qr.AgentID
-	addr := qr.AgentAddr
-
 	scheme := "http"
-	if b.Config.TLS.Enabled {
-		scheme = "https"
-	}
+	if b.Config.TLS.Enabled { scheme = "https" }
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", scheme+"://"+qr.AgentAddr+path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	if b.Config.RemoteToken != "" {
 		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
@@ -169,34 +155,36 @@ func (b *Balancer) singleAttempt(ctx context.Context, cancel context.CancelFunc,
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
-		b.recordError(addr, "http_error")
-		b.State.DoAsync(func(s *state.ClusterState) {
-			s.NodeWorkloads[addr]--
-		})
-
-		select {
-		case b.MetricCh <- metricEntry{id, modelName, 0, false}:
-		default:
-		}
-		results <- HedgedResult{Err: err, AgentID: id, AgentAddr: addr, Cancel: cancel}
+		b.recordError(qr.AgentAddr, "http_error")
+		b.State.DoAsync(func(s *state.ClusterState) { s.NodeWorkloads[qr.AgentAddr]-- })
+		results <- HedgedResult{Err: err, AgentID: qr.AgentID, AgentAddr: qr.AgentAddr, Cancel: cancel}
 		return
 	}
 
-	// Wrap body to decrement workload on close.
-	wrapped := &workloadBody{ReadCloser: resp.Body, b: b, addr: addr}
+	if resp.StatusCode != http.StatusOK {
+		results <- HedgedResult{Resp: resp, AgentID: qr.AgentID, AgentAddr: qr.AgentAddr, Cancel: cancel}
+		return
+	}
+
+	// The "Speculative" part: wait for the first byte before considering this attempt a winner
+	firstByteReceived := make(chan struct{})
+	peeker := &peekReader{
+		ReadCloser: resp.Body,
+		onFirstByte: func() { close(firstByteReceived) },
+	}
+	
+	// Replace body with peeker
+	wrapped := &workloadBody{ReadCloser: peeker, b: b, addr: qr.AgentAddr}
 	resp.Body = &cancelBody{ReadCloser: wrapped, cancel: cancel}
 
-	results <- HedgedResult{Resp: resp, AgentID: id, AgentAddr: addr, Err: nil, Cancel: cancel}
-}
-
-type cancelBody struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-	once   sync.Once
-}
-
-func (c *cancelBody) Close() error {
-	err := c.ReadCloser.Close()
-	c.once.Do(c.cancel)
-	return err
+	// In speculative mode, we block here until first byte OR context cancel
+	// This ensures that the "winner" is actually generating tokens.
+	go func() {
+		select {
+		case <-firstByteReceived:
+			results <- HedgedResult{Resp: resp, AgentID: qr.AgentID, AgentAddr: qr.AgentAddr, Err: nil, Cancel: cancel}
+		case <-ctx.Done():
+			resp.Body.Close()
+		}
+	}()
 }

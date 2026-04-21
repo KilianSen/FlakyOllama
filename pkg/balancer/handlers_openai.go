@@ -46,7 +46,8 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	body, _ := json.Marshal(ollamaReq)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body, r.RemoteAddr, ollamaReq.AllowHedging, ollamaReq.Priority)
+	priority := b.getRequestPriority(r)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body, r.RemoteAddr, ollamaReq.AllowHedging, priority)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -62,7 +63,9 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
 	var ollamaResp struct {
-		Message models.ChatMessage `json:"message"`
+		Message         models.ChatMessage `json:"message"`
+		PromptEvalCount int                `json:"prompt_eval_count"`
+		EvalCount       int                `json:"eval_count"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
@@ -86,6 +89,47 @@ func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.R
 		},
 	}
 
+	// Capture usage
+	if ollamaResp.PromptEvalCount > 0 || ollamaResp.EvalCount > 0 {
+		agentID := agentAddr
+		rewardKey := ""
+		b.State.Do(func(s *state.ClusterState) {
+			if a, ok := s.Agents[agentAddr]; ok {
+				agentID = a.ID
+				rewardKey = a.AgentKey
+			}
+		})
+		// Surge pricing
+		surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
+		// Calculate reward (Agent)
+		rFactor := 1.0
+		if f, ok := b.Config.ModelRewardFactors[model]; ok {
+			rFactor = f
+		}
+		reward := float64(ollamaResp.PromptEvalCount+ollamaResp.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier * surge
+
+		// Calculate cost (Client)
+		cFactor := 1.0
+		if f, ok := b.Config.ModelCostFactors[model]; ok {
+			cFactor = f
+		}
+		cost := float64(ollamaResp.PromptEvalCount+ollamaResp.EvalCount) * cFactor * b.Config.GlobalCostMultiplier * surge
+
+		trackingID := agentID
+		if rewardKey != "" {
+			trackingID = rewardKey
+		}
+
+		// Get client key
+		clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
+		select {
+		case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, reward, cost, clientKey}:
+		default:
+		}
+	}
+
 	b.recordSuccess(agentAddr)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(oaiResp)
@@ -106,11 +150,50 @@ func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Resp
 		}
 
 		var ollamaChunk struct {
-			Message models.ChatMessage `json:"message"`
-			Done    bool               `json:"done"`
+			Message         models.ChatMessage `json:"message"`
+			Done            bool               `json:"done"`
+			PromptEvalCount int                `json:"prompt_eval_count"`
+			EvalCount       int                `json:"eval_count"`
 		}
 		if err := json.Unmarshal(line, &ollamaChunk); err != nil {
 			continue
+		}
+
+		if ollamaChunk.PromptEvalCount > 0 || ollamaChunk.EvalCount > 0 {
+			agentID := agentAddr
+			rewardKey := ""
+			b.State.Do(func(s *state.ClusterState) {
+				if a, ok := s.Agents[agentAddr]; ok {
+					agentID = a.ID
+					rewardKey = a.AgentKey
+				}
+			})
+			// Calculate reward (Agent)
+			rFactor := 1.0
+			if f, ok := b.Config.ModelRewardFactors[model]; ok {
+				rFactor = f
+			}
+			reward := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier
+
+			// Calculate cost (Client)
+			cFactor := 1.0
+			if f, ok := b.Config.ModelCostFactors[model]; ok {
+				cFactor = f
+			}
+			cost := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * cFactor * b.Config.GlobalCostMultiplier
+
+			trackingID := agentID
+			if rewardKey != "" {
+				trackingID = rewardKey
+			}
+
+			// Get client key
+			clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
+			select {
+			case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaChunk.PromptEvalCount, ollamaChunk.EvalCount, reward, cost, clientKey}:
+			default:
+			}
 		}
 
 		oaiChunk := models.OpenAIChatResponse{
@@ -193,7 +276,9 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 
 func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string) {
 	var ollamaResp struct {
-		Response string `json:"response"`
+		Response        string `json:"response"`
+		PromptEvalCount int    `json:"prompt_eval_count"`
+		EvalCount       int    `json:"eval_count"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
 		http.Error(w, "Failed to decode agent response", http.StatusInternalServerError)
@@ -213,6 +298,47 @@ func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *
 				},
 			},
 		},
+	}
+
+	// Capture usage
+	if ollamaResp.PromptEvalCount > 0 || ollamaResp.EvalCount > 0 {
+		agentID := agentAddr
+		rewardKey := ""
+		b.State.Do(func(s *state.ClusterState) {
+			if a, ok := s.Agents[agentAddr]; ok {
+				agentID = a.ID
+				rewardKey = a.AgentKey
+			}
+		})
+		// Surge pricing
+		surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
+		// Calculate reward (Agent)
+		rFactor := 1.0
+		if f, ok := b.Config.ModelRewardFactors[model]; ok {
+			rFactor = f
+		}
+		reward := float64(ollamaResp.PromptEvalCount+ollamaResp.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier * surge
+
+		// Calculate cost (Client)
+		cFactor := 1.0
+		if f, ok := b.Config.ModelCostFactors[model]; ok {
+			cFactor = f
+		}
+		cost := float64(ollamaResp.PromptEvalCount+ollamaResp.EvalCount) * cFactor * b.Config.GlobalCostMultiplier * surge
+
+		trackingID := agentID
+		if rewardKey != "" {
+			trackingID = rewardKey
+		}
+
+		// Get client key
+		clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
+		select {
+		case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, reward, cost, clientKey}:
+		default:
+		}
 	}
 
 	b.recordSuccess(agentAddr)
@@ -235,11 +361,50 @@ func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *htt
 		}
 
 		var ollamaChunk struct {
-			Response string `json:"response"`
-			Done     bool   `json:"done"`
+			Response        string `json:"response"`
+			Done            bool   `json:"done"`
+			PromptEvalCount int    `json:"prompt_eval_count"`
+			EvalCount       int    `json:"eval_count"`
 		}
 		if err := json.Unmarshal(line, &ollamaChunk); err != nil {
 			continue
+		}
+
+		if ollamaChunk.PromptEvalCount > 0 || ollamaChunk.EvalCount > 0 {
+			agentID := agentAddr
+			rewardKey := ""
+			b.State.Do(func(s *state.ClusterState) {
+				if a, ok := s.Agents[agentAddr]; ok {
+					agentID = a.ID
+					rewardKey = a.AgentKey
+				}
+			})
+			// Calculate reward (Agent)
+			rFactor := 1.0
+			if f, ok := b.Config.ModelRewardFactors[model]; ok {
+				rFactor = f
+			}
+			reward := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier
+
+			// Calculate cost (Client)
+			cFactor := 1.0
+			if f, ok := b.Config.ModelCostFactors[model]; ok {
+				cFactor = f
+			}
+			cost := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * cFactor * b.Config.GlobalCostMultiplier
+
+			trackingID := agentID
+			if rewardKey != "" {
+				trackingID = rewardKey
+			}
+
+			// Get client key
+			clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
+			select {
+			case b.TokenCh <- tokenUsageEntry{trackingID, model, ollamaChunk.PromptEvalCount, ollamaChunk.EvalCount, reward, cost, clientKey}:
+			default:
+			}
 		}
 
 		oaiChunk := models.OpenAIChatResponse{

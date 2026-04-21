@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Zap, Cpu, Server, Activity, Database, Layers } from 'lucide-react';
+import { Zap, Cpu, Server, Activity, Database, Layers, Coins } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -96,6 +96,20 @@ export const OverviewPage: React.FC = () => {
       sub: 'across all nodes',
       icon: Database,
       color: 'text-indigo-400',
+    },
+    {
+      title: 'Cluster Throughput',
+      value: ((status?.total_input_tokens || 0) + (status?.total_output_tokens || 0)).toLocaleString(),
+      sub: `${(status?.total_output_tokens || 0).toLocaleString()} output tokens`,
+      icon: Activity,
+      color: 'text-amber-400',
+    },
+    {
+      title: 'Cluster Earnings',
+      value: (status?.total_reward || 0).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+      sub: 'total reward credits φ',
+      icon: Coins,
+      color: 'text-emerald-400',
     },
   ];
 
@@ -301,6 +315,40 @@ export const OverviewPage: React.FC = () => {
             </div>
           </CardContent>
         </Card>
+      </div>
+
+      {/* Performance Section */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-muted-foreground">
+          <Activity size={14} className="text-amber-400" /> Fleet Performance (24h)
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+           {Object.entries(status?.performance || {}).length === 0 ? (
+             <Card className="col-span-4 bg-card border-border/50 py-12 text-center text-xs font-bold text-muted-foreground italic">
+               Waiting for first inference to generate performance telemetry...
+             </Card>
+           ) : Object.entries(status?.performance || {}).map(([model, perf]) => (
+             <Card key={model} className="bg-card border-border/50 overflow-hidden group hover:border-amber-500/30 transition-colors">
+                <CardHeader className="py-3 px-4 bg-muted/20 border-b border-border/50">
+                   <CardTitle className="text-[10px] font-mono font-black truncate">{model}</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 space-y-3">
+                   <div className="flex justify-between items-center">
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Avg TTFT</span>
+                      <span className="text-xs font-black text-amber-400">{perf.avg_ttft_ms.toFixed(0)}ms</span>
+                   </div>
+                   <div className="flex justify-between items-center">
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Total Duration</span>
+                      <span className="text-xs font-black text-sky-400">{(perf.avg_duration_ms / 1000).toFixed(2)}s</span>
+                   </div>
+                   <div className="pt-2 flex justify-between items-center border-t border-border/30">
+                      <span className="text-[8px] font-black text-muted-foreground/50 uppercase">{perf.requests} requests</span>
+                      <Badge variant="outline" className="text-[8px] font-black h-4 px-1.5 opacity-60">STABLE</Badge>
+                   </div>
+                </CardContent>
+             </Card>
+           ))}
+        </div>
       </div>
     </div>
   );

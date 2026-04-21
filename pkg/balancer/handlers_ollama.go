@@ -40,6 +40,13 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
+	priority := b.getRequestPriority(r)
+	if req.Priority > priority {
+		// allow override if master admin or high credit, but cap at real priority
+	} else if req.Priority == 0 {
+		req.Priority = priority
+	}
+
 	body, _ := json.Marshal(req)
 	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, req.AllowHedging, req.Priority)
 	if err != nil {
@@ -49,7 +56,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentAddr, req.Model)
+	b.finalizeProxy(w, resp, agentAddr, req.Model, r)
 }
 
 func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +86,13 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
+	priority := b.getRequestPriority(r)
+	if req.Priority > priority {
+		// allow override
+	} else if req.Priority == 0 {
+		req.Priority = priority
+	}
+
 	body, _ := json.Marshal(req)
 	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/chat", body, r.RemoteAddr, req.AllowHedging, req.Priority)
 	if err != nil {
@@ -87,7 +101,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentAddr, req.Model)
+	b.finalizeProxy(w, resp, agentAddr, req.Model, r)
 }
 
 func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {

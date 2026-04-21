@@ -52,6 +52,9 @@ export interface NodeStatus {
   message?: string;
   cooloff_until: string;
   draining: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  token_reward: number;
 }
 
 export interface ClusterStatus {
@@ -68,6 +71,12 @@ export interface ClusterStatus {
   avg_cpu_usage: number;
   avg_mem_usage: number;
   uptime_seconds: number;
+  model_policies: Record<string, Record<string, { Banned: boolean; Pinned: boolean }>>;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_reward: number;
+  total_cost: number;
+  performance: Record<string, { avg_ttft_ms: number; avg_duration_ms: number; requests: number }>;
 }
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -83,6 +92,39 @@ export interface ModelRequest {
   status: ModelRequestStatus;
   requested_at: string;
   approved_at?: string;
+}
+
+export interface ClientKey {
+  key: string;
+  label: string;
+  quota_limit: number;
+  quota_used: number;
+  credits: number;
+  active: boolean;
+}
+
+export interface AgentKey {
+  key: string;
+  label: string;
+  node_id: string;
+  credits_earned: number;
+  active: boolean;
+}
+
+export interface Catalog {
+  global_reward_multiplier: number;
+  global_cost_multiplier: number;
+  models: {
+    name: string;
+    reward_factor: number;
+    cost_factor: number;
+  }[];
+}
+
+export interface Identity {
+  type: 'client' | 'agent';
+  label: string;
+  data: any;
 }
 
 export interface Job {
@@ -146,6 +188,14 @@ export interface Config {
   tls: TLSConfig;
   poll_interval_ms: number;
   enable_model_approval: boolean;
+  global_reward_multiplier: number;
+  global_cost_multiplier: number;
+  model_reward_factors: Record<string, number>;
+  model_cost_factors: Record<string, number>;
+  max_vram_allocated: number;
+  max_cpu_allocated: number;
+  enable_auto_scaling: boolean;
+  auto_scale_threshold: number;
 }
 
 class FlakyOllamaSDK {
@@ -157,11 +207,16 @@ class FlakyOllamaSDK {
     };
   }
 
-  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, options: RequestInit = {}, tokenOverride?: string): Promise<T> {
     const baseUrl = getBaseUrl();
+    const token = tokenOverride || getToken();
     const res = await fetch(`${baseUrl}${path}`, {
       ...options,
-      headers: { ...this.getHeaders(), ...options.headers },
+      headers: { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...options.headers 
+      },
     });
     
     if (!res.ok) {
@@ -304,6 +359,45 @@ class FlakyOllamaSDK {
 
   async declineModelRequest(id: string): Promise<{ status: string }> {
     return this.request(`/api/v1/requests/${id}/decline`, { method: 'POST' });
+  }
+
+  async setModelPolicy(model: string, nodeID: string, banned: boolean, pinned: boolean): Promise<{ status: string }> {
+    return this.request('/api/v1/policies', {
+      method: 'POST',
+      body: JSON.stringify({ model, node_id: nodeID, banned, pinned }),
+    });
+  }
+
+  // Key Management
+  async getClientKeys(): Promise<ClientKey[]> {
+    return this.request<ClientKey[]>('/api/v1/keys/clients');
+  }
+
+  async createClientKey(k: Partial<ClientKey>): Promise<ClientKey> {
+    return this.request<ClientKey>('/api/v1/keys/clients', {
+      method: 'POST',
+      body: JSON.stringify(k),
+    });
+  }
+
+  async getAgentKeys(): Promise<AgentKey[]> {
+    return this.request<AgentKey[]>('/api/v1/keys/agents');
+  }
+
+  async createAgentKey(k: Partial<AgentKey>): Promise<AgentKey> {
+    return this.request<AgentKey>('/api/v1/keys/agents', {
+      method: 'POST',
+      body: JSON.stringify(k),
+    });
+  }
+
+  // Public / Self-service
+  async getCatalog(): Promise<Catalog> {
+    return this.request<Catalog>('/api/v1/catalog');
+  }
+
+  async getMe(token: string): Promise<Identity> {
+    return this.request<Identity>('/api/v1/me', {}, token);
   }
 }
 

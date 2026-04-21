@@ -3,12 +3,14 @@ package balancer
 import (
 	"FlakyOllama/pkg/balancer/jobs"
 	"FlakyOllama/pkg/balancer/state"
+	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -120,9 +122,33 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 	var sumCPU, sumMem float64
 	var healthyNodes int
 
+	tokenStats, _ := b.Storage.GetTotalTokenStats()
+	agentKeys, _ := b.Storage.ListAgentKeys()
+	repMap := make(map[string]float64)
+	for _, k := range agentKeys {
+		repMap[k.Key] = k.Reputation
+	}
+
+	var totalInput, totalOutput int64
+	var totalReward, totalCost float64
+
 	agentsCopy := make(map[string]*models.NodeStatus)
 	for addr, agent := range snapshot.Agents {
-		a := agent // local copy
+		a := *agent // full copy
+		if stats, ok := tokenStats[agent.ID]; ok {
+			a.InputTokens = int(stats.Input)
+			a.OutputTokens = int(stats.Output)
+			a.TokenReward = stats.Reward
+			totalInput += stats.Input
+			totalOutput += stats.Output
+			totalReward += stats.Reward
+			totalCost += stats.Cost
+		}
+		if r, ok := repMap[agent.AgentKey]; ok {
+			a.Reputation = r
+		} else {
+			a.Reputation = 1.0 // Default
+		}
 		agentsCopy[addr] = &a
 
 		if agent.State == models.StateHealthy {
@@ -158,20 +184,41 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 	}
 	sort.Strings(allModels)
 
+	// Performance Analytics
+	perf, _ := b.Storage.GetPerformanceAnalytics()
+
 	status := models.ClusterStatus{
-		Nodes:           agentsCopy,
-		PendingRequests: pendingRequestsCopy,
-		InProgressPulls: snapshot.InProgressPulls,
-		NodeWorkloads:   snapshot.NodeWorkloads,
-		QueueDepth:      b.Queue.pq.Len(),
-		ActiveWorkloads: totalWorkloads,
-		AllModels:       allModels,
-		TotalVRAM:       totalVRAM,
-		UsedVRAM:        usedVRAM,
-		TotalCPUCores:   totalCores,
-		AvgCPUUsage:     avgCPU,
-		AvgMemoryUsage:  avgMem,
-		UptimeSeconds:   int64(time.Since(b.StartTime).Seconds()),
+		Nodes:             agentsCopy,
+		PendingRequests:   pendingRequestsCopy,
+		InProgressPulls:   snapshot.InProgressPulls,
+		NodeWorkloads:     snapshot.NodeWorkloads,
+		QueueDepth:        b.Queue.pq.Len(),
+		ActiveWorkloads:   totalWorkloads,
+		AllModels:         allModels,
+		TotalVRAM:         totalVRAM,
+		UsedVRAM:          usedVRAM,
+		TotalCPUCores:     totalCores,
+		AvgCPUUsage:       avgCPU,
+		AvgMemoryUsage:    avgMem,
+		UptimeSeconds:     int64(time.Since(b.StartTime).Seconds()),
+		ModelPolicies:     snapshot.ModelPolicies,
+		TotalInputTokens:  int(totalInput),
+		TotalOutputTokens: int(totalOutput),
+		TotalReward:       totalReward,
+		TotalCost:         totalCost,
+		Performance: make(map[string]struct {
+			AvgTTFT     float64 `json:"avg_ttft_ms"`
+			AvgDuration float64 `json:"avg_duration_ms"`
+			Requests    int     `json:"requests"`
+		}),
+	}
+
+	for m, p := range perf {
+		status.Performance[m] = struct {
+			AvgTTFT     float64 `json:"avg_ttft_ms"`
+			AvgDuration float64 `json:"avg_duration_ms"`
+			Requests    int     `json:"requests"`
+		}{AvgTTFT: p.AvgTTFT, AvgDuration: p.AvgDuration, Requests: p.Requests}
 	}
 
 	b.jsonResponse(w, http.StatusOK, status)
@@ -500,6 +547,150 @@ func (b *Balancer) HandleV1ModelRequestDecline(w http.ResponseWriter, r *http.Re
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "declined"})
 }
 
+func (b *Balancer) HandleV1ModelPolicySet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model  string `json:"model"`
+		NodeID string `json:"node_id"`
+		Banned bool   `json:"banned"`
+		Pinned bool   `json:"pinned"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := b.Storage.SetModelPolicy(req.Model, req.NodeID, req.Banned, req.Pinned); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Update in-memory state
+	b.State.DoAsync(func(s *state.ClusterState) {
+		if _, ok := s.ModelPolicies[req.Model]; !ok {
+			s.ModelPolicies[req.Model] = make(map[string]struct{ Banned, Pinned bool })
+		}
+		s.ModelPolicies[req.Model][req.NodeID] = struct{ Banned, Pinned bool }{Banned: req.Banned, Pinned: req.Pinned}
+	})
+
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "policy_updated"})
+}
+
+// Client Key Handlers
+func (b *Balancer) HandleV1ClientKeysList(w http.ResponseWriter, r *http.Request) {
+	keys, err := b.Storage.ListClientKeys()
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, keys)
+}
+
+func (b *Balancer) HandleV1ClientKeyCreate(w http.ResponseWriter, r *http.Request) {
+	var req models.ClientKey
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Key == "" {
+		req.Key = generateJobID()
+	}
+	if err := b.Storage.CreateClientKey(req); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusCreated, req)
+}
+
+// Agent Key Handlers
+func (b *Balancer) HandleV1AgentKeysList(w http.ResponseWriter, r *http.Request) {
+	keys, err := b.Storage.ListAgentKeys()
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, keys)
+}
+
+func (b *Balancer) HandleV1AgentKeyCreate(w http.ResponseWriter, r *http.Request) {
+	var req models.AgentKey
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Key == "" {
+		req.Key = generateJobID()
+	}
+	if err := b.Storage.CreateAgentKey(req); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusCreated, req)
+}
+
+// Public / Self-service Handlers
+func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
+	snapshot := b.State.GetSnapshot()
+
+	type modelInfo struct {
+		Name   string  `json:"name"`
+		Reward float64 `json:"reward_factor"`
+		Cost   float64 `json:"cost_factor"`
+	}
+
+	var catalog []modelInfo
+	for _, m := range snapshot.AllModels {
+		reward := 1.0
+		if f, ok := b.Config.ModelRewardFactors[m]; ok {
+			reward = f
+		}
+		cost := 1.0
+		if f, ok := b.Config.ModelCostFactors[m]; ok {
+			cost = f
+		}
+
+		catalog = append(catalog, modelInfo{
+			Name: m, Reward: reward, Cost: cost,
+		})
+	}
+
+	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"global_reward_multiplier": b.Config.GlobalRewardMultiplier,
+		"global_cost_multiplier":   b.Config.GlobalCostMultiplier,
+		"models":                   catalog,
+	})
+}
+
+func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
+	token, _ := r.Context().Value(auth.ContextKeyToken).(string)
+	if token == "" {
+		b.jsonError(w, http.StatusUnauthorized, "no identity found")
+		return
+	}
+
+	// Try Client Key
+	if ck, err := b.Storage.GetClientKey(token); err == nil {
+		b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+			"type":  "client",
+			"label": ck.Label,
+			"data":  ck,
+		})
+		return
+	}
+
+	// Try Agent Key
+	if ak, err := b.Storage.GetAgentKey(token); err == nil {
+		b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+			"type":  "agent",
+			"label": ak.Label,
+			"data":  ak,
+		})
+		return
+	}
+
+	b.jsonError(w, http.StatusNotFound, "identity not found in registry")
+}
+
 func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request) {
 	var req models.InferenceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -533,8 +724,13 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	}
 	defer resp.Body.Close()
 
+	// Capture usage
+	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	go b.captureUsage(agentID, req.Model, bodyBytes, clientKey)
+
 	var result models.InferenceResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, "failed to decode response")
 		return
 	}
@@ -566,8 +762,12 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get authenticated token from context
+	token, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
 	b.State.UpsertNode(addr, &models.NodeStatus{
 		ID:       req.ID,
+		AgentKey: token,
 		Address:  addr,
 		Tier:     req.Tier,
 		HasGPU:   req.HasGPU,
