@@ -57,54 +57,62 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 
 	var firstErr error
 	var secondStarted bool
-for i := 0; i < 2; i++ {
-	select {
-	case res := <-results:
-		if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
-			mu.Lock()
-			if winningAddr == "" {
-				winningAddr = res.AgentAddr
+
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-results:
+			if res.Err == nil && res.Resp != nil && res.Resp.StatusCode == http.StatusOK {
+				mu.Lock()
+				if winningAddr == "" {
+					winningAddr = res.AgentAddr
+					mu.Unlock()
+
+					// Record Reputation Change: Winner
+					go func(addr string, data chan HedgedResult) {
+						// Record win
+						b.State.Do(func(s *state.ClusterState) {
+							if a, ok := s.Agents[addr]; ok && a.AgentKey != "" {
+								b.Storage.RecordReputation(a.AgentKey, 0.01)
+							}
+						})
+
+						// Record loss for the other if it eventually finishes
+						if secondStarted {
+							select {
+							case other := <-data:
+								if other.AgentAddr != addr && other.AgentAddr != "" {
+									b.State.Do(func(s *state.ClusterState) {
+										if a, ok := s.Agents[other.AgentAddr]; ok && a.AgentKey != "" {
+											b.Storage.RecordReputation(a.AgentKey, -0.05)
+										}
+									})
+								}
+							case <-time.After(10 * time.Second):
+							}
+						}
+					}(res.AgentAddr, results)
+
+					return res.Resp, res.AgentID, res.AgentAddr, nil
+				}
 				mu.Unlock()
 
-				// Record Reputation Change: Winner
-				go func(addr string, data chan HedgedResult) {
-					// Record win
-					b.State.Do(func(s *state.ClusterState) {
-						if a, ok := s.Agents[addr]; ok && a.AgentKey != "" {
-							b.Storage.RecordReputation(a.AgentKey, 0.01)
-						}
-					})
-
-					// Record loss for the other if it eventually finishes
-					if secondStarted {
-						select {
-						case other := <-data:
-							if other.AgentAddr != addr && other.AgentAddr != "" {
-								b.State.Do(func(s *state.ClusterState) {
-									if a, ok := s.Agents[other.AgentAddr]; ok && a.AgentKey != "" {
-										b.Storage.RecordReputation(a.AgentKey, -0.05)
-									}
-								})
-							}
-						case <-time.After(10 * time.Second):
-						}
-					}
-				}(res.AgentAddr, results)
-
-				return res.Resp, res.AgentID, res.AgentAddr, nil
-			}
-			mu.Unlock()
-...
-
 				res.Resp.Body.Close()
-				if res.Cancel != nil { res.Cancel() }
+				if res.Cancel != nil {
+					res.Cancel()
+				}
 				continue
 			}
 
-			if res.Resp != nil { res.Resp.Body.Close() }
-			if res.Cancel != nil { res.Cancel() }
-			
-			if res.Err != nil { firstErr = res.Err }
+			if res.Resp != nil {
+				res.Resp.Body.Close()
+			}
+			if res.Cancel != nil {
+				res.Cancel()
+			}
+
+			if res.Err != nil {
+				firstErr = res.Err
+			}
 
 			if !secondStarted && shouldHedge {
 				secondStarted = true
@@ -145,7 +153,9 @@ func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.
 	}
 
 	scheme := "http"
-	if b.Config.TLS.Enabled { scheme = "https" }
+	if b.Config.TLS.Enabled {
+		scheme = "https"
+	}
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", scheme+"://"+qr.AgentAddr+path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -169,10 +179,10 @@ func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.
 	// The "Speculative" part: wait for the first byte before considering this attempt a winner
 	firstByteReceived := make(chan struct{})
 	peeker := &peekReader{
-		ReadCloser: resp.Body,
+		ReadCloser:  resp.Body,
 		onFirstByte: func() { close(firstByteReceived) },
 	}
-	
+
 	// Replace body with peeker
 	wrapped := &workloadBody{ReadCloser: peeker, b: b, addr: qr.AgentAddr}
 	resp.Body = &cancelBody{ReadCloser: wrapped, cancel: cancel}

@@ -177,7 +177,7 @@ func (b *Balancer) NewMux() *chi.Mux {
 	// Legacy Ollama Layer
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
-			return auth.Middleware(token, next.ServeHTTP)
+			return auth.Middleware(token, b.Storage, next.ServeHTTP)
 		})
 		r.Post("/api/generate", b.HandleGenerate)
 		r.Post("/api/chat", b.HandleChat)
@@ -196,7 +196,7 @@ func (b *Balancer) NewMux() *chi.Mux {
 	// OpenAI Layer
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
-			return auth.Middleware(token, next.ServeHTTP)
+			return auth.Middleware(token, b.Storage, next.ServeHTTP)
 		})
 		r.Post("/v1/chat/completions", b.HandleOpenAIChat)
 		r.Post("/v1/completions", b.HandleOpenAICompletions)
