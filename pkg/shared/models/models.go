@@ -48,6 +48,9 @@ type NodeStatus struct {
 	Reputation     float64     `json:"reputation"`
 	CooloffUntil   time.Time   `json:"cooloff_until"`
 	Draining       bool        `json:"draining"`
+	InputTokens    int         `json:"input_tokens"`
+	OutputTokens   int         `json:"output_tokens"`
+	TokenReward    float64     `json:"token_reward"`
 }
 
 // ModelRequirement defines the hardware needs for a model.

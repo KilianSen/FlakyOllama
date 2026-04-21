@@ -5,7 +5,6 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -197,4 +196,16 @@ func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.
 			resp.Body.Close()
 		}
 	}()
+}
+
+type cancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (c *cancelBody) Close() error {
+	err := c.ReadCloser.Close()
+	c.once.Do(c.cancel)
+	return err
 }
