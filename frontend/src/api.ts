@@ -39,6 +39,7 @@ export interface NodeStatus {
   cpu_usage: number;
   cpu_cores: number;
   memory_usage: number;
+  memory_total: number;
   vram_total: number;
   vram_used: number;
   gpu_model: string;
@@ -48,6 +49,7 @@ export interface NodeStatus {
   last_seen: string;
   state: number;
   errors: number;
+  message?: string;
   cooloff_until: string;
   draining: boolean;
 }
@@ -143,6 +145,7 @@ export interface Config {
   keep_alive_duration_sec: number;
   tls: TLSConfig;
   poll_interval_ms: number;
+  enable_model_approval: boolean;
 }
 
 class FlakyOllamaSDK {

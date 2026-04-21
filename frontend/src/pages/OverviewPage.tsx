@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Zap, Cpu, Server, Activity, Database, Clock, Layers } from 'lucide-react';
+import { Zap, Cpu, Server, Activity, Database, Layers } from 'lucide-react';
+
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -10,7 +11,7 @@ import type { NodeStatus } from '../api';
 import { useCluster } from '../ClusterContext';
 import { computeRoutability, LATENCY_HINTS } from '../lib/modelUtils';
 
-function formatBytes(bytes: number, decimals = 1) {
+function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -18,13 +19,8 @@ function formatBytes(bytes: number, decimals = 1) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
 }
 
-function formatUptime(seconds: number) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h}h ${m}m`;
-}
-
 const nodeStateColor = (node: NodeStatus) => {
+
   if (node.state === 2) return '#ef4444';
   if (node.state === 1) return '#f59e0b';
   return '#10b981';

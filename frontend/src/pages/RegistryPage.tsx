@@ -1,17 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Download, Trash2, CheckCircle2, XCircle, Clock, Box, Database, ExternalLink, ShieldAlert, Cpu, Zap } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Search, Download, Trash2, CheckCircle2, XCircle, Clock, Box, Database, ExternalLink, ShieldAlert } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, List, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import sdk, { type ModelRequest } from '../api';
 import { useCluster } from '../ClusterContext';
-import { formatBytes } from '../lib/modelUtils';
 
 // Common models for the browser
 const POPULAR_MODELS = [
@@ -30,7 +28,6 @@ export const RegistryPage: React.FC = () => {
   const { status, refresh } = useCluster();
   const [search, setSearch] = useState('');
   const [requests, setRequests] = useState<ModelRequest[]>([]);
-  const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('browser');
 
   const loadRequests = async () => {
