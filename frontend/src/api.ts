@@ -70,6 +70,19 @@ export interface ClusterStatus {
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
 
+export type ModelRequestStatus = 'pending' | 'approved' | 'declined';
+export type ModelRequestType = 'pull' | 'delete' | 'copy';
+
+export interface ModelRequest {
+  id: string;
+  type: ModelRequestType;
+  model: string;
+  node_id: string;
+  status: ModelRequestStatus;
+  requested_at: string;
+  approved_at?: string;
+}
+
 export interface Job {
   id: string;
   type: string;
@@ -274,6 +287,20 @@ class FlakyOllamaSDK {
       method: 'POST',
       body: JSON.stringify(config),
     });
+  }
+
+  // Model Requests
+  async getModelRequests(status?: string): Promise<ModelRequest[]> {
+    const path = status ? `/api/v1/requests?status=${status}` : '/api/v1/requests';
+    return this.request<ModelRequest[]>(path);
+  }
+
+  async approveModelRequest(id: string): Promise<{ status: string; job_id?: string }> {
+    return this.request(`/api/v1/requests/${id}/approve`, { method: 'POST' });
+  }
+
+  async declineModelRequest(id: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/requests/${id}/decline`, { method: 'POST' });
   }
 }
 

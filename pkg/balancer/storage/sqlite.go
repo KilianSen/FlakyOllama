@@ -50,6 +50,15 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			message TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs (timestamp);`,
+		`CREATE TABLE IF NOT EXISTS model_requests (
+			id TEXT PRIMARY KEY,
+			type TEXT,
+			model TEXT,
+			node_id TEXT,
+			status TEXT,
+			requested_at DATETIME,
+			approved_at DATETIME
+		);`,
 	}
 	for _, q := range queries {
 		if _, err = db.Exec(q); err != nil {
@@ -58,6 +67,71 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 	}
 
 	return &SQLiteStorage{db: db}, nil
+}
+
+func (s *SQLiteStorage) CreateModelRequest(req models.ModelRequest) error {
+	_, err := s.db.Exec(`
+		INSERT INTO model_requests (id, type, model, node_id, status, requested_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		req.ID, req.Type, req.Model, req.NodeID, req.Status, req.RequestedAt)
+	return err
+}
+
+func (s *SQLiteStorage) GetModelRequest(id string) (models.ModelRequest, error) {
+	var req models.ModelRequest
+	var approvedAt sql.NullTime
+	err := s.db.QueryRow(`
+		SELECT id, type, model, node_id, status, requested_at, approved_at 
+		FROM model_requests WHERE id = ?`, id).
+		Scan(&req.ID, &req.Type, &req.Model, &req.NodeID, &req.Status, &req.RequestedAt, &approvedAt)
+	if err != nil {
+		return req, err
+	}
+	if approvedAt.Valid {
+		req.ApprovedAt = &approvedAt.Time
+	}
+	return req, nil
+}
+
+func (s *SQLiteStorage) ListModelRequests(status string) ([]models.ModelRequest, error) {
+	query := `SELECT id, type, model, node_id, status, requested_at, approved_at FROM model_requests`
+	var rows *sql.Rows
+	var err error
+	if status != "" {
+		query += ` WHERE status = ?`
+		rows, err = s.db.Query(query, status)
+	} else {
+		rows, err = s.db.Query(query)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reqs []models.ModelRequest
+	for rows.Next() {
+		var req models.ModelRequest
+		var approvedAt sql.NullTime
+		if err := rows.Scan(&req.ID, &req.Type, &req.Model, &req.NodeID, &req.Status, &req.RequestedAt, &approvedAt); err != nil {
+			return nil, err
+		}
+		if approvedAt.Valid {
+			req.ApprovedAt = &approvedAt.Time
+		}
+		reqs = append(reqs, req)
+	}
+	return reqs, nil
+}
+
+func (s *SQLiteStorage) UpdateModelRequestStatus(id string, status models.ModelRequestStatus) error {
+	var approvedAt interface{}
+	if status == models.StatusApproved {
+		approvedAt = time.Now()
+	} else {
+		approvedAt = nil
+	}
+	_, err := s.db.Exec("UPDATE model_requests SET status = ?, approved_at = ? WHERE id = ?", status, approvedAt, id)
+	return err
 }
 
 func (s *SQLiteStorage) RecordLog(nodeID, level, component, message string) error {

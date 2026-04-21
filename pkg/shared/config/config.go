@@ -20,6 +20,7 @@ type Config struct {
 	TLS                  TLSConfig      `json:"tls"`
 	AuthToken            string         `json:"auth_token"`   // Token expected from clients
 	RemoteToken          string         `json:"remote_token"` // Token to send to agents/balancer
+	EnableModelApproval  bool           `json:"enable_model_approval"`
 }
 
 type TLSConfig struct {
@@ -61,10 +62,11 @@ func DefaultConfig() *Config {
 			ErrorThreshold: 3,
 			CooloffSec:     60,
 		},
-		StallTimeoutSec:   15,
-		EnableHedging:     true,
-		HedgingPercentile: 0.95,
-		MaxQueueDepth:     100,
+		StallTimeoutSec:     15,
+		EnableHedging:       true,
+		HedgingPercentile:   0.95,
+		MaxQueueDepth:       100,
+		EnableModelApproval: true,
 	}
 }
 

@@ -313,6 +313,29 @@ func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Manual Approval Mode
+	if b.Config.EnableModelApproval {
+		requestID := generateJobID()
+		err := b.Storage.CreateModelRequest(models.ModelRequest{
+			ID:          requestID,
+			Type:        models.RequestPull,
+			Model:       req.Model,
+			NodeID:      req.NodeID,
+			Status:      models.StatusPending,
+			RequestedAt: time.Now(),
+		})
+		if err != nil {
+			b.jsonError(w, http.StatusInternalServerError, "failed to create approval request: "+err.Error())
+			return
+		}
+		b.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
+			"request_id": requestID,
+			"status":     "approval_pending",
+			"message":    "Request submitted for manual approval",
+		})
+		return
+	}
+
 	jobID := generateJobID()
 	b.Jobs.CreateJob(jobID, "model_pull")
 	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
@@ -321,39 +344,7 @@ func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
 	})
 
 	go func() {
-		body, _ := json.Marshal(map[string]string{"model": req.Model})
-		var err error
-		if req.NodeID != "" || req.NodeAddr != "" {
-			snapshot := b.State.GetSnapshot()
-			found := false
-			for addr, agent := range snapshot.Agents {
-				if agent.Address == req.NodeAddr || agent.ID == req.NodeID {
-					_, err = b.sendToAgentWithContext(context.Background(), addr, "/models/pull", body)
-					found = true
-					break
-				}
-			}
-			if !found {
-				err = fmt.Errorf("node not found")
-			}
-		} else {
-			// Cluster-wide pull
-			b.State.Do(func(s *state.ClusterState) {
-				s.InProgressPulls[req.Model] = time.Now()
-			})
-			b.Broadcast("/models/pull", body)
-		}
-
-		b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
-			if err != nil {
-				j.Status = jobs.StatusFailed
-				j.Message = err.Error()
-			} else {
-				j.Status = jobs.StatusCompleted
-				j.Message = "Pull triggered for " + req.Model
-				j.Progress = 1.0
-			}
-		})
+		b.executePull(jobID, req.Model, req.NodeID, req.NodeAddr)
 	}()
 
 	b.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
@@ -362,6 +353,41 @@ func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (b *Balancer) executePull(jobID, model, nodeID, nodeAddr string) {
+	body, _ := json.Marshal(map[string]string{"model": model})
+	var err error
+	if nodeID != "" || nodeAddr != "" {
+		snapshot := b.State.GetSnapshot()
+		found := false
+		for addr, agent := range snapshot.Agents {
+			if agent.Address == nodeAddr || agent.ID == nodeID {
+				_, err = b.sendToAgentWithContext(context.Background(), addr, "/models/pull", body)
+				found = true
+				break
+			}
+		}
+		if !found {
+			err = fmt.Errorf("node not found")
+		}
+	} else {
+		// Cluster-wide pull
+		b.State.Do(func(s *state.ClusterState) {
+			s.InProgressPulls[model] = time.Now()
+		})
+		b.Broadcast("/models/pull", body)
+	}
+
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
+		if err != nil {
+			j.Status = jobs.StatusFailed
+			j.Message = err.Error()
+		} else {
+			j.Status = jobs.StatusCompleted
+			j.Message = "Pull triggered for " + model
+			j.Progress = 1.0
+		}
+	})
+}
 func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if strings.HasPrefix(name, "a.") {
@@ -372,23 +398,106 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Manual Approval Mode
+	if b.Config.EnableModelApproval {
+		requestID := generateJobID()
+		err := b.Storage.CreateModelRequest(models.ModelRequest{
+			ID:          requestID,
+			Type:        models.RequestDelete,
+			Model:       name,
+			Status:      models.StatusPending,
+			RequestedAt: time.Now(),
+		})
+		if err != nil {
+			b.jsonError(w, http.StatusInternalServerError, "failed to create approval request: "+err.Error())
+			return
+		}
+		b.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
+			"request_id": requestID,
+			"status":     "approval_pending",
+			"message":    "Delete request submitted for manual approval",
+		})
+		return
+	}
+
 	jobID := generateJobID()
 	b.Jobs.CreateJob(jobID, "model_delete")
 
 	go func() {
-		b.Jobs.UpdateJob(jobID, func(j *jobs.Job) { j.Status = jobs.StatusRunning })
-		body, _ := json.Marshal(map[string]string{"model": name})
-		b.Broadcast("/models/delete", body)
-		b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
-			j.Status = jobs.StatusCompleted
-			j.Progress = 1.0
-		})
+		b.executeDelete(jobID, name)
 	}()
 
 	b.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
 		"job_id": jobID,
 		"status": "delete_triggered",
 	})
+}
+
+func (b *Balancer) executeDelete(jobID, name string) {
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) { j.Status = jobs.StatusRunning })
+	body, _ := json.Marshal(map[string]string{"model": name})
+	b.Broadcast("/models/delete", body)
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
+		j.Status = jobs.StatusCompleted
+		j.Message = "Delete triggered for " + name
+		j.Progress = 1.0
+	})
+}
+
+func (b *Balancer) HandleV1ModelRequestsList(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	reqs, err := b.Storage.ListModelRequests(status)
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, reqs)
+}
+
+func (b *Balancer) HandleV1ModelRequestApprove(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	req, err := b.Storage.GetModelRequest(id)
+	if err != nil {
+		b.jsonError(w, http.StatusNotFound, "request not found")
+		return
+	}
+
+	if req.Status != models.StatusPending {
+		b.jsonError(w, http.StatusBadRequest, "request is not pending")
+		return
+	}
+
+	if err := b.Storage.UpdateModelRequestStatus(id, models.StatusApproved); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Trigger the actual action
+	jobID := generateJobID()
+	b.Jobs.CreateJob(jobID, string(req.Type))
+
+	go func() {
+		switch req.Type {
+		case models.RequestPull:
+			b.executePull(jobID, req.Model, req.NodeID, "")
+		case models.RequestDelete:
+			b.executeDelete(jobID, req.Model)
+		}
+	}()
+
+	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status": "approved",
+		"job_id": jobID,
+	})
+}
+
+func (b *Balancer) HandleV1ModelRequestDecline(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := b.Storage.UpdateModelRequestStatus(id, models.StatusDeclined); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "declined"})
 }
 
 func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request) {

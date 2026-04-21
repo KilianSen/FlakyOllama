@@ -151,3 +151,29 @@ type LogEntry struct {
 	Component string    `json:"component"`
 	Message   string    `json:"message"`
 }
+
+type ModelRequestType string
+
+const (
+	RequestPull   ModelRequestType = "pull"
+	RequestDelete ModelRequestType = "delete"
+	RequestCopy   ModelRequestType = "copy"
+)
+
+type ModelRequestStatus string
+
+const (
+	StatusPending  ModelRequestStatus = "pending"
+	StatusApproved ModelRequestStatus = "approved"
+	StatusDeclined ModelRequestStatus = "declined"
+)
+
+type ModelRequest struct {
+	ID          string             `json:"id"`
+	Type        ModelRequestType   `json:"type"`
+	Model       string             `json:"model"`
+	NodeID      string             `json:"node_id"` // Empty for all nodes
+	Status      ModelRequestStatus `json:"status"`
+	RequestedAt time.Time          `json:"requested_at"`
+	ApprovedAt  *time.Time         `json:"approved_at,omitempty"`
+}

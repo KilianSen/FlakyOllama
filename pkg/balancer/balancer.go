@@ -205,6 +205,12 @@ func (b *Balancer) NewMux() *chi.Mux {
 			r.Post("/{name}/unload", b.HandleV1ModelUnload)
 		})
 
+		r.Route("/requests", func(r chi.Router) {
+			r.Get("/", b.HandleV1ModelRequestsList)
+			r.Post("/{id}/approve", b.HandleV1ModelRequestApprove)
+			r.Post("/{id}/decline", b.HandleV1ModelRequestDecline)
+		})
+
 		r.Get("/jobs/{id}", b.HandleV1JobStatus)
 		r.Post("/test", b.HandleV1TestInference)
 

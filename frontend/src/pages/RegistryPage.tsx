@@ -1,504 +1,271 @@
-import React, { useState, useMemo } from 'react';
-import { Search, CloudDownload, RefreshCw, XCircle, Trash2, Box, ChevronRight } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import React, { useState, useEffect } from 'react';
+import { Search, Download, Trash2, CheckCircle2, XCircle, Clock, Box, Database, ExternalLink, ShieldAlert, Cpu, Zap } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsContent, List, TabsTrigger } from '@/components/ui/tabs';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import sdk from '../api';
-import type { NodeStatus } from '../api';
+import sdk, { type ModelRequest } from '../api';
 import { useCluster } from '../ClusterContext';
-import {
-  computeRoutability, inferCapabilities, inferSDKCompat,
-  CAPABILITY_LABELS, LATENCY_HINTS, formatBytes, parseModelTag,
-} from '../lib/modelUtils';
+import { formatBytes } from '../lib/modelUtils';
 
-// ─── Model Detail Panel ───────────────────────────────────────────────────────
-function ModelDetailPanel({ modelName, onClose, onAction }: {
-  modelName: string;
-  onClose: () => void;
-  onAction: (action: () => Promise<any>, msg: string) => void;
-}) {
-  const { status } = useCluster();
-  if (!status) return null;
+// Common models for the browser
+const POPULAR_MODELS = [
+  { name: 'llama3:8b', size: '4.7GB', desc: 'Meta Meta Llama 3, the most capable open-source model at this scale.', family: 'llama' },
+  { name: 'llama3:70b', size: '40GB', desc: 'High-performance version of Llama 3 for complex tasks.', family: 'llama' },
+  { name: 'mistral:7b', size: '4.1GB', desc: 'Mistral 7B is a high-performance transformer model.', family: 'mistral' },
+  { name: 'mixtral:8x7b', size: '26GB', desc: 'Mistral AI mixture-of-experts model.', family: 'mistral' },
+  { name: 'phi3:latest', size: '2.3GB', desc: 'Microsoft Phi-3 Mini, a 3.8B parameter lightweight model.', family: 'phi' },
+  { name: 'gemma:7b', size: '5.0GB', desc: 'Google Gemma is a family of lightweight, state-of-the-art open models.', family: 'gemma' },
+  { name: 'codellama:latest', size: '4.8GB', desc: 'A model for generating and discussing code.', family: 'llama' },
+  { name: 'deepseek-coder:latest', size: '4.5GB', desc: 'State-of-the-art code completion and generation.', family: 'deepseek' },
+  { name: 'llava:latest', size: '4.5GB', desc: 'A multimodal model that can see and talk.', family: 'llava' },
+];
 
-  const r    = computeRoutability(modelName, status);
-  const caps = inferCapabilities(modelName);
-  const compat = inferSDKCompat(caps);
-  const { family, variant } = parseModelTag(modelName);
-  const hint = LATENCY_HINTS[r.latencyHint];
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-end" onClick={onClose}>
-      <div
-        className="w-[400px] h-full bg-card border-l border-border/50 shadow-2xl flex flex-col overflow-hidden"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-5 border-b border-border/50 flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="font-black text-sm font-mono">{family}</span>
-              <Badge variant="outline" className="text-[9px] font-black h-5">:{variant}</Badge>
-            </div>
-            <p className={`text-[10px] font-black uppercase ${hint.color}`}>{hint.label}</p>
-          </div>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={onClose}>
-            <XCircle size={14} />
-          </Button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-6">
-          {/* Capabilities */}
-          <div>
-            <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-2">Capabilities</p>
-            <div className="flex flex-wrap gap-1.5">
-              {caps.map(c => {
-                const meta = CAPABILITY_LABELS[c];
-                return (
-                  <Badge key={c} className={`text-[9px] font-black h-5 px-2 border ${meta.color}`}>
-                    {meta.icon} {meta.label}
-                  </Badge>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* SDK compatibility matrix */}
-          <div>
-            <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-3">SDK Compatibility</p>
-            <div className="space-y-2">
-              {[
-                {
-                  label: 'Ollama SDK — Native',
-                  sub: 'ollama.generate() · ollama.chat()',
-                  ok: compat.ollamaNative,
-                },
-                {
-                  label: 'Ollama SDK — Embeddings',
-                  sub: 'ollama.embeddings()',
-                  ok: compat.ollamaEmbed,
-                },
-                {
-                  label: 'OpenAI SDK — Chat',
-                  sub: '/v1/chat/completions · streaming',
-                  ok: compat.openAIChat,
-                  warn: compat.openAIWarning,
-                },
-                {
-                  label: 'OpenAI SDK — Embeddings',
-                  sub: '/v1/embeddings',
-                  ok: compat.openAIEmbed,
-                },
-              ].map(row => (
-                <div key={row.label} className={`flex items-start gap-3 p-2.5 rounded-lg border ${
-                  row.ok ? 'bg-muted/20 border-border/30' : 'bg-muted/5 border-border/10 opacity-40'
-                }`}>
-                  <span className="text-base mt-0.5">{row.ok ? '✓' : '✗'}</span>
-                  <div className="min-w-0">
-                    <p className={`text-[10px] font-black ${row.ok ? 'text-foreground' : 'text-muted-foreground'}`}>
-                      {row.label}
-                    </p>
-                    <p className="text-[9px] text-muted-foreground font-mono">{row.sub}</p>
-                    {row.warn && (
-                      <p className="text-[9px] text-amber-400 mt-1 leading-relaxed">⚠ {row.warn}</p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Node routing matrix */}
-          <div>
-            <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-3">Node Routing Matrix</p>
-            <div className="space-y-2">
-              {r.residency.map(res => {
-                const vramPct = res.node.vram_total > 0
-                  ? (res.node.vram_used / res.node.vram_total) * 100 : 0;
-                const thermalColors = {
-                  hot:  { bar: 'bg-emerald-400', text: 'text-emerald-400', bg: 'border-emerald-500/20 bg-emerald-500/5' },
-                  warm: { bar: 'bg-amber-400',   text: 'text-amber-400',   bg: 'border-amber-500/20 bg-amber-500/5'   },
-                  cold: { bar: 'bg-muted',        text: 'text-muted-foreground', bg: 'border-border/20 bg-muted/5' },
-                };
-                const c = thermalColors[res.thermal];
-
-                return (
-                  <div key={res.node.id} className={`p-3 rounded-lg border ${c.bg}`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-black ${c.text}`}>
-                          {res.thermal === 'hot' ? '⚡' : res.thermal === 'warm' ? '💾' : '○'}
-                        </span>
-                        <span className="text-xs font-black">{res.node.id}</span>
-                        <Badge variant="outline" className="text-[8px] font-bold h-4">{res.node.tier}</Badge>
-                      </div>
-                      <span className={`text-[9px] font-black uppercase ${c.text}`}>
-                        {res.thermal === 'hot' ? 'In VRAM' : res.thermal === 'warm' ? `On Disk${res.size ? ` · ${formatBytes(res.size)}` : ''}` : 'Not Present'}
-                      </span>
-                    </div>
-                    {res.node.has_gpu && (
-                      <div>
-                        <div className="flex justify-between text-[8px] text-muted-foreground font-bold mb-1">
-                          <span>VRAM</span>
-                          <span>{formatBytes(res.node.vram_used)} / {formatBytes(res.node.vram_total)}</span>
-                        </div>
-                        <Progress value={vramPct} className="h-1" />
-                      </div>
-                    )}
-                    {res.thermal !== 'cold' && (
-                      <div className="flex gap-1 mt-2">
-                        {res.thermal === 'hot' && (
-                          <Button
-                            size="sm" variant="ghost"
-                            className="h-6 text-[9px] font-black uppercase text-amber-400 hover:bg-amber-500/10 px-2"
-                            onClick={() => onAction(
-                              () => sdk.unloadModel(modelName, res.node.id),
-                              `Evicted ${modelName} from ${res.node.id}`
-                            )}
-                          >
-                            Evict from VRAM
-                          </Button>
-                        )}
-                        <Button
-                          size="sm" variant="ghost"
-                          className="h-6 text-[9px] font-black uppercase text-destructive hover:bg-destructive/10 px-2"
-                          onClick={() => onAction(
-                            () => sdk.deleteModel(modelName),
-                            `Deleted ${modelName} from fleet`
-                          )}
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Footer actions */}
-        <div className="p-4 border-t border-border/50 flex gap-2">
-          <Button
-            className="flex-1 h-9 text-xs font-black uppercase tracking-widest shadow-lg shadow-primary/20"
-            onClick={() => onAction(() => sdk.pullModel(modelName), `Syncing ${modelName} to fleet`)}
-          >
-            <CloudDownload size={13} className="mr-2" /> Sync to Fleet
-          </Button>
-          <Button
-            variant="destructive" size="icon" className="h-9 w-9"
-            onClick={() => { onClose(); onAction(() => sdk.deleteModel(modelName), `Deleted ${modelName}`); }}
-          >
-            <Trash2 size={13} />
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Registry Page ───────────────────────────────────────────────────────
 export const RegistryPage: React.FC = () => {
-  const { status, refresh: onRefresh } = useCluster();
-  if (!status) return null;
+  const { status, refresh } = useCluster();
+  const [search, setSearch] = useState('');
+  const [requests, setRequests] = useState<ModelRequest[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('browser');
 
-  const [search, setSearch]           = useState('');
-  const [pullOpen, setPullOpen]       = useState(false);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [sortBy, setSortBy]           = useState<'name' | 'hot' | 'nodes'>('hot');
-
-  const handleAction = async (action: () => Promise<any>, msg: string) => {
-    const tid = toast.loading('Orchestrating...');
+  const loadRequests = async () => {
     try {
-      const res = await action();
-      if (res?.job_id) {
-        toast.info('Job started', { id: tid });
-        await sdk.waitForJob(res.job_id);
-        toast.success(msg, { id: tid });
-      } else {
-        toast.success(msg, { id: tid });
-      }
-      onRefresh();
-    } catch (err: any) {
-      toast.error(err.message || 'Action failed', { id: tid });
+      const data = await sdk.getModelRequests('pending');
+      setRequests(data);
+    } catch (err) {
+      console.error('Failed to load requests:', err);
     }
   };
 
-  const allNodes = Object.values(status.nodes) as NodeStatus[];
+  useEffect(() => {
+    loadRequests();
+    const interval = setInterval(loadRequests, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const modelData = useMemo(() => {
-    return (status.all_models || []).map(name => ({
-      name,
-      r: computeRoutability(name, status),
-      caps: inferCapabilities(name),
-    }));
-  }, [status]);
+  const handleApprove = async (id: string) => {
+    try {
+      await sdk.approveModelRequest(id);
+      toast.success('Request approved and triggered');
+      loadRequests();
+      refresh();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to approve');
+    }
+  };
 
-  const sorted = useMemo(() => [...modelData].sort((a, b) => {
-    if (sortBy === 'hot')   return b.r.hotCount - a.r.hotCount || b.r.warmCount - a.r.warmCount;
-    if (sortBy === 'nodes') return (b.r.hotCount + b.r.warmCount) - (a.r.hotCount + a.r.warmCount);
-    return a.name.localeCompare(b.name);
-  }), [modelData, sortBy]);
+  const handleDecline = async (id: string) => {
+    try {
+      await sdk.declineModelRequest(id);
+      toast.success('Request declined');
+      loadRequests();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to decline');
+    }
+  };
 
-  const filtered = sorted.filter(m => m.name.toLowerCase().includes(search.toLowerCase()));
+  const handlePull = async (model: string, targetNode?: string) => {
+    try {
+      const res = await sdk.pullModel(model, targetNode === 'cluster' ? undefined : targetNode);
+      if (res.status === 'approval_pending') {
+        toast.info('Request submitted for manual approval');
+        loadRequests();
+      } else {
+        toast.success(`Pull triggered for ${model}`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to trigger pull');
+    }
+  };
 
-  // Cluster-wide summary
-  const hotModels  = modelData.filter(m => m.r.hotCount > 0).length;
-  const warmModels = modelData.filter(m => m.r.hotCount === 0 && m.r.warmCount > 0).length;
-  const coldModels = modelData.filter(m => m.r.hotCount + m.r.warmCount === 0).length;
+  const filteredModels = POPULAR_MODELS.filter(m => 
+    m.name.toLowerCase().includes(search.toLowerCase()) ||
+    m.desc.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
-    <TooltipProvider>
-      {selectedModel && (
-        <ModelDetailPanel
-          modelName={selectedModel}
-          onClose={() => setSelectedModel(null)}
-          onAction={handleAction}
-        />
-      )}
+    <div className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-black uppercase tracking-widest">Model Management</h2>
+          <p className="text-[11px] text-muted-foreground mt-0.5">Browse the fleet registry and manage manual approvals</p>
+        </div>
+        {requests.length > 0 && (
+          <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 font-black animate-pulse">
+            {requests.length} Pending Actions
+          </Badge>
+        )}
+      </div>
 
-      <div className="p-6 space-y-4">
-        {/* Header */}
+      <Tabs defaultValue="browser" onValueChange={setActiveTab} className="space-y-4">
         <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-black uppercase tracking-widest">Model Registry</h2>
-            <div className="flex items-center gap-3 mt-1">
-              <span className="text-[10px] text-emerald-400 font-black">{hotModels} hot</span>
-              <span className="text-muted-foreground/30">·</span>
-              <span className="text-[10px] text-amber-400 font-black">{warmModels} warm</span>
-              <span className="text-muted-foreground/30">·</span>
-              <span className="text-[10px] text-muted-foreground font-black">{coldModels} unavailable</span>
-              <span className="text-muted-foreground/30">·</span>
-              <span className="text-[10px] text-muted-foreground font-bold">{allNodes.length} nodes</span>
-            </div>
+          <div className="flex bg-muted/30 p-1 rounded-lg border border-border/50">
+             <button 
+              onClick={() => setActiveTab('browser')}
+              className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-md transition-all ${activeTab === 'browser' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+             >
+               Model Browser
+             </button>
+             <button 
+              onClick={() => setActiveTab('requests')}
+              className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-md transition-all flex items-center gap-2 ${activeTab === 'requests' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+             >
+               Pull Requests
+               {requests.length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
+             </button>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Sort */}
-            <div className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-muted-foreground">
-              {(['hot', 'nodes', 'name'] as const).map(s => (
-                <button
-                  key={s}
-                  onClick={() => setSortBy(s)}
-                  className={`px-2 py-1 rounded transition-colors ${sortBy === s ? 'bg-primary/20 text-primary' : 'hover:text-foreground'}`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={12} />
+
+          {activeTab === 'browser' && (
+            <div className="relative w-72">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
               <Input
-                placeholder="Filter models..."
-                className="pl-9 h-8 w-52 bg-muted/50 border-border/50 text-xs font-bold"
+                placeholder="Search models..."
+                className="pl-9 h-9 bg-card border-border/50 text-xs"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
               />
             </div>
-            <Dialog open={pullOpen} onOpenChange={setPullOpen}>
-              <Button size="sm" className="h-8 text-xs font-black uppercase tracking-widest gap-2" onClick={() => setPullOpen(true)}>
-                <CloudDownload size={13} /> Pull to Fleet
-              </Button>
-              <DialogContent className="bg-card border-border/50">
-                <DialogHeader>
-                  <DialogTitle className="font-black uppercase tracking-tight">Fleet Pull</DialogTitle>
-                  <DialogDescription className="text-xs font-bold text-muted-foreground">
-                    Broadcast a model pull to all compute nodes
-                  </DialogDescription>
-                </DialogHeader>
-                <form onSubmit={e => {
-                  e.preventDefault();
-                  const tag = new FormData(e.currentTarget).get('tag') as string;
-                  setPullOpen(false);
-                  handleAction(() => sdk.pullModel(tag), `Syncing ${tag} to fleet`);
-                }} className="space-y-4 pt-2">
-                  <Input name="tag" placeholder="e.g. llama3.2:8b" className="font-bold bg-muted/50 border-border/50 font-mono" required autoFocus />
-                  <DialogFooter>
-                    <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest">
-                      Orchestrate Global Sync
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
-          </div>
+          )}
         </div>
 
-        {/* Table */}
-        <Card className="bg-card border-border/50 overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-border/50 hover:bg-transparent">
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground w-[280px]">Model</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Capabilities</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">SDK Compat</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Node Coverage</TableHead>
-                <TableHead className="text-right text-[9px] font-black uppercase tracking-widest text-muted-foreground">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
-                    <Box size={32} className="mx-auto mb-3 opacity-30" />
-                    <p className="text-xs font-bold uppercase tracking-widest opacity-50">No models found</p>
-                  </TableCell>
-                </TableRow>
-              )}
-              {filtered.map(({ name, r, caps }) => {
-                const compat = inferSDKCompat(caps);
-                const hint   = LATENCY_HINTS[r.latencyHint];
-                const { family, variant } = parseModelTag(name);
+        <TabsContent value="browser" className="m-0">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filteredModels.map(model => (
+              <Card key={model.name} className="bg-card border-border/50 hover:border-primary/30 transition-colors group">
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-lg bg-muted/50 group-hover:bg-primary/10 transition-colors">
+                        <Box size={18} className="group-hover:text-primary transition-colors" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-black tracking-tight">{model.name}</p>
+                        <p className="text-[10px] text-muted-foreground font-bold">{model.size}</p>
+                      </div>
+                    </div>
+                    <div>
+                       <Select onValueChange={(val) => handlePull(model.name, val)}>
+                          <SelectTrigger className="h-8 w-32 text-[10px] font-black uppercase bg-muted/50 border-border/50">
+                            <div className="flex items-center gap-2">
+                              <Download size={12} />
+                              <span className="truncate text-left">Deploy...</span>
+                            </div>
+                          </SelectTrigger>
+                          <SelectContent>
+                             <SelectItem value="cluster" className="text-[10px] font-bold">全 Cluster-wide</SelectItem>
+                             <Separator className="my-1" />
+                             {Object.values(status?.nodes || {}).map(n => (
+                               <SelectItem key={n.id} value={n.id} className="text-[10px] font-bold">
+                                 {n.has_gpu ? '⚡' : '●'} {n.id}
+                               </SelectItem>
+                             ))}
+                          </SelectContent>
+                       </Select>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2 mb-4">
+                    {model.desc}
+                  </p>
+                  <div className="flex items-center justify-between pt-4 border-t border-border/30">
+                    <Badge variant="outline" className="text-[8px] font-black uppercase tracking-tighter opacity-60">
+                      {model.family}
+                    </Badge>
+                    <a 
+                      href={`https://ollama.com/library/${model.name.split(':')[0]}`} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="text-[9px] font-bold text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
+                    >
+                      View on Ollama <ExternalLink size={10} />
+                    </a>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </TabsContent>
 
-                return (
-                  <TableRow
-                    key={name}
-                    className="group border-border/30 hover:bg-muted/10 transition-colors cursor-pointer"
-                    onClick={() => setSelectedModel(name)}
-                  >
-                    {/* Model name */}
-                    <TableCell className="py-3">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                          r.hotCount  > 0 ? 'bg-emerald-400' :
-                          r.warmCount > 0 ? 'bg-amber-400' : 'bg-muted-foreground/30'
-                        }`} />
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-black font-mono">{family}</span>
-                            <span className="text-[9px] text-muted-foreground font-mono">:{variant}</span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className={`text-[9px] font-black ${hint.color}`}>{hint.label}</span>
-                            {r.syncing && (
-                              <Badge className="text-[8px] h-4 px-1 font-black bg-primary/10 text-primary border-primary/20 animate-pulse">
-                                <RefreshCw size={7} className="animate-spin mr-1" /> Syncing
-                              </Badge>
-                            )}
-                          </div>
+        <TabsContent value="requests" className="m-0">
+          {requests.length === 0 ? (
+            <div className="h-[400px] flex flex-col items-center justify-center bg-card border border-dashed border-border rounded-xl opacity-50">
+               <CheckCircle2 size={40} className="mb-4 text-emerald-500" />
+               <p className="text-sm font-black uppercase tracking-widest">No Pending Actions</p>
+               <p className="text-[10px] font-bold text-muted-foreground mt-1">All cluster model operations are up to date</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {requests.map(req => (
+                <Card key={req.id} className="bg-card border-border/50">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-4">
+                      <div className={`p-2.5 rounded-xl ${
+                        req.type === 'pull' ? 'bg-blue-500/15 text-blue-400' :
+                        req.type === 'delete' ? 'bg-red-500/15 text-red-400' :
+                        'bg-amber-500/15 text-amber-400'
+                      }`}>
+                        {req.type === 'pull' ? <Download size={20} /> : 
+                         req.type === 'delete' ? <Trash2 size={20} /> : <Box size={20} />}
+                      </div>
+                      
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                            Manual {req.type} Approval
+                          </span>
+                          <Badge variant="outline" className="text-[8px] font-black h-4 px-1.5 bg-amber-500/10 text-amber-500 border-amber-500/20">
+                            PENDING
+                          </Badge>
                         </div>
+                        <h3 className="text-sm font-black font-mono truncate">{req.model}</h3>
+                        <p className="text-[10px] text-muted-foreground flex items-center gap-1.5 mt-1">
+                          <Clock size={10} /> Requested {new Date(req.requested_at).toLocaleString()} 
+                          · <Database size={10} /> {req.node_id ? `Target: ${req.node_id}` : 'Cluster-wide'}
+                        </p>
                       </div>
-                    </TableCell>
 
-                    {/* Capabilities */}
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {caps.map(c => {
-                          const meta = CAPABILITY_LABELS[c];
-                          return (
-                            <Badge key={c} className={`text-[8px] font-black h-4 px-1.5 border ${meta.color}`}>
-                              {meta.icon} {meta.label}
-                            </Badge>
-                          );
-                        })}
+                      <div className="flex items-center gap-2 shrink-0">
+                         <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="h-9 px-4 text-[10px] font-black uppercase tracking-widest hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30"
+                          onClick={() => handleDecline(req.id)}
+                         >
+                           <XCircle size={14} className="mr-2" /> Decline
+                         </Button>
+                         <Button 
+                          size="sm" 
+                          className="h-9 px-4 text-[10px] font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20"
+                          onClick={() => handleApprove(req.id)}
+                         >
+                           <CheckCircle2 size={14} className="mr-2" /> Approve Action
+                         </Button>
                       </div>
-                    </TableCell>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
 
-                    {/* SDK compat */}
-                    <TableCell>
-                      <div className="flex items-center gap-1.5 text-[9px] font-black">
-                        <Tooltip>
-                          <TooltipTrigger>
-                            <span className={compat.ollamaNative ? 'text-emerald-400' : 'text-muted-foreground/30'}>
-                              Ollama
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent className="text-[10px] font-bold">
-                            {compat.ollamaNative ? '✓ Ollama SDK supported' : '✗ Not supported'}
-                          </TooltipContent>
-                        </Tooltip>
-                        <span className="text-muted-foreground/30">·</span>
-                        <Tooltip>
-                          <TooltipTrigger>
-                            <span className={compat.openAIChat ? 'text-emerald-400' : compat.openAIEmbed ? 'text-amber-400' : 'text-muted-foreground/30'}>
-                              OpenAI
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent className="text-[10px] font-bold max-w-[200px]">
-                            {compat.openAIChat
-                              ? `✓ /v1/chat/completions${compat.openAIWarning ? '\n⚠ ' + compat.openAIWarning : ''}`
-                              : compat.openAIEmbed
-                                ? '✓ /v1/embeddings only'
-                                : '✗ Not supported'}
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </TableCell>
-
-                    {/* Node coverage */}
-                    <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        {r.residency.map(res => {
-                          const dot = res.thermal === 'hot'  ? 'bg-emerald-400' :
-                                      res.thermal === 'warm' ? 'bg-amber-400' :
-                                                               'bg-muted-foreground/20';
-                          return (
-                            <Tooltip key={res.node.id}>
-                              <TooltipTrigger>
-                                <div className={`w-2 h-2 rounded-full ${dot}`} />
-                              </TooltipTrigger>
-                              <TooltipContent className="text-[10px] font-bold">
-                                {res.node.id} — {res.thermal === 'hot' ? '⚡ Hot' : res.thermal === 'warm' ? '💾 Warm' : '○ Cold'}
-                              </TooltipContent>
-                            </Tooltip>
-                          );
-                        })}
-                        <span className="text-[9px] font-bold text-muted-foreground ml-1">
-                          {r.hotCount + r.warmCount}/{r.totalNodes}
-                        </span>
-                      </div>
-                    </TableCell>
-
-                    {/* Actions */}
-                    <TableCell className="text-right" onClick={e => e.stopPropagation()}>
-                      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              disabled={r.syncing}
-                              variant="ghost" size="icon"
-                              className="h-7 w-7 text-amber-400 hover:bg-amber-500/10"
-                              onClick={() => handleAction(() => sdk.unloadModel(name), `Evicted ${name}`)}
-                            >
-                              <XCircle size={13} />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent className="text-[10px] font-bold">Evict from VRAM</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              disabled={r.syncing}
-                              variant="ghost" size="icon"
-                              className="h-7 w-7 text-destructive hover:bg-destructive/10"
-                              onClick={() => handleAction(() => sdk.deleteModel(name), `Deleted ${name}`)}
-                            >
-                              <Trash2 size={13} />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent className="text-[10px] font-bold">Delete from Fleet</TooltipContent>
-                        </Tooltip>
-                        <Button
-                          variant="ghost" size="icon"
-                          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                          onClick={() => setSelectedModel(name)}
-                        >
-                          <ChevronRight size={13} />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </Card>
-      </div>
-    </TooltipProvider>
+          {/* Policy Note */}
+          <div className="mt-8 p-6 bg-amber-500/5 border border-amber-500/20 rounded-xl flex gap-4">
+             <ShieldAlert className="text-amber-500 shrink-0" size={24} />
+             <div>
+                <p className="text-xs font-black uppercase tracking-widest text-amber-500">Security Policy Active</p>
+                <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                  Model approvals are required to prevent resource exhaustion and ensure cluster stability. 
+                  Large models (e.g. 70B+) can significantly impact node performance and storage. 
+                  Approving a pull will trigger the download only on the requested nodes.
+                </p>
+             </div>
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 };

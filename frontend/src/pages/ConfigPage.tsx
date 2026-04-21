@@ -319,6 +319,15 @@ export const ConfigPage: React.FC = () => {
             <FieldRow label="Poll Interval (ms)" description="How frequently agents report telemetry to the balancer">
               <NumberField value={config.poll_interval_ms} onChange={v => set('poll_interval_ms', v)} min={50} />
             </FieldRow>
+            <Separator className="my-2 bg-border/30" />
+            <FieldRow label="Enable Model Approval" description="Require manual approval for pulling or deleting models">
+              <div className="flex justify-end">
+                <Switch
+                  checked={config.enable_model_approval}
+                  onCheckedChange={v => set('enable_model_approval', v)}
+                />
+              </div>
+            </FieldRow>
           </AccordionContent>
         </AccordionItem>
           </>
