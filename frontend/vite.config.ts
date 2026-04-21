@@ -14,11 +14,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: 'https://inference.internal.kiliansen.de/',
         changeOrigin: true,
       },
       '/v1': {
-        target: 'http://localhost:8080',
+        target: 'https://inference.internal.kiliansen.de/',
         changeOrigin: true,
       }
     }

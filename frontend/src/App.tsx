@@ -1,165 +1,231 @@
-import { useState, useEffect } from 'react';
-import sdk from './api';
-import type { ClusterStatus } from './api';
-import { RefreshCw, Zap, Network, Settings, Activity } from 'lucide-react';
+import { NavLink, Outlet } from 'react-router';
+import { useCluster } from './ClusterContext';
+import {
+  LayoutDashboard, Server, Database, Terminal, ScrollText,
+  Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare,
+} from 'lucide-react';
 import { Toaster } from 'sonner';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useLocation } from 'react-router';
 
-// Custom Components
-import { Topology } from './components/dashboard/Topology';
-import { FabricHealth } from './components/dashboard/FabricHealth';
-import { DistributedRegistry } from './components/dashboard/DistributedRegistry';
-import { InfrastructureFleet } from './components/dashboard/InfrastructureFleet';
-import { InferencePlayground } from './components/dashboard/InferencePlayground';
-import { LogStream } from './components/dashboard/LogStream';
-import { SettingsModal } from './SettingsModal';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import type { ClusterStatus } from './api';
 
-// Shadcn UI Components
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+const navItems = [
+  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/fleet', label: 'Fleet', icon: Server },
+  { to: '/registry', label: 'Registry', icon: Database },
+  { to: '/playground', label: 'Playground', icon: Terminal },
+  { to: '/chat', label: 'Chat', icon: MessageSquare },
+  { to: '/logs', label: 'Logs', icon: ScrollText },
+  { to: '/config', label: 'Configuration', icon: Settings },
+];
+
+function formatUptime(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function getOfflineCount(status: ClusterStatus) {
+  return Object.values(status.nodes).filter((n: any) => n.state === 2).length;
+}
 
 const App = () => {
-  const [status, setStatus] = useState<ClusterStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const { status, error, isLoading, refresh } = useCluster();
+  const location = useLocation();
 
-  const fetchStatus = async () => {
-    try {
-      const data = await sdk.getStatus();
-      setStatus(data);
-      setError(null);
-    } catch (err: any) {
-      console.error('Connection failure:', err);
-      setError(err.message);
-    }
-  };
+  const pageName = navItems.find(n =>
+    n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)
+  )?.label ?? 'Dashboard';
 
-  useEffect(() => {
-    fetchStatus().then();
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  if (!status) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
+        <Toaster position="top-right" theme="dark" richColors />
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+            <Zap size={20} className="text-primary animate-pulse" />
+          </div>
+          <div>
+            <p className="text-sm font-black uppercase tracking-widest">FlakyOllama</p>
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">Orchestrator Console</p>
+          </div>
+        </div>
+        {error ? (
+          <div className="flex flex-col items-center gap-3">
+            <div className="flex items-center gap-2 text-destructive text-xs font-bold">
+              <AlertCircle size={14} /> {error}
+            </div>
+            <Button variant="outline" size="sm" className="text-xs font-black uppercase" onClick={refresh}>
+              Retry Connection
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-muted-foreground text-[10px] font-black uppercase tracking-widest">
+            <RefreshCw size={12} className="animate-spin" /> Syncing compute fabric...
+          </div>
+        )}
+      </div>
+    );
+  }
 
-  if (!status) return (
-    <div className="h-screen flex flex-col items-center justify-center gap-4 bg-background">
-      <RefreshCw className="animate-spin text-primary" size={32} />
-      <span className="font-black text-[10px] uppercase tracking-[0.4em] text-muted-foreground">
-        {error ? `Fabric Offline: ${error}` : 'Syncing Compute Fabric'}
-      </span>
-      {error && (
-        <Button variant="outline" size="sm" onClick={fetchStatus} className="mt-4 font-black uppercase text-[10px] tracking-widest">
-          Retry Handshake
-        </Button>
-      )}
-    </div>
-  );
+  const nodes = Object.values(status.nodes) as any[];
+  const healthyCount = nodes.filter(n => n.state === 0 && !n.draining).length;
+  const degradedCount = nodes.filter(n => n.state === 1).length;
+  const offlineCount = nodes.filter(n => n.state === 2).length;
+  const clusterHealthColor = offlineCount > 0 ? 'text-red-400' : degradedCount > 0 ? 'text-amber-400' : 'text-emerald-400';
+  const clusterHealthLabel = offlineCount > 0 ? 'Degraded' : degradedCount > 0 ? 'Warning' : 'Healthy';
 
   return (
-    <div className="min-h-screen bg-slate-50/30 flex flex-col font-sans selection:bg-primary/10 text-slate-900">
-      <Toaster position="top-center" richColors closeButton />
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-      
-      <header className="border-b bg-background/80 backdrop-blur-md px-8 h-14 flex items-center justify-between shrink-0 sticky top-0 z-50">
-        <div className="flex items-center gap-4">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Zap className="text-primary-foreground" size={18} fill="currentColor" fillOpacity={0.2} />
+    <TooltipProvider>
+      <div className="flex h-screen bg-background text-foreground overflow-hidden">
+        <Toaster position="top-right" theme="dark" richColors closeButton />
+
+        {/* Sidebar */}
+        <aside className="w-56 shrink-0 flex flex-col bg-sidebar border-r border-sidebar-border h-full">
+          {/* Logo */}
+          <div className="px-4 py-4 border-b border-sidebar-border">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
+                <Zap size={16} className="text-primary" fill="currentColor" fillOpacity={0.3} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-black uppercase tracking-tight leading-none">FlakyOllama</p>
+                <p className="text-[9px] text-muted-foreground/60 font-bold uppercase tracking-widest mt-0.5">Console v1</p>
+              </div>
+            </div>
           </div>
-          <h1 className="text-sm font-black tracking-tighter leading-none uppercase">
-            FlakyOllama <span className="text-primary opacity-50">/</span> Orchestrator v1
-          </h1>
+
+          {/* Cluster vitals */}
+          <div className="px-4 py-3 border-b border-sidebar-border">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Cluster</span>
+              <span className={`text-[9px] font-black uppercase ${clusterHealthColor}`}>{clusterHealthLabel}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-1 text-center">
+              <div className="bg-emerald-500/10 rounded-md py-1.5">
+                <p className="text-xs font-black text-emerald-400">{healthyCount}</p>
+                <p className="text-[8px] text-emerald-500/60 font-bold">OK</p>
+              </div>
+              <div className={`${degradedCount > 0 ? 'bg-amber-500/10' : 'bg-muted/30'} rounded-md py-1.5`}>
+                <p className={`text-xs font-black ${degradedCount > 0 ? 'text-amber-400' : 'text-muted-foreground/30'}`}>{degradedCount}</p>
+                <p className="text-[8px] text-muted-foreground/40 font-bold">WARN</p>
+              </div>
+              <div className={`${offlineCount > 0 ? 'bg-red-500/10' : 'bg-muted/30'} rounded-md py-1.5`}>
+                <p className={`text-xs font-black ${offlineCount > 0 ? 'text-red-400' : 'text-muted-foreground/30'}`}>{offlineCount}</p>
+                <p className="text-[8px] text-muted-foreground/40 font-bold">DOWN</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Navigation */}
+          <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
+            {navItems.map(item => {
+              const offlineN = item.to === '/fleet' ? getOfflineCount(status) : 0;
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  className={({ isActive }) => `
+                    w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all duration-150 group
+                    ${isActive
+                      ? 'bg-sidebar-accent text-sidebar-accent-foreground font-black'
+                      : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground font-bold'
+                    }
+                  `}
+                >
+                  {({ isActive }) => (
+                    <>
+                      <item.icon size={15} className={isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'} />
+                      <span className="text-xs uppercase tracking-widest flex-1">{item.label}</span>
+                      {offlineN > 0 && (
+                        <Badge className="text-[8px] font-black h-4 px-1.5 bg-destructive/20 text-destructive border-destructive/30 min-w-[1rem] justify-center">
+                          {offlineN}
+                        </Badge>
+                      )}
+                      {isActive && <ChevronRight size={12} className="text-primary shrink-0" />}
+                    </>
+                  )}
+                </NavLink>
+              );
+            })}
+          </nav>
+
+          {/* Stats footer */}
+          <div className="px-4 py-3 border-t border-sidebar-border space-y-1.5">
+            <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
+              <span>Uptime</span><span className="text-foreground">{formatUptime(status.uptime_seconds)}</span>
+            </div>
+            <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
+              <span>Queue</span>
+              <span className={status.queue_depth > 0 ? 'text-amber-400 font-black' : 'text-foreground'}>{status.queue_depth}</span>
+            </div>
+            <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
+              <span>Active</span><span className="text-foreground">{status.active_workloads}</span>
+            </div>
+          </div>
+        </aside>
+
+        {/* Main content */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          {/* Top bar */}
+          <header className="h-[57px] border-b border-border/50 bg-background/80 backdrop-blur-sm flex items-center justify-between px-6 shrink-0 z-10">
+            <div className="flex items-center gap-3">
+              <h1 className="text-sm font-black uppercase tracking-widest">{pageName}</h1>
+              {error && (
+                <Badge className="text-[9px] font-black bg-destructive/15 text-destructive border-destructive/30 gap-1">
+                  <AlertCircle size={9} /> {error}
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-4 text-[9px] font-black uppercase text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {status.active_workloads} active
+                </span>
+                <Separator orientation="vertical" className="h-4" />
+                <span>Avg CPU {status.avg_cpu_usage.toFixed(0)}%</span>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost" size="icon"
+                    className="h-8 w-8 text-muted-foreground"
+                    onClick={refresh}
+                    disabled={isLoading}
+                  >
+                    <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="text-[10px] font-bold">Refresh cluster state</TooltipContent>
+              </Tooltip>
+            </div>
+          </header>
+
+          {/* Routed page */}
+          <main className="flex-1 overflow-auto">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={location.pathname}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.15, ease: 'easeInOut' }}
+                className="h-full"
+              >
+                <Outlet />
+              </motion.div>
+            </AnimatePresence>
+          </main>
         </div>
-        
-        <div className="flex items-center gap-6 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-          <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            {status.active_workloads} ACTIVE TASKS
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-            {Math.floor(status.uptime_seconds / 3600)}H UPTIME
-          </div>
-          <Separator orientation="vertical" className="h-6" />
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsSettingsOpen(true)}>
-              <Settings size={14} />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={fetchStatus}>
-              <RefreshCw size={14} />
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="flex-1 max-w-[1600px] w-full mx-auto p-8 space-y-8">
-        
-        {/* Top Section: Topology and KPIs */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          <Card className="lg:col-span-3 border-none shadow-sm bg-background">
-            <CardHeader className="py-4 border-b">
-              <CardTitle className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-                <Network size={16} className="text-primary" /> Routing Topology
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6">
-              <Topology status={status} />
-            </CardContent>
-          </Card>
-
-          <FabricHealth status={status} />
-        </div>
-
-        {/* Middle Section: Registry and Infrastructure */}
-        <DistributedRegistry status={status} onRefresh={fetchStatus} />
-        
-        <InfrastructureFleet status={status} onRefresh={fetchStatus} />
-
-        {/* Bottom Section: Playground and Details */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2">
-            <InferencePlayground status={status} />
-          </div>
-
-          <div className="space-y-8 flex flex-col">
-            <Card className="border-none shadow-sm bg-slate-900 text-white flex-1 overflow-hidden">
-              <CardHeader className="py-4 border-b border-white/5 bg-white/5 flex flex-row items-center justify-between">
-                <CardTitle className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-2">
-                  <Settings size={14} className="text-primary" /> Orchestration Details
-                </CardTitle>
-                <div className="flex items-center gap-2 text-[8px] font-black text-slate-500 uppercase tracking-tighter">
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                  SDK Active
-                </div>
-              </CardHeader>
-              <CardContent className="p-6 space-y-6">
-                <div className="space-y-4">
-                  <div className="flex items-start gap-4">
-                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center flex-shrink-0">
-                      <Zap className="w-4 h-4 text-primary" />
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-[10px] font-black uppercase tracking-tight leading-none text-slate-200">Actor-Based State</p>
-                      <p className="text-[9px] font-medium text-white/40 leading-relaxed italic">The backend uses a single-threaded actor model for 100% thread-safe cluster state management.</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-4">
-                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center flex-shrink-0">
-                      <Activity className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-[10px] font-black uppercase tracking-tight leading-none text-slate-200">Async Job Queue</p>
-                      <p className="text-[9px] font-medium text-white/40 leading-relaxed italic">Long-running operations like model pulls are executed asynchronously with progress tracking via the SDK.</p>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-
-        {/* Logs */}
-        <LogStream />
-      </main>
-    </div>
+      </div>
+    </TooltipProvider>
   );
 };
 
