@@ -1,5 +1,5 @@
-const API_BASE_URL = ''; // Use relative paths for the proxy
-const BALANCER_TOKEN = import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
+const API_BASE_URL = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || ''; 
+const BALANCER_TOKEN = localStorage.getItem('BALANCER_TOKEN') || import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
 
 export interface ModelInfo {
   name: string;
@@ -196,7 +196,13 @@ class FlakyOllamaSDK {
 
   // Logs
   streamLogs(onMessage: (msg: string) => void): () => void {
-    const eventSource = new EventSource(`${API_BASE_URL}/api/v1/logs`);
+    let logUrl = `${API_BASE_URL}/api/v1/logs`;
+    if (!logUrl.startsWith('http')) {
+      logUrl = new URL(logUrl, window.location.origin).toString();
+    }
+    const url = new URL(logUrl);
+    url.searchParams.set('token', BALANCER_TOKEN);
+    const eventSource = new EventSource(url.toString());
     eventSource.onmessage = (event) => {
       onMessage(event.data);
     };

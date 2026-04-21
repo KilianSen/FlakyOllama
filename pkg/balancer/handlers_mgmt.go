@@ -3,6 +3,7 @@ package balancer
 import (
 	"FlakyOllama/pkg/balancer/jobs"
 	"FlakyOllama/pkg/balancer/state"
+	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
@@ -11,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -454,4 +456,28 @@ func (b *Balancer) HandleV1LogCollect(w http.ResponseWriter, r *http.Request) {
 	default:
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (b *Balancer) HandleV1ConfigGet(w http.ResponseWriter, r *http.Request) {
+	b.jsonResponse(w, http.StatusOK, b.Config)
+}
+
+func (b *Balancer) HandleV1ConfigUpdate(w http.ResponseWriter, r *http.Request) {
+	var newCfg config.Config
+	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid config: "+err.Error())
+		return
+	}
+
+	// Update the live config
+	*b.Config = newCfg
+
+	// Optionally save to disk if CONFIG_PATH is set
+	if path := os.Getenv("CONFIG_PATH"); path != "" {
+		if err := b.Config.SaveConfig(path); err != nil {
+			logging.Global.Errorf("Failed to save config to %s: %v", path, err)
+		}
+	}
+
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "config updated"})
 }

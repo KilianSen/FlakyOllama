@@ -42,7 +42,9 @@ const App = () => {
     n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)
   )?.label ?? 'Dashboard';
 
-  if (!status) {
+  const isConfigPage = location.pathname === '/config';
+
+  if (!status && !isConfigPage) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
         <Toaster position="top-right" theme="dark" richColors />
@@ -60,9 +62,16 @@ const App = () => {
             <div className="flex items-center gap-2 text-destructive text-xs font-bold">
               <AlertCircle size={14} /> {error}
             </div>
-            <Button variant="outline" size="sm" className="text-xs font-black uppercase" onClick={refresh}>
-              Retry Connection
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" className="text-xs font-black uppercase" onClick={refresh}>
+                Retry Connection
+              </Button>
+              <NavLink to="/config">
+                <Button variant="secondary" size="sm" className="text-xs font-black uppercase">
+                  Fix Connection
+                </Button>
+              </NavLink>
+            </div>
           </div>
         ) : (
           <div className="flex items-center gap-2 text-muted-foreground text-[10px] font-black uppercase tracking-widest">
@@ -73,12 +82,12 @@ const App = () => {
     );
   }
 
-  const nodes = Object.values(status.nodes) as any[];
+  const nodes = status ? (Object.values(status.nodes) as any[]) : [];
   const healthyCount = nodes.filter(n => n.state === 0 && !n.draining).length;
   const degradedCount = nodes.filter(n => n.state === 1).length;
   const offlineCount = nodes.filter(n => n.state === 2).length;
-  const clusterHealthColor = offlineCount > 0 ? 'text-red-400' : degradedCount > 0 ? 'text-amber-400' : 'text-emerald-400';
-  const clusterHealthLabel = offlineCount > 0 ? 'Degraded' : degradedCount > 0 ? 'Warning' : 'Healthy';
+  const clusterHealthColor = !status ? 'text-muted-foreground' : offlineCount > 0 ? 'text-red-400' : degradedCount > 0 ? 'text-amber-400' : 'text-emerald-400';
+  const clusterHealthLabel = !status ? 'Disconnected' : offlineCount > 0 ? 'Degraded' : degradedCount > 0 ? 'Warning' : 'Healthy';
 
   return (
     <TooltipProvider>
@@ -107,9 +116,9 @@ const App = () => {
               <span className={`text-[9px] font-black uppercase ${clusterHealthColor}`}>{clusterHealthLabel}</span>
             </div>
             <div className="grid grid-cols-3 gap-1 text-center">
-              <div className="bg-emerald-500/10 rounded-md py-1.5">
-                <p className="text-xs font-black text-emerald-400">{healthyCount}</p>
-                <p className="text-[8px] text-emerald-500/60 font-bold">OK</p>
+              <div className={`${status ? 'bg-emerald-500/10' : 'bg-muted/10'} rounded-md py-1.5`}>
+                <p className={`text-xs font-black ${status ? 'text-emerald-400' : 'text-muted-foreground/30'}`}>{healthyCount}</p>
+                <p className="text-[8px] text-muted-foreground/40 font-bold">OK</p>
               </div>
               <div className={`${degradedCount > 0 ? 'bg-amber-500/10' : 'bg-muted/30'} rounded-md py-1.5`}>
                 <p className={`text-xs font-black ${degradedCount > 0 ? 'text-amber-400' : 'text-muted-foreground/30'}`}>{degradedCount}</p>
@@ -125,7 +134,7 @@ const App = () => {
           {/* Navigation */}
           <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
             {navItems.map(item => {
-              const offlineN = item.to === '/fleet' ? getOfflineCount(status) : 0;
+              const offlineN = (status && item.to === '/fleet') ? getOfflineCount(status) : 0;
               return (
                 <NavLink
                   key={item.to}
@@ -159,14 +168,14 @@ const App = () => {
           {/* Stats footer */}
           <div className="px-4 py-3 border-t border-sidebar-border space-y-1.5">
             <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
-              <span>Uptime</span><span className="text-foreground">{formatUptime(status.uptime_seconds)}</span>
+              <span>Uptime</span><span className="text-foreground">{status ? formatUptime(status.uptime_seconds) : '—'}</span>
             </div>
             <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
               <span>Queue</span>
-              <span className={status.queue_depth > 0 ? 'text-amber-400 font-black' : 'text-foreground'}>{status.queue_depth}</span>
+              <span className={status?.queue_depth ? 'text-amber-400 font-black' : 'text-foreground'}>{status ? status.queue_depth : '—'}</span>
             </div>
             <div className="flex justify-between text-[9px] font-bold text-muted-foreground">
-              <span>Active</span><span className="text-foreground">{status.active_workloads}</span>
+              <span>Active</span><span className="text-foreground">{status ? status.active_workloads : '—'}</span>
             </div>
           </div>
         </aside>
@@ -186,11 +195,11 @@ const App = () => {
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-4 text-[9px] font-black uppercase text-muted-foreground">
                 <span className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {status.active_workloads} active
+                  <span className={`w-1.5 h-1.5 rounded-full ${status ? 'bg-emerald-400 animate-pulse' : 'bg-muted-foreground/30'}`} />
+                  {status ? status.active_workloads : 0} active
                 </span>
                 <Separator orientation="vertical" className="h-4" />
-                <span>Avg CPU {status.avg_cpu_usage.toFixed(0)}%</span>
+                <span>Avg CPU {status ? status.avg_cpu_usage.toFixed(0) : 0}%</span>
               </div>
               <Tooltip>
                 <TooltipTrigger asChild>

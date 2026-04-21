@@ -46,9 +46,25 @@ export const LogsPage: React.FC = () => {
   useEffect(() => {
     const cleanup = sdk.streamLogs((msg: string) => {
       if (pausedRef.current) return;
+      
+      let displayMsg = msg;
+      let level: LogEntry['level'] = detectLevel(msg);
+      let timestamp = new Date();
+
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed.message) {
+          displayMsg = `[${parsed.node_id || 'unknown'}] ${parsed.message}`;
+          if (parsed.level) level = (parsed.level.toLowerCase() as LogEntry['level']) || level;
+          if (parsed.timestamp) timestamp = new Date(parsed.timestamp);
+        }
+      } catch (e) {
+        // Not JSON, use raw
+      }
+
       setLogs(prev => [
         ...prev.slice(-299),
-        { timestamp: new Date(), raw: msg, level: detectLevel(msg) }
+        { timestamp, raw: displayMsg, level }
       ]);
     });
     return cleanup;

@@ -16,19 +16,24 @@ func Middleware(token string, next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Authorization header required", http.StatusUnauthorized)
+		receivedToken := ""
+		if authHeader != "" {
+			parts := strings.Fields(authHeader)
+			if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+				receivedToken = parts[1]
+			}
+		}
+
+		if receivedToken == "" {
+			receivedToken = r.URL.Query().Get("token")
+		}
+
+		if receivedToken == "" {
+			http.Error(w, "Authorization required", http.StatusUnauthorized)
 			return
 		}
 
-		parts := strings.Fields(authHeader)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			logging.Global.Warnf("Auth failure from %s: invalid authorization header format", r.RemoteAddr)
-			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
-			return
-		}
-
-		if parts[1] != token {
+		if receivedToken != token {
 			logging.Global.Warnf("Auth failure from %s: token mismatch", r.RemoteAddr)
 			http.Error(w, "Invalid or missing token", http.StatusUnauthorized)
 			return

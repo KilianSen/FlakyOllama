@@ -63,14 +63,31 @@ function NumberField({
 export const ConfigPage: React.FC = () => {
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
+  // Connection settings (localStorage)
+  const [localUrl, setLocalUrl] = useState(localStorage.getItem('BALANCER_URL') || '');
+  const [localToken, setLocalToken] = useState(localStorage.getItem('BALANCER_TOKEN') || '');
+  const [connDirty, setConnDirty] = useState(false);
+
+  const saveConnection = () => {
+    localStorage.setItem('BALANCER_URL', localUrl);
+    localStorage.setItem('BALANCER_TOKEN', localToken);
+    setConnDirty(false);
+    toast.success('Connection settings saved. Refresh required.');
+  };
+
   const load = () => {
     setLoading(true);
+    setError(false);
     api.getConfig()
       .then(cfg => { setConfig(cfg); setDirty(false); })
-      .catch(() => toast.error('Failed to load configuration'))
+      .catch(() => {
+        toast.error('Failed to load configuration');
+        setError(true);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -102,15 +119,6 @@ export const ConfigPage: React.FC = () => {
     }
   };
 
-  if (loading || !config) {
-    return (
-      <div className="p-6 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
-      </div>
-    );
-  }
-
   return (
     <div className="p-6 space-y-6 max-w-3xl">
       <div className="flex items-center justify-between">
@@ -123,17 +131,75 @@ export const ConfigPage: React.FC = () => {
           <Button variant="outline" size="sm" className="h-8 text-xs font-bold gap-1.5" onClick={load} disabled={loading}>
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Reload
           </Button>
-          <Button size="sm" className="h-8 text-xs font-black uppercase tracking-widest gap-1.5 shadow-lg shadow-primary/20" onClick={save} disabled={saving || !dirty}>
+          <Button size="sm" className="h-8 text-xs font-black uppercase tracking-widest gap-1.5 shadow-lg shadow-primary/20" onClick={save} disabled={saving || !dirty || error}>
             {saving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
             Apply
           </Button>
         </div>
       </div>
 
-      <Accordion type="multiple" defaultValue={['hedging', 'routing', 'circuit', 'limits']} className="space-y-3">
+      <Accordion type="multiple" defaultValue={['conn', 'hedging', 'routing', 'circuit', 'limits']} className="space-y-3">
 
-        {/* Hedging */}
-        <AccordionItem value="hedging" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+        {/* Connection */}
+        <AccordionItem value="conn" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
+          <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
+            <div className="flex items-center gap-2">
+              <Shield size={14} className="text-emerald-400" />
+              Connection & Auth
+            </div>
+          </AccordionTrigger>
+          <AccordionContent className="pb-4">
+            <p className="text-[10px] text-muted-foreground mb-4 leading-relaxed">
+              Frontend connection parameters. These are stored locally in your browser. Leave empty to use defaults from environment.
+            </p>
+            <Separator className="mb-4 bg-border/50" />
+            <FieldRow label="Balancer URL" description="Base URL of the FlakyOllama Balancer (e.g. http://localhost:8080)">
+              <Input
+                value={localUrl}
+                onChange={e => { setLocalUrl(e.target.value); setConnDirty(true); }}
+                placeholder="Default (Relative)"
+                className="h-8 bg-muted/50 border-border/50 text-xs font-mono"
+              />
+            </FieldRow>
+            <FieldRow label="API Token" description="Bearer token for cluster authentication">
+              <Input
+                type="password"
+                value={localToken}
+                onChange={e => { setLocalToken(e.target.value); setConnDirty(true); }}
+                placeholder="Default from ENV"
+                className="h-8 bg-muted/50 border-border/50 text-xs font-mono"
+              />
+            </FieldRow>
+            <div className="flex justify-end mt-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-7 text-[10px] font-black uppercase"
+                disabled={!connDirty}
+                onClick={saveConnection}
+              >
+                Save Connection Settings
+              </Button>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {loading ? (
+          <div className="space-y-3 mt-3">
+            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}
+          </div>
+        ) : error ? (
+          <div className="p-12 text-center bg-card border border-dashed border-border rounded-xl">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Failed to connect to cluster</p>
+            <p className="text-[10px] text-muted-foreground/60 mt-2">Check your connection settings above and retry</p>
+            <Button variant="outline" size="sm" className="mt-4 h-8 text-xs font-bold" onClick={load}>
+              Retry Connection
+            </Button>
+          </div>
+        ) : config && (
+          <>
+            {/* Hedging */}
+            <AccordionItem value="hedging" className="bg-card border border-border/50 rounded-xl overflow-hidden px-5">
           <AccordionTrigger className="text-xs font-black uppercase tracking-widest hover:no-underline py-4 gap-3">
             <div className="flex items-center gap-2">
               <Zap size={14} className="text-primary" />
@@ -255,6 +321,8 @@ export const ConfigPage: React.FC = () => {
             </FieldRow>
           </AccordionContent>
         </AccordionItem>
+          </>
+        )}
 
       </Accordion>
     </div>

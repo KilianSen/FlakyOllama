@@ -191,6 +191,11 @@ func (b *Balancer) NewMux() *chi.Mux {
 
 		r.Get("/jobs/{id}", b.HandleV1JobStatus)
 		r.Post("/test", b.HandleV1TestInference)
+
+		r.Route("/config", func(r chi.Router) {
+			r.Get("/", b.HandleV1ConfigGet)
+			r.Post("/", b.HandleV1ConfigUpdate)
+		})
 	})
 
 	return r
