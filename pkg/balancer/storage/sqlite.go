@@ -87,7 +87,15 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			quota_limit INTEGER DEFAULT -1,
 			quota_used INTEGER DEFAULT 0,
 			credits REAL DEFAULT 0,
-			active BOOLEAN DEFAULT 1
+			active BOOLEAN DEFAULT 1,
+			user_id TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			sub TEXT UNIQUE,
+			email TEXT,
+			name TEXT,
+			is_admin BOOLEAN DEFAULT 0
 		);`,
 		`CREATE TABLE IF NOT EXISTS agent_keys (
 			key TEXT PRIMARY KEY,
@@ -300,7 +308,7 @@ func (s *SQLiteStorage) GetClientKey(key string) (models.ClientKey, error) {
 }
 
 func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
-	rows, err := s.db.Query(`SELECT key, label, quota_limit, quota_used, credits, active FROM client_keys`)
+	rows, err := s.db.Query(`SELECT key, label, quota_limit, quota_used, credits, active, user_id FROM client_keys`)
 	if err != nil {
 		return nil, err
 	}
@@ -308,12 +316,50 @@ func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
 	var keys []models.ClientKey
 	for rows.Next() {
 		var k models.ClientKey
-		if err := rows.Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active); err != nil {
+		var userID sql.NullString
+		if err := rows.Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &userID); err != nil {
 			return nil, err
+		}
+		if userID.Valid {
+			k.UserID = userID.String
 		}
 		keys = append(keys, k)
 	}
 	return keys, nil
+}
+
+// User Management
+func (s *SQLiteStorage) CreateUser(u models.User) error {
+	_, err := s.db.Exec(`INSERT INTO users (id, sub, email, name, is_admin) VALUES (?, ?, ?, ?, ?)`,
+		u.ID, u.Sub, u.Email, u.Name, u.IsAdmin)
+	return err
+}
+
+func (s *SQLiteStorage) GetUserBySub(sub string) (models.User, error) {
+	var u models.User
+	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin FROM users WHERE sub = ?`, sub).
+		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin)
+	return u, err
+}
+
+func (s *SQLiteStorage) GetUserByID(id string) (models.User, error) {
+	var u models.User
+	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin)
+	return u, err
+}
+
+func (s *SQLiteStorage) UpdateUser(u models.User) error {
+	_, err := s.db.Exec(`UPDATE users SET email = ?, name = ?, is_admin = ? WHERE id = ?`,
+		u.Email, u.Name, u.IsAdmin, u.ID)
+	return err
+}
+
+func (s *SQLiteStorage) GetClientKeyByUserID(userID string) (models.ClientKey, error) {
+	var k models.ClientKey
+	err := s.db.QueryRow(`SELECT key, label, quota_limit, quota_used, credits, active, user_id FROM client_keys WHERE user_id = ?`, userID).
+		Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &k.UserID)
+	return k, err
 }
 
 // Agent Key Management

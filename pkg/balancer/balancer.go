@@ -169,6 +169,12 @@ func (b *Balancer) NewMux() *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(b.CORS)
+	r.Use(b.SessionMiddleware)
+
+	// OIDC Auth
+	r.Get("/auth/login", b.HandleLogin)
+	r.Get("/auth/callback", b.HandleCallback)
+	r.Get("/auth/logout", b.HandleLogout)
 
 	// Base
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })

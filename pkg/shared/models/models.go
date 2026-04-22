@@ -203,6 +203,15 @@ type ClientKey struct {
 	QuotaUsed  int64   `json:"quota_used"`
 	Credits    float64 `json:"credits"` // Balance if using a credit system
 	Active     bool    `json:"active"`
+	UserID     string  `json:"user_id,omitempty"` // ID of the user owning this key
+}
+
+type User struct {
+	ID      string `json:"id"`
+	Sub     string `json:"sub"` // OIDC Subject
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+	IsAdmin bool   `json:"is_admin"`
 }
 
 type AgentKey struct {

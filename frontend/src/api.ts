@@ -389,9 +389,22 @@ class FlakyOllamaSDK {
     return this.request<Catalog>('/api/v1/catalog');
   }
 
-  async getMe(token: string): Promise<Identity> {
-    return this.request<Identity>('/api/v1/me', {}, token);
+  async getMe(): Promise<ProfileResponse> {
+    return this.request<ProfileResponse>('/api/v1/me');
   }
+}
+
+export interface User {
+  id: string;
+  sub: string;
+  email: string;
+  name: string;
+  is_admin: boolean;
+}
+
+export interface ProfileResponse {
+  user: User;
+  key: ClientKey;
 }
 
 export const sdk = new FlakyOllamaSDK();

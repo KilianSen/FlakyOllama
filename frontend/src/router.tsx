@@ -9,6 +9,7 @@ import { PlaygroundPage } from './pages/PlaygroundPage';
 import { ChatPage } from './pages/ChatPage';
 import { LogsPage } from './pages/LogsPage';
 import { ConfigPage } from './pages/ConfigPage';
+import ProfilePage from './pages/ProfilePage';
 
 export const router = createBrowserRouter([
   {
@@ -23,6 +24,7 @@ export const router = createBrowserRouter([
       { path: 'playground', element: <PlaygroundPage /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'logs', element: <LogsPage /> },
+      { path: 'profile', element: <ProfilePage /> },
       { path: 'config', element: <ConfigPage /> },
     ],
   },

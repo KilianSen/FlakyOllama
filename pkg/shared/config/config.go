@@ -33,6 +33,19 @@ type Config struct {
 	// Auto-scaling
 	EnableAutoScaling  bool `json:"enable_auto_scaling"`
 	AutoScaleThreshold int  `json:"auto_scale_threshold"` // Queue depth per model
+
+	// OIDC Configuration
+	OIDC OIDCConfig `json:"oidc"`
+}
+
+type OIDCConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Issuer       string `json:"issuer"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	RedirectURL  string `json:"redirect_url"`
+	AdminClaim   string `json:"admin_claim"` // Claim to check for admin status (e.g. "groups" or "roles")
+	AdminValue   string `json:"admin_value"` // Value in AdminClaim that grants admin status
 }
 
 type TLSConfig struct {

@@ -13,6 +13,7 @@ type contextKey string
 const (
 	ContextKeyToken      contextKey = "token"
 	ContextKeyClientData contextKey = "client_data"
+	ContextKeyUser       contextKey = "user"
 )
 
 type KeyManager interface {
@@ -44,6 +45,12 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 		}
 
 		if receivedToken == "" {
+			// Check if we have a user from SessionMiddleware
+			if _, ok := r.Context().Value(ContextKeyUser).(models.User); ok {
+				next(w, r)
+				return
+			}
+
 			logging.Global.Warnf("Auth failure: No token provided for %s %s", r.Method, r.URL.Path)
 			http.Error(w, "Authorization required", http.StatusUnauthorized)
 			return

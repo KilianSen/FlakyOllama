@@ -661,36 +661,6 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
-	token, _ := r.Context().Value(auth.ContextKeyToken).(string)
-	if token == "" {
-		b.jsonError(w, http.StatusUnauthorized, "no identity found")
-		return
-	}
-
-	// Try Client Key
-	if ck, err := b.Storage.GetClientKey(token); err == nil {
-		b.jsonResponse(w, http.StatusOK, map[string]interface{}{
-			"type":  "client",
-			"label": ck.Label,
-			"data":  ck,
-		})
-		return
-	}
-
-	// Try Agent Key
-	if ak, err := b.Storage.GetAgentKey(token); err == nil {
-		b.jsonResponse(w, http.StatusOK, map[string]interface{}{
-			"type":  "agent",
-			"label": ak.Label,
-			"data":  ak,
-		})
-		return
-	}
-
-	b.jsonError(w, http.StatusNotFound, "identity not found in registry")
-}
-
 func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request) {
 	var req models.InferenceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

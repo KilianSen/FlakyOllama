@@ -3,25 +3,31 @@ import { useCluster } from './ClusterContext';
 import {
   LayoutDashboard, Server, Database, Terminal, ScrollText,
   Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare, Key,
+  User as UserIcon, LogOut, Shield,
 } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useLocation } from 'react-router';
+import { useState, useEffect } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import type { ClusterStatus } from './api';
-const navItems = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/fleet', label: 'Fleet', icon: Server },
-  { to: '/registry', label: 'Registry', icon: Database },
-  { to: '/keys', label: 'Access', icon: Key },
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import sdk, { type ClusterStatus, type User } from './api';
+
+const baseNavItems = [
+  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, admin: true },
+  { to: '/fleet', label: 'Fleet', icon: Server, admin: true },
+  { to: '/registry', label: 'Registry', icon: Database, admin: true },
+  { to: '/keys', label: 'Access', icon: Key, admin: true },
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
-  { to: '/logs', label: 'Logs', icon: ScrollText },
-  { to: '/config', label: 'Configuration', icon: Settings },
+  { to: '/logs', label: 'Logs', icon: ScrollText, admin: true },
+  { to: '/profile', label: 'Profile', icon: UserIcon },
+  { to: '/config', label: 'Configuration', icon: Settings, admin: true },
 ];
 
 function formatUptime(s: number) {
@@ -37,15 +43,45 @@ function getOfflineCount(status: ClusterStatus) {
 const App = () => {
   const { status, error, isLoading, refresh } = useCluster();
   const location = useLocation();
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  const pageName = navItems.find(n =>
+  useEffect(() => {
+    sdk.getMe()
+      .then(res => setUser(res.user))
+      .catch(() => {
+        // If not authenticated, we don't redirect yet to allow playground/chat if they have tokens
+        // But for dashboard access, we might want to redirect
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const navItems = baseNavItems.filter(item => !item.admin || (user?.is_admin));
+
+  const pageName = baseNavItems.find(n =>
     n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)
   )?.label ?? 'Dashboard';
 
   const isConfigPage = location.pathname === '/config';
   const isPortalPage = location.pathname === '/portal';
 
+  if (authLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-background">
+        <RefreshCw size={24} className="animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage) {
+    // Redirect to OIDC login
+    const baseUrl = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
+    window.location.href = `${baseUrl}/auth/login`;
+    return null;
+  }
+
   if (!status && !isConfigPage && !isPortalPage) {
+// ... (rest of the loading/error view)
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
         <Toaster position="top-right" theme="dark" richColors />
@@ -193,28 +229,80 @@ const App = () => {
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-4 text-[9px] font-black uppercase text-muted-foreground">
-                <span className="flex items-center gap-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${status ? 'bg-emerald-400 animate-pulse' : 'bg-muted-foreground/30'}`} />
-                  {status ? status.active_workloads : 0} active
-                </span>
-                <Separator orientation="vertical" className="h-4" />
-                <span>Avg CPU {status ? status.avg_cpu_usage.toFixed(0) : 0}%</span>
+            <div className="flex items-center gap-6">
+              {user?.is_admin && (
+                <div className="flex items-center gap-4 text-[9px] font-black uppercase text-muted-foreground">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${status ? 'bg-emerald-400 animate-pulse' : 'bg-muted-foreground/30'}`} />
+                    {status ? status.active_workloads : 0} active
+                  </span>
+                  <Separator orientation="vertical" className="h-4" />
+                  <span>Avg CPU {status ? status.avg_cpu_usage.toFixed(0) : 0}%</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost" size="icon"
+                      className="h-8 w-8 text-muted-foreground"
+                      onClick={refresh}
+                      disabled={isLoading}
+                    >
+                      <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="text-[10px] font-bold">Refresh cluster state</TooltipContent>
+                </Tooltip>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+                      <Avatar className="h-8 w-8 border border-border shadow-sm">
+                        <AvatarImage src={`https://avatar.vercel.sh/${user?.sub}.png`} alt={user?.name} />
+                        <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-black">
+                          {user?.name?.substring(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-56" align="end" forceMount>
+                    <DropdownMenuLabel className="font-normal">
+                      <div className="flex flex-col space-y-1">
+                        <p className="text-sm font-black leading-none">{user?.name}</p>
+                        <p className="text-xs leading-none text-muted-foreground">{user?.email}</p>
+                      </div>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem asChild className="cursor-pointer font-bold">
+                      <NavLink to="/profile" className="flex items-center w-full">
+                        <UserIcon className="mr-2 h-4 w-4" />
+                        <span>Profile</span>
+                      </NavLink>
+                    </DropdownMenuItem>
+                    {user?.is_admin && (
+                      <DropdownMenuItem asChild className="cursor-pointer font-bold text-primary">
+                        <NavLink to="/config" className="flex items-center w-full">
+                          <Shield className="mr-2 h-4 w-4" />
+                          <span>Admin Console</span>
+                        </NavLink>
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem 
+                      className="cursor-pointer font-bold text-destructive"
+                      onClick={() => {
+                        const baseUrl = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
+                        window.location.href = `${baseUrl}/auth/logout`;
+                      }}
+                    >
+                      <LogOut className="mr-2 h-4 w-4" />
+                      <span>Log out</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost" size="icon"
-                    className="h-8 w-8 text-muted-foreground"
-                    onClick={refresh}
-                    disabled={isLoading}
-                  >
-                    <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent className="text-[10px] font-bold">Refresh cluster state</TooltipContent>
-              </Tooltip>
             </div>
           </header>
 
