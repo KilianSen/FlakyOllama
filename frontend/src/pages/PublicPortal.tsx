@@ -9,12 +9,12 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
-import sdk, { type Catalog, type Identity } from '../api';
+import sdk, { type Catalog, type ProfileResponse } from '../api';
 
 export const PublicPortal: React.FC = () => {
   const [token, setToken] = useState(localStorage.getItem('MY_PORTAL_TOKEN') || '');
   const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [identity, setIdentity] = useState<Identity | null>(null);
+  const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [catLoading, setCatLoading] = useState(true);
 
@@ -30,16 +30,16 @@ export const PublicPortal: React.FC = () => {
   };
 
   const fetchIdentity = async () => {
-    if (!token.trim()) return;
     setLoading(true);
     try {
-      const data = await sdk.getMe(token);
-      setIdentity(data);
-      localStorage.setItem('MY_PORTAL_TOKEN', token);
+      const data = await sdk.getMe();
+      setProfile(data);
       toast.success('Identity verified');
     } catch (err: any) {
-      setIdentity(null);
-      toast.error(err.message || 'Invalid token');
+      setProfile(null);
+      // If unauthorized, redirect to login
+      const baseUrl = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
+      window.location.href = `${baseUrl}/auth/login`;
     } finally {
       setLoading(false);
     }
@@ -94,25 +94,23 @@ export const PublicPortal: React.FC = () => {
               </Button>
             </div>
 
-            {identity && (
+            {profile && (
               <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
                 <div className="p-4 rounded-xl bg-muted/30 border border-border/50 space-y-2">
                   <div className="flex items-center gap-2 text-[10px] font-black uppercase text-muted-foreground">
-                    {identity.type === 'client' ? <User size={12} className="text-blue-400" /> : <Zap size={12} className="text-amber-400" />}
-                    {identity.type} Identity
+                    <User size={12} className="text-blue-400" />
+                    Authenticated User
                   </div>
-                  <p className="text-sm font-black truncate">{identity.label}</p>
+                  <p className="text-sm font-black truncate">{profile.user.name}</p>
                 </div>
 
                 <div className="p-4 rounded-xl bg-muted/30 border border-border/50 space-y-2">
                   <div className="flex items-center gap-2 text-[10px] font-black uppercase text-muted-foreground">
                     <TrendingUp size={12} className="text-emerald-400" />
-                    {identity.type === 'client' ? 'Quota Consumption' : 'Compute Contribution'}
+                    Quota Consumption
                   </div>
                   <p className="text-sm font-black">
-                    {identity.type === 'client' 
-                      ? `${identity.data.quota_used.toLocaleString()} Tokens`
-                      : `${(identity.data.credits_earned || 0).toLocaleString()} Credits`}
+                    {profile.key.quota_used.toLocaleString()} Tokens
                   </p>
                 </div>
 
@@ -122,9 +120,7 @@ export const PublicPortal: React.FC = () => {
                     Current Balance
                   </div>
                   <p className="text-sm font-black text-emerald-400">
-                    {identity.type === 'client' 
-                      ? `${(identity.data.credits || 0).toLocaleString()} φ`
-                      : `${(identity.data.credits_earned || 0).toLocaleString()} φ`}
+                    {(profile.key.credits || 0).toLocaleString()} φ
                   </p>
                 </div>
               </div>
