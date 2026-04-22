@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Key, Coins, Zap, User, Box, 
+  Key, Coins, User, Box,
   Info, TrendingUp, CheckCircle2
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
