@@ -54,6 +54,29 @@ func main() {
 		}
 	}
 
+	// OIDC Env Mappings
+	if os.Getenv("OIDC_ENABLED") == "true" {
+		cfg.OIDC.Enabled = true
+	}
+	if v := os.Getenv("OIDC_ISSUER"); v != "" {
+		cfg.OIDC.Issuer = v
+	}
+	if v := os.Getenv("OIDC_CLIENT_ID"); v != "" {
+		cfg.OIDC.ClientID = v
+	}
+	if v := os.Getenv("OIDC_CLIENT_SECRET"); v != "" {
+		cfg.OIDC.ClientSecret = v
+	}
+	if v := os.Getenv("OIDC_REDIRECT_URL"); v != "" {
+		cfg.OIDC.RedirectURL = v
+	}
+	if v := os.Getenv("OIDC_ADMIN_CLAIM"); v != "" {
+		cfg.OIDC.AdminClaim = v
+	}
+	if v := os.Getenv("OIDC_ADMIN_VALUE"); v != "" {
+		cfg.OIDC.AdminValue = v
+	}
+
 	switch role {
 	case "balancer":
 		addr := os.Getenv("BALANCER_ADDR")
