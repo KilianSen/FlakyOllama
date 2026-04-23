@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -247,7 +248,13 @@ func randString(n int) string {
 }
 
 func setCookie(r *http.Request, w http.ResponseWriter, name, value string, duration time.Duration) {
-	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	// Determine if we should use Secure flag
+	// Always false for localhost/127.0.0.1 unless explicitly using HTTPS
+	host := r.Host
+	isLocal := strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1")
+
+	secure := (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https") && !isLocal
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
