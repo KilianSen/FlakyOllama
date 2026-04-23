@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/shared/auth"
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/rand"
@@ -53,7 +54,7 @@ func (b *Balancer) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := randString(16)
-	setCookie(w, "oidc_state", state, 15*time.Minute)
+	setCookie(r, w, "oidc_state", state, 15*time.Minute)
 
 	http.Redirect(w, r, oauth2Config.AuthCodeURL(state), http.StatusFound)
 }
@@ -166,12 +167,12 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setCookie(w, "session_token", tokenString, 24*time.Hour)
+	setCookie(r, w, "session_token", tokenString, 24*time.Hour)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (b *Balancer) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	setCookie(w, "session_token", "", -1)
+	setCookie(r, w, "session_token", "", -1)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -246,14 +247,15 @@ func randString(n int) string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-func setCookie(w http.ResponseWriter, name, value string, duration time.Duration) {
+func setCookie(r *http.Request, w http.ResponseWriter, name, value string, duration time.Duration) {
+	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Expires:  time.Now().Add(duration),
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   false, // Set to true in production with HTTPS
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

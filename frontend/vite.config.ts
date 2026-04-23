@@ -6,7 +6,7 @@ import path from "path"
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const target = env.VITE_BALANCER_URL || 'http://localhost:8080';
+  const target = env.VITE_BALANCER_URL || 'http://127.0.0.1:8080';
 
   return {
     plugins: [react(), tailwindcss()],
@@ -23,6 +23,11 @@ export default defineConfig(({ mode }) => {
           secure: false,
         },
         '/v1': {
+          target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/auth': {
           target,
           changeOrigin: true,
           secure: false,
