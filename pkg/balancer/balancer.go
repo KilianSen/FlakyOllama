@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Balancer struct {
@@ -25,17 +26,47 @@ type Balancer struct {
 	State   *state.Actor
 	Storage *storage.SQLiteStorage
 	Jobs    *jobs.Manager
+	Queue   *RequestQueue
 
-	// Performance cache: model -> []PerformanceMetric
+	httpClient *http.Client
+
+	// Performance cache: node_id:model -> PerformanceMetric
 	perfMu    sync.RWMutex
-	PerfCache map[string]*models.PerformanceStats
+	PerfCache map[string]storage.PerformanceMetric
 
 	// Client affinity: IP -> NodeID
 	affinityMu     sync.RWMutex
 	ClientAffinity map[string]string
 
+	// Channel for async metric processing
+	MetricCh chan metricEntry
+	TokenCh  chan tokenUsageEntry
+
 	// Log shipping
-	LogCh chan models.LogEntry
+	LogCh  chan models.LogEntry
+	logMu  sync.Mutex
+	logChs map[chan string]bool
+
+	stopCh chan struct{}
+}
+
+type metricEntry struct {
+	nodeID  string
+	model   string
+	latency time.Duration
+	success bool
+}
+
+type tokenUsageEntry struct {
+	nodeID    string
+	model     string
+	input     int
+	output    int
+	reward    float64
+	cost      float64
+	ttft      int64
+	duration  int64
+	clientKey string
 }
 
 func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
@@ -45,14 +76,22 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 	}
 
 	b := &Balancer{
-		Address:        addr,
-		Config:         cfg,
-		State:          state.NewActor(),
-		Storage:        s,
-		Jobs:           jobs.NewManager(),
-		PerfCache:      make(map[string]*models.PerformanceStats),
+		Address: addr,
+		Config:  cfg,
+		State:   state.NewActor(),
+		Storage: s,
+		Jobs:    jobs.NewManager(),
+		Queue:   NewRequestQueue(),
+		httpClient: &http.Client{
+			Timeout: 10 * time.Minute, // Long timeout for inference
+		},
+		PerfCache:      make(map[string]storage.PerformanceMetric),
 		ClientAffinity: make(map[string]string),
+		MetricCh:       make(chan metricEntry, 1000),
+		TokenCh:        make(chan tokenUsageEntry, 1000),
 		LogCh:          make(chan models.LogEntry, 1000),
+		logChs:         make(map[chan string]bool),
+		stopCh:         make(chan struct{}),
 	}
 
 	return b, nil
@@ -69,7 +108,6 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		// Browsers supporting wildcard headers will use it, others get the explicit list
 		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
 		if reqHeaders != "" {
 			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
@@ -91,6 +129,10 @@ func (b *Balancer) Serve() error {
 		return http.ListenAndServeTLS(b.Address, b.Config.TLS.CertFile, b.Config.TLS.KeyFile, b.NewMux())
 	}
 	return http.ListenAndServe(b.Address, b.NewMux())
+}
+
+func (b *Balancer) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+	promhttp.Handler().ServeHTTP(w, r)
 }
 
 // NewMux returns a mux with the balancer's handlers registered.
@@ -235,4 +277,28 @@ func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 
 		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
 	})
+}
+
+func (b *Balancer) getRequestPriority(r *http.Request) int {
+	// 1. Check for OIDC User
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if user, ok := val.(models.User); ok {
+			if user.IsAdmin {
+				return 100
+			}
+			ck, err := b.Storage.GetClientKeyByUserID(user.ID)
+			if err == nil {
+				return int(ck.Credits / 10)
+			}
+		}
+	}
+
+	// 2. Check for Token-based Client Data
+	if val := r.Context().Value(auth.ContextKeyClientData); val != nil {
+		if ck, ok := val.(models.ClientKey); ok {
+			return int(ck.Credits / 10)
+		}
+	}
+
+	return 0
 }
