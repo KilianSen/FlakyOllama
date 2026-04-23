@@ -8,120 +8,54 @@ import (
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
-	"crypto/tls"
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type metricEntry struct {
-	nodeID, model string
-	latency       time.Duration
-	success       bool
-}
-
-type tokenUsageEntry struct {
-	nodeID, model  string
-	input, output  int
-	reward, cost   float64
-	ttft, duration int64
-	clientKey      string
-}
-
-// Balancer manages multiple agents and routes requests.
 type Balancer struct {
-	Address        string
-	Storage        *storage.SQLiteStorage
-	Config         *config.Config
-	State          *state.ClusterStateActor
-	Jobs           *jobs.JobManager
-	Queue          *RequestQueue
-	ClientAffinity map[string]string // client_ip -> agent_id
+	Address string
+	Config  *config.Config
+	State   *state.Actor
+	Storage *storage.SQLiteStorage
+	Jobs    *jobs.Manager
+
+	// Performance cache: model -> []PerformanceMetric
+	perfMu    sync.RWMutex
+	PerfCache map[string]*models.PerformanceStats
+
+	// Client affinity: IP -> NodeID
 	affinityMu     sync.RWMutex
-	PerfCache      map[string]storage.PerformanceMetric // "node_id:model" -> metric
-	perfMu         sync.RWMutex
-	MetricCh       chan metricEntry
-	LogCh          chan models.LogEntry
-	TokenCh        chan tokenUsageEntry
-	stopCh         chan struct{}
-	logChs         map[chan string]bool
-	logMu          sync.Mutex
-	httpClient     *http.Client
-	StartTime      time.Time
+	ClientAffinity map[string]string
+
+	// Log shipping
+	LogCh chan models.LogEntry
 }
 
-func NewBalancer(address string, dbPath string, cfg *config.Config) (*Balancer, error) {
+func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 	s, err := storage.NewSQLiteStorage(dbPath)
 	if err != nil {
 		return nil, err
 	}
 
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
-
 	b := &Balancer{
-		Address:        address,
-		Storage:        s,
+		Address:        addr,
 		Config:         cfg,
-		State:          state.NewClusterStateActor(),
-		Jobs:           jobs.NewJobManager(),
-		Queue:          NewRequestQueue(),
+		State:          state.NewActor(),
+		Storage:        s,
+		Jobs:           jobs.NewManager(),
+		PerfCache:      make(map[string]*models.PerformanceStats),
 		ClientAffinity: make(map[string]string),
-		PerfCache:      make(map[string]storage.PerformanceMetric),
-		MetricCh:       make(chan metricEntry, 1000),
 		LogCh:          make(chan models.LogEntry, 1000),
-		TokenCh:        make(chan tokenUsageEntry, 1000),
-		stopCh:         make(chan struct{}),
-		logChs:         make(map[chan string]bool),
-		StartTime:      time.Now(),
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
-				},
-			},
-		},
 	}
 
-	b.State.Start()
 	return b, nil
-}
-
-func (b *Balancer) getRequestPriority(r *http.Request) int {
-	if ck, ok := r.Context().Value(auth.ContextKeyClientData).(models.ClientKey); ok {
-		// Priority is based on credit balance
-		// We cap it at 1000 for routing purposes
-		p := int(ck.Credits)
-		if p < 0 {
-			p = 0
-		}
-		if p > 1000 {
-			p = 1000
-		}
-		return p
-	}
-	return 0
-}
-
-func (b *Balancer) Ship(entry models.LogEntry) {
-	select {
-	case b.LogCh <- entry:
-	default:
-	}
-}
-
-func (b *Balancer) Close() error {
-	close(b.stopCh)
-	b.Queue.Close()
-	return b.Storage.Close()
-}
-
-func (b *Balancer) HandleMetrics(w http.ResponseWriter, r *http.Request) {
-	promhttp.Handler().ServeHTTP(w, r)
 }
 
 func (b *Balancer) CORS(next http.Handler) http.Handler {
@@ -129,8 +63,6 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Vary", "Origin")
 		} else {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
@@ -142,10 +74,8 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 		if reqHeaders != "" {
 			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
 		} else {
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Node-Id, X-Requested-With, User-Agent, Accept-Encoding, Accept-Language, Last-Event-ID")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		}
-		w.Header().Set("Access-Control-Allow-Private-Network", "true")
-		w.Header().Set("Access-Control-Max-Age", "86400")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
@@ -228,51 +158,81 @@ func (b *Balancer) NewMux() *chi.Mux {
 		r.Use(func(next http.Handler) http.Handler {
 			return auth.Middleware(token, b.Storage, next.ServeHTTP)
 		})
-		r.Get("/status", b.HandleV1ClusterStatus)
-		r.Get("/logs", b.HandleV1Logs)
-
-		r.Route("/nodes", func(r chi.Router) {
-			r.Get("/", b.HandleV1Nodes)
-			r.Post("/{id}/drain", b.HandleV1NodeDrain)
-			r.Post("/{id}/undrain", b.HandleV1NodeUndrain)
-		})
-
-		r.Route("/models", func(r chi.Router) {
-			r.Post("/pull", b.HandleV1ModelPull)
-			r.Delete("/{name}", b.HandleV1ModelDelete)
-			r.Post("/{name}/unload", b.HandleV1ModelUnload)
-		})
-
-		r.Route("/requests", func(r chi.Router) {
-			r.Get("/", b.HandleV1ModelRequestsList)
-			r.Post("/{id}/approve", b.HandleV1ModelRequestApprove)
-			r.Post("/{id}/decline", b.HandleV1ModelRequestDecline)
-		})
-
-		r.Post("/policies", b.HandleV1ModelPolicySet)
-
-		r.Route("/keys", func(r chi.Router) {
-			r.Route("/clients", func(r chi.Router) {
-				r.Get("/", b.HandleV1ClientKeysList)
-				r.Post("/", b.HandleV1ClientKeyCreate)
-			})
-			r.Route("/agents", func(r chi.Router) {
-				r.Get("/", b.HandleV1AgentKeysList)
-				r.Post("/", b.HandleV1AgentKeyCreate)
-			})
-		})
 
 		r.Get("/catalog", b.HandleV1Catalog)
 		r.Get("/me", b.HandleV1Me)
 
-		r.Get("/jobs/{id}", b.HandleV1JobStatus)
-		r.Post("/test", b.HandleV1TestInference)
+		// Gated Admin Routes
+		r.Group(func(r chi.Router) {
+			r.Use(b.AdminOnly)
 
-		r.Route("/config", func(r chi.Router) {
-			r.Get("/", b.HandleV1ConfigGet)
-			r.Post("/", b.HandleV1ConfigUpdate)
+			r.Get("/status", b.HandleV1ClusterStatus)
+			r.Get("/logs", b.HandleV1Logs)
+
+			r.Route("/nodes", func(r chi.Router) {
+				r.Get("/", b.HandleV1Nodes)
+				r.Post("/{id}/drain", b.HandleV1NodeDrain)
+				r.Post("/{id}/undrain", b.HandleV1NodeUndrain)
+			})
+
+			r.Route("/models", func(r chi.Router) {
+				r.Post("/pull", b.HandleV1ModelPull)
+				r.Delete("/{name}", b.HandleV1ModelDelete)
+				r.Post("/{name}/unload", b.HandleV1ModelUnload)
+			})
+
+			r.Route("/requests", func(r chi.Router) {
+				r.Get("/", b.HandleV1ModelRequestsList)
+				r.Post("/{id}/approve", b.HandleV1ModelRequestApprove)
+				r.Post("/{id}/decline", b.HandleV1ModelRequestDecline)
+			})
+
+			r.Post("/policies", b.HandleV1ModelPolicySet)
+
+			r.Route("/keys", func(r chi.Router) {
+				r.Route("/clients", func(r chi.Router) {
+					r.Get("/", b.HandleV1ClientKeysList)
+					r.Post("/", b.HandleV1ClientKeyCreate)
+				})
+				r.Route("/agents", func(r chi.Router) {
+					r.Get("/", b.HandleV1AgentKeysList)
+					r.Post("/", b.HandleV1AgentKeyCreate)
+				})
+			})
+
+			r.Get("/jobs/{id}", b.HandleV1JobStatus)
+			r.Post("/test", b.HandleV1TestInference)
+
+			r.Route("/config", func(r chi.Router) {
+				r.Get("/", b.HandleV1ConfigGet)
+				r.Post("/", b.HandleV1ConfigUpdate)
+			})
 		})
 	})
 
 	return r
+}
+
+func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Check if authenticated via OIDC and is Admin
+		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+			if user, ok := val.(models.User); ok {
+				if user.IsAdmin {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+
+		// 2. Check if authenticated via Master Token
+		if tkn, ok := r.Context().Value(auth.ContextKeyToken).(string); ok {
+			if tkn != "" && tkn == b.Config.AuthToken {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+	})
 }
