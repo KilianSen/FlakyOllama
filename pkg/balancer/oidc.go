@@ -2,7 +2,6 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/shared/auth"
-	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/rand"
