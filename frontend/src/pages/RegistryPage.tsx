@@ -100,7 +100,7 @@ export const RegistryPage: React.FC = () => {
 
   const getModelStatusOnNode = (model: string, node: NodeStatus) => {
     const isLoaded = (node.active_models || []).includes(model);
-    const isOnDisk = (node.local_models || []).some(m => m.name === model);
+    const isOnDisk = (node.local_models || []).some(m => m.model === model);
     const policy = status?.model_policies?.[model]?.[node.id] || { Banned: false, Pinned: false };
     
     return { isLoaded, isOnDisk, isBanned: policy.Banned, isPinned: policy.Pinned };

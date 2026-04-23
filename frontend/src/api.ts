@@ -21,7 +21,7 @@ export interface NodeStatus {
   gpu_model: string;
   gpu_temp: number;
   active_models: string[];
-  local_models: Array<{ model: string, size: number }>;
+  local_models: Array<{ name: string, model: string, size: number }>;
   input_tokens: number;
   output_tokens: number;
   token_reward: number;
@@ -53,7 +53,7 @@ export interface ClusterStatus {
   total_cost: number;
   node_workloads: Record<string, number>;
   in_progress_pulls: Record<string, string>;
-  model_policies: Record<string, Record<string, { banned: boolean, pinned: boolean }>>;
+  model_policies: Record<string, Record<string, { Banned: boolean, Pinned: boolean }>>;
 }
 
 export interface ClientKey {
@@ -101,7 +101,7 @@ export interface Catalog {
 
 export interface ProfileResponse {
   user: User;
-  client_key: ClientKey;
+  client_key: ClientKey; 
   agent_keys: AgentKey[];
 }
 
@@ -124,7 +124,56 @@ export type Identity = {
     data: any;
 };
 
-class FlakyOllamaSDK {
+export interface Config {
+  keep_alive_duration_sec: number;
+  stale_threshold: number;
+  load_threshold: number;
+  poll_interval_ms: number;
+  weights: {
+    cpu_load_weight: number;
+    latency_weight: number;
+    success_rate_weight: number;
+    loaded_model_bonus: number;
+    local_model_bonus: number;
+    workload_penalty: number;
+  };
+  circuit_breaker: {
+    error_threshold: number;
+    cooloff_sec: number;
+  };
+  stall_timeout_sec: number;
+  enable_hedging: boolean;
+  hedging_percentile: number;
+  max_queue_depth: number;
+  tls: {
+    enabled: boolean;
+    cert_file: string;
+    key_file: string;
+    insecure_skip_verify: boolean;
+  };
+  auth_token: string;
+  remote_token: string;
+  enable_model_approval: boolean;
+  model_reward_factors: Record<string, number>;
+  model_cost_factors: Record<string, number>;
+  global_reward_multiplier: number;
+  global_cost_multiplier: number;
+  max_vram_allocated: number;
+  max_cpu_allocated: number;
+  enable_auto_scaling: boolean;
+  auto_scale_threshold: number;
+  oidc: {
+    enabled: boolean;
+    issuer: string;
+    client_id: string;
+    client_secret: string;
+    redirect_url: string;
+    admin_claim: string;
+    admin_value: string;
+  };
+}
+
+export class FlakyOllamaSDK {
   private async request<T>(path: string, options: RequestInit = {}, tokenOverride?: string): Promise<T> {
     const baseUrl = getBaseUrl();
     const token = tokenOverride || getToken();
@@ -218,8 +267,9 @@ class FlakyOllamaSDK {
   }
 
   // Model Requests
-  async getModelRequests(): Promise<ModelRequest[]> {
-    return this.request<ModelRequest[]>('/api/v1/requests');
+  async getModelRequests(status?: string): Promise<ModelRequest[]> {
+    const path = status ? `/api/v1/requests?status=${status}` : '/api/v1/requests';
+    return this.request<ModelRequest[]>(path);
   }
 
   async approveModelRequest(id: string): Promise<{ status: string }> {
@@ -324,4 +374,6 @@ class FlakyOllamaSDK {
 
 export const sdk = new FlakyOllamaSDK();
 export const api = sdk;
+export const getOllamaClient = () => sdk.getOllamaClient();
+export const getOpenAIClient = () => sdk.getOpenAIClient();
 export default sdk;

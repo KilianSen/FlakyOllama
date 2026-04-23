@@ -94,7 +94,7 @@ export function computeRoutability(modelName: string, status: ClusterStatus): Mo
 
   const residency: NodeResidency[] = nodes.map(node => {
     const isHot  = node.active_models?.includes(modelName) ?? false;
-    const warmInfo = node.local_models?.find(lm => lm.name === modelName);
+    const warmInfo = node.local_models?.find(lm => lm.model === modelName);
     const thermal: NodeThermalState = isHot ? 'hot' : warmInfo ? 'warm' : 'cold';
     return { node, thermal, size: warmInfo?.size };
   });

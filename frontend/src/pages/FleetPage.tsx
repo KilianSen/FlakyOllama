@@ -324,13 +324,13 @@ export const FleetPage: React.FC = () => {
                               </div>
                             );
                           })}
-                          {selectedNode.local_models?.filter((lm: {name:string}) => !selectedNode.active_models?.includes(lm.name)).map((lm: {name:string, size: number}) => {
-                            const caps = inferCapabilities(lm.name);
+                          {selectedNode.local_models?.filter((lm: {model:string}) => !selectedNode.active_models?.includes(lm.model)).map((lm: {model:string, size: number}) => {
+                            const caps = inferCapabilities(lm.model);
                             return (
-                              <div key={lm.name} className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 opacity-80">
+                              <div key={lm.model} className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 opacity-80">
                                 <div className="flex items-center justify-between mb-2">
                                   <div className="flex items-center gap-2">
-                                    <span className="text-xs font-black font-mono">💾 {lm.name}</span>
+                                    <span className="text-xs font-black font-mono">💾 {lm.model}</span>
                                     <Badge className="text-[8px] font-black h-4 px-1 bg-amber-500/10 text-amber-400">WARM</Badge>
                                   </div>
                                   <div className="text-[9px] font-bold text-muted-foreground">{utilsFormatBytes(lm.size)}</div>

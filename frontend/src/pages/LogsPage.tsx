@@ -44,30 +44,61 @@ export const LogsPage: React.FC = () => {
   pausedRef.current = paused;
 
   useEffect(() => {
-    const cleanup = sdk.streamLogs((msg: string) => {
-      if (pausedRef.current) return;
-      
-      let displayMsg = msg;
-      let level: LogEntry['level'] = detectLevel(msg);
-      let timestamp = new Date();
+    let active = true;
+    let reader: ReadableStreamDefaultReader | null = null;
 
+    const startStream = async () => {
       try {
-        const parsed = JSON.parse(msg);
-        if (parsed.message) {
-          displayMsg = `[${parsed.node_id || 'unknown'}] ${parsed.message}`;
-          if (parsed.level) level = (parsed.level.toLowerCase() as LogEntry['level']) || level;
-          if (parsed.timestamp) timestamp = new Date(parsed.timestamp);
-        }
-      } catch (e) {
-        // Not JSON, use raw
-      }
+        const stream = await sdk.getLogs();
+        reader = stream.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-      setLogs(prev => [
-        ...prev.slice(-299),
-        { timestamp, raw: displayMsg, level }
-      ]);
-    });
-    return cleanup;
+        while (active) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const msg = line.substring(6);
+            if (pausedRef.current) continue;
+            
+            let displayMsg = msg;
+            let level: LogEntry['level'] = detectLevel(msg);
+            let timestamp = new Date();
+
+            try {
+              const parsed = JSON.parse(msg);
+              if (parsed.message) {
+                displayMsg = `[${parsed.node_id || 'unknown'}] ${parsed.message}`;
+                if (parsed.level) level = (parsed.level.toLowerCase() as LogEntry['level']) || level;
+                if (parsed.timestamp) timestamp = new Date(parsed.timestamp);
+              }
+            } catch (e) {
+              // Not JSON, use raw
+            }
+
+            setLogs(prev => [
+              ...prev.slice(-299),
+              { timestamp, raw: displayMsg, level }
+            ]);
+          }
+        }
+      } catch (err) {
+        console.error('Log stream error:', err);
+      }
+    };
+
+    startStream();
+
+    return () => {
+      active = false;
+      reader?.cancel();
+    };
   }, []);
 
   useEffect(() => {

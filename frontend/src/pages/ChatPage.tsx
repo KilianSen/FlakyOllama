@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { toast } from 'sonner';
 import type OpenAI from 'openai';
-import { getOllamaClient, getOpenAIClient } from '../api';
+import sdk from '../api';
 import { useCluster } from '../ClusterContext';
 import {
   computeRoutability, LATENCY_HINTS,
@@ -92,8 +92,8 @@ function MessageBubble({ msg }: { msg: Message }) {
 export const ChatPage: React.FC = () => {
   const { status } = useCluster();
 
-  const ollamaClient = React.useMemo(() => getOllamaClient(), []);
-  const openaiClient = React.useMemo(() => getOpenAIClient(), []);
+  const ollamaClient = React.useMemo(() => sdk.getOllamaClient(), []);
+  const openaiClient = React.useMemo(() => sdk.getOpenAIClient(), []);
 
   const [sdkMode, setSdkMode] = useState<SDKMode>('openai');
   const [messages, setMessages] = useState<Message[]>([]);
