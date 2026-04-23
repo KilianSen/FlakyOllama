@@ -37,9 +37,8 @@ export const PublicPortal: React.FC = () => {
       toast.success('Identity verified');
     } catch (err: any) {
       setProfile(null);
-      // If unauthorized, redirect to login
-      const baseUrl = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
-      window.location.href = `${baseUrl}/auth/login`;
+      // If unauthorized, redirect to login via proxy
+      window.location.href = `/auth/login`;
     } finally {
       setLoading(false);
     }

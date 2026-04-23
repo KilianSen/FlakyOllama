@@ -205,6 +205,7 @@ class FlakyOllamaSDK {
     const token = tokenOverride || getToken();
     const res = await fetch(`${baseUrl}${path}`, {
       ...options,
+      credentials: 'include',
       headers: { 
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',

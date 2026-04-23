@@ -136,6 +136,7 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		// Browsers supporting wildcard headers will use it, others get the explicit list
 		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
 		if reqHeaders != "" {

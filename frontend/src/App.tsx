@@ -74,9 +74,8 @@ const App = () => {
   }
 
   if (!user && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage) {
-    // Redirect to OIDC login
-    const baseUrl = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
-    window.location.href = `${baseUrl}/auth/login`;
+    // Redirect to OIDC login via proxy to maintain cookie context
+    window.location.href = `/auth/login`;
     return null;
   }
 
@@ -293,8 +292,7 @@ const App = () => {
                     <DropdownMenuItem 
                       className="cursor-pointer font-bold text-destructive"
                       onClick={() => {
-                        const baseUrl = localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
-                        window.location.href = `${baseUrl}/auth/logout`;
+                        window.location.href = `/auth/logout`;
                       }}
                     >
                       <LogOut className="mr-2 h-4 w-4" />

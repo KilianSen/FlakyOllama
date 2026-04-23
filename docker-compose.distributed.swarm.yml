@@ -4,16 +4,23 @@ services:
   balancer:
     image: ghcr.io/kiliansen/flakyollama-balancer:latest
     ports:
-      - target: 8080
-        published: 8080
+      - target: 31434
+        published: 31434
         protocol: tcp
         mode: ingress
     environment:
       - ROLE=balancer
-      - BALANCER_ADDR=0.0.0.0:8080
+      - BALANCER_ADDR=0.0.0.0:31434
       - DB_PATH=/data/flakyollama.db
       - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
       - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
+      - OIDC_ENABLED=true
+      - OIDC_ISSUER=${OIDC_ISSUER}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      - OIDC_REDIRECT_URL=${OIDC_REDIRECT_URL:-http://localhost:5173/auth/callback}
+      - OIDC_ADMIN_CLAIM=${OIDC_ADMIN_CLAIM:-groups}
+      - OIDC_ADMIN_VALUE=${OIDC_ADMIN_VALUE:-admins}
     volumes:
       - balancer_data:/data
     deploy:
@@ -26,36 +33,21 @@ services:
     image: ghcr.io/kiliansen/flakyollama-frontend:latest
     ports:
       - target: 80
-        published: 3000
+        published: 21434
         protocol: tcp
         mode: ingress
     environment:
-      - BACKEND_URL=http://balancer:8080
+      - BACKEND_URL=http://balancer:31434
       - VITE_BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
     deploy:
       replicas: 1
-
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - host
-    deploy:
-      mode: global
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   agent:
     image: ghcr.io/kiliansen/flakyollama-balancer:latest
     environment:
       - ROLE=agent
       - AGENT_ID={{.Node.Hostname}}
-      - BALANCER_URL=http://127.0.0.1:8080 # Reaches Balancer via Swarm Ingress Mesh (forced IPv4)
+      - BALANCER_URL=http://127.0.0.1:31434 # Reaches Balancer via Swarm Ingress Mesh
       - OLLAMA_URL=http://localhost:11434 # Reaches Ollama on host
       - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
       - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
@@ -71,4 +63,3 @@ networks:
 
 volumes:
   balancer_data:
-  ollama_data:
