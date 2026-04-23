@@ -279,6 +279,14 @@ func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 	})
 }
 
+func (b *Balancer) Ship(entry models.LogEntry) {
+	select {
+	case b.LogCh <- entry:
+	default:
+		// Drop log if channel full to avoid deadlocks
+	}
+}
+
 func (b *Balancer) getRequestPriority(r *http.Request) int {
 	// 1. Check for OIDC User
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
