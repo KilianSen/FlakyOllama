@@ -209,9 +209,9 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, err := b.Storage.GetClientKeyByUserID(user.ID)
+	clientKey, err := b.Storage.GetClientKeyByUserID(user.ID)
 	if err != nil {
-		key = models.ClientKey{
+		clientKey = models.ClientKey{
 			Key:        fmt.Sprintf("sk-%s", randString(32)),
 			Label:      fmt.Sprintf("Personal Key for %s", user.Name),
 			QuotaLimit: 1000000,
@@ -220,15 +220,32 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 			Active:     true,
 			UserID:     user.ID,
 		}
-		b.Storage.CreateClientKey(key)
+		b.Storage.CreateClientKey(clientKey)
+	}
+
+	agentKeys, err := b.Storage.GetAgentKeysByUserID(user.ID)
+	if err != nil || len(agentKeys) == 0 {
+		// Create a default agent key
+		newAgentKey := models.AgentKey{
+			Key:           fmt.Sprintf("ak-%s", randString(32)),
+			Label:         fmt.Sprintf("Default Agent for %s", user.Name),
+			CreditsEarned: 0,
+			Reputation:    1.0,
+			Active:        true,
+			UserID:        user.ID,
+		}
+		b.Storage.CreateAgentKey(newAgentKey)
+		agentKeys = []models.AgentKey{newAgentKey}
 	}
 
 	resp := struct {
-		User models.User      `json:"user"`
-		Key  models.ClientKey `json:"key"`
+		User      models.User       `json:"user"`
+		ClientKey models.ClientKey  `json:"client_key"`
+		AgentKeys []models.AgentKey `json:"agent_keys"`
 	}{
-		User: user,
-		Key:  key,
+		User:      user,
+		ClientKey: clientKey,
+		AgentKeys: agentKeys,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -12,10 +12,31 @@ import (
 )
 
 // Route finds the best agent for an inference request using adaptive heuristics and session stickiness.
-func (b *Balancer) Route(req models.InferenceRequest, clientIP string) (string, string, error) {
+func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clientIP string) (string, string, error) {
 	// Clean model name (strip prefixes like a. added by some tools)
 	if strings.HasPrefix(req.Model, "a.") {
 		req.Model = strings.TrimPrefix(req.Model, "a.")
+	}
+
+	// 0. Check User-specific Model Policy (Disabled status)
+	userID := ""
+	if val := ctx.Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok {
+			userID = u.ID
+		} else if u, ok := val.(*models.User); ok {
+			userID = u.ID
+		}
+	} else if val := ctx.Value(auth.ContextKeyClientData); val != nil {
+		if ck, ok := val.(models.ClientKey); ok {
+			userID = ck.UserID
+		}
+	}
+
+	if userID != "" {
+		p, _ := b.Storage.GetUserModelPolicy(userID, req.Model)
+		if p.Disabled {
+			return "", "", fmt.Errorf("model %s is disabled for this user", req.Model)
+		}
 	}
 
 	snapshot := b.State.GetSnapshot()

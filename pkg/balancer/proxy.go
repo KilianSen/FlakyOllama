@@ -191,29 +191,42 @@ func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey strin
 	if input > 0 || output > 0 {
 		agentID := addr
 		rewardKey := ""
+		agentUserID := ""
 		b.State.Do(func(s *state.ClusterState) {
 			if a, ok := s.Agents[addr]; ok {
 				agentID = a.ID
 				rewardKey = a.AgentKey
+				// We need to look up the agent user ID if it's linked
+				if ak, err := b.Storage.GetAgentKey(a.AgentKey); err == nil {
+					agentUserID = ak.UserID
+				}
 			}
 		})
 
 		// Calculate surge multiplier based on queue depth
-		// Every 5 items in queue add 10% premium (1.0 + queue/50)
 		queueDepth := b.Queue.QueueDepth()
 		surge := 1.0 + (float64(queueDepth) * 0.02)
 
-		// Calculate reward (Agent)
+		// Reward (Agent)
 		rFactor := 1.0
 		if f, ok := b.Config.ModelRewardFactors[model]; ok {
 			rFactor = f
 		}
+		if agentUserID != "" {
+			p, _ := b.Storage.GetUserModelPolicy(agentUserID, model)
+			rFactor *= p.RewardFactor
+		}
 		reward := float64(input+output) * rFactor * b.Config.GlobalRewardMultiplier * surge
 
-		// Calculate cost (Client)
+		// Cost (Client)
 		cFactor := 1.0
 		if f, ok := b.Config.ModelCostFactors[model]; ok {
 			cFactor = f
+		}
+		// Look up client user ID from clientKey (token)
+		if ck, err := b.Storage.GetClientKey(clientKey); err == nil && ck.UserID != "" {
+			p, _ := b.Storage.GetUserModelPolicy(ck.UserID, model)
+			cFactor *= p.CostFactor
 		}
 		cost := float64(input+output) * cFactor * b.Config.GlobalCostMultiplier * surge
 

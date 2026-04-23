@@ -214,6 +214,14 @@ type User struct {
 	IsAdmin bool   `json:"is_admin"`
 }
 
+type UserModelPolicy struct {
+	UserID       string  `json:"user_id"`
+	Model        string  `json:"model"`
+	RewardFactor float64 `json:"reward_factor"` // Multiplier for agent earnings
+	CostFactor   float64 `json:"cost_factor"`   // Multiplier for client costs
+	Disabled     bool    `json:"disabled"`      // If true, user cannot use this model
+}
+
 type AgentKey struct {
 	Key           string  `json:"key"`
 	Label         string  `json:"label"`
@@ -221,4 +229,5 @@ type AgentKey struct {
 	CreditsEarned float64 `json:"credits_earned"`
 	Reputation    float64 `json:"reputation"`
 	Active        bool    `json:"active"`
+	UserID        string  `json:"user_id,omitempty"` // ID of the user owning this key
 }

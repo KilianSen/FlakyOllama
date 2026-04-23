@@ -4,97 +4,45 @@ import OpenAI from 'openai';
 const getBaseUrl = () => {
   return ''; // Always use relative paths to go through Vite proxy / Nginx
 };
-const getToken = () => localStorage.getItem('BALANCER_TOKEN') || import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
 
-export const getOllamaClient = () => {
-  const host = getBaseUrl();
-  const token = getToken();
-  return new Ollama({ 
-    host: host || window.location.origin,
-    headers: {
-      'Authorization': `Bearer ${token}`
-    }
-  });
-};
-
-export const getOpenAIClient = () => {
-  const host = getBaseUrl();
-  const token = getToken();
-  return new OpenAI({
-    baseURL: host ? `${host}/v1` : `${window.location.origin}/v1`,
-    apiKey: token,
-    dangerouslyAllowBrowser: true,
-  });
-};
-
-export interface ModelInfo {
-  name: string;
-  modified_at: string;
-  size: number;
-}
+const getToken = () => localStorage.getItem('BALANCER_TOKEN') || import.meta.env.VITE_BALANCER_TOKEN || '';
 
 export interface NodeStatus {
   id: string;
   address: string;
+  state: number;
   tier: string;
-  has_gpu: boolean;
-  cpu_usage: number;
+  cpu_usage: float64;
   cpu_cores: number;
-  memory_usage: number;
+  memory_usage: float64;
   memory_total: number;
   vram_total: number;
   vram_used: number;
   gpu_model: string;
   gpu_temp: number;
   active_models: string[];
-  local_models: ModelInfo[];
-  last_seen: string;
-  state: number;
-  errors: number;
-  message?: string;
-  cooloff_until: string;
-  draining: boolean;
+  local_models: Array<{ name: string, size: number }>;
   input_tokens: number;
   output_tokens: number;
   token_reward: number;
   reputation: number;
+  errors: number;
+  message: string;
+  has_gpu: boolean;
+  draining: boolean;
+  last_seen: string;
 }
 
 export interface ClusterStatus {
   nodes: Record<string, NodeStatus>;
-  pending_requests: Record<string, number>;
-  in_progress_pulls: Record<string, string>;
-  node_workloads: Record<string, number>;
-  queue_depth: number;
   active_workloads: number;
-  all_models: string[];
-  total_vram: number;
-  used_vram: number;
-  total_cpu_cores: number;
   avg_cpu_usage: number;
   avg_mem_usage: number;
-  uptime_seconds: number;
-  model_policies: Record<string, Record<string, { Banned: boolean; Pinned: boolean }>>;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  total_reward: number;
-  total_cost: number;
-  performance: Record<string, { avg_ttft_ms: number; avg_duration_ms: number; requests: number }>;
-}
-
-export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
-
-export type ModelRequestStatus = 'pending' | 'approved' | 'declined';
-export type ModelRequestType = 'pull' | 'delete' | 'copy';
-
-export interface ModelRequest {
-  id: string;
-  type: ModelRequestType;
-  model: string;
-  node_id: string;
-  status: ModelRequestStatus;
-  requested_at: string;
-  approved_at?: string;
+  pending_requests: Record<string, number>;
+  all_models: string[];
+  performance: Record<string, { avg_ttft_ms: number, avg_duration_ms: number, requests: number }>;
+  total_vram: number;
+  used_vram: number;
 }
 
 export interface ClientKey {
@@ -104,6 +52,7 @@ export interface ClientKey {
   quota_used: number;
   credits: number;
   active: boolean;
+  user_id?: string;
 }
 
 export interface AgentKey {
@@ -111,94 +60,51 @@ export interface AgentKey {
   label: string;
   node_id: string;
   credits_earned: number;
+  reputation: number;
   active: boolean;
+  user_id?: string;
+}
+
+export interface LogEntry {
+  timestamp: string;
+  node_id: string;
+  level: string;
+  component: string;
+  message: string;
+}
+
+export interface ModelRequest {
+  id: string;
+  type: string;
+  model: string;
+  node_id: string;
+  status: string;
+  requested_at: string;
 }
 
 export interface Catalog {
   global_reward_multiplier: number;
   global_cost_multiplier: number;
-  models: {
-    name: string;
-    reward_factor: number;
-    cost_factor: number;
-  }[];
+  models: Array<{ name: string, reward_factor: number, cost_factor: number }>;
 }
 
-export interface Identity {
-  type: 'client' | 'agent';
-  label: string;
-  data: any;
+export interface ProfileResponse {
+  user: User;
+  client_key: ClientKey;
+  agent_keys: AgentKey[];
 }
 
-export interface Job {
+export interface User {
   id: string;
-  type: string;
-  status: JobStatus;
-  message?: string;
-  progress: number;
-  created_at: string;
-  updated_at: string;
+  sub: string;
+  email: string;
+  name: string;
+  is_admin: boolean;
 }
 
-export interface InferenceRequest {
-  model: string;
-  prompt: string;
-  stream?: boolean;
-  node_id?: string;
-  node_addr?: string;
-}
-
-export interface InferenceResponse {
-  agent_id: string;
-  response: string;
-}
-
-export interface RoutingWeights {
-  cpu_load_weight: number;
-  workload_penalty: number;
-  success_rate_weight: number;
-  latency_weight: number;
-  loaded_model_bonus: number;
-  local_model_bonus: number;
-}
-
-export interface CBConfig {
-  error_threshold: number;
-  cooloff_sec: number;
-}
-
-export interface TLSConfig {
-  enabled: boolean;
-  cert_file: string;
-  key_file: string;
-  insecure_skip_verify: boolean;
-}
-
-export interface Config {
-  port: number;
-  host: string;
-  db_path: string;
-  auth_token: string;
-  remote_token: string;
-  max_queue_depth: number;
-  enable_hedging: boolean;
-  hedging_percentile: number;
-  circuit_breaker: CBConfig;
-  weights: RoutingWeights;
-  stall_timeout_sec: number;
-  stale_threshold: number;
-  keep_alive_duration_sec: number;
-  tls: TLSConfig;
-  poll_interval_ms: number;
-  enable_model_approval: boolean;
-  global_reward_multiplier: number;
-  global_cost_multiplier: number;
-  model_reward_factors: Record<string, number>;
-  model_cost_factors: Record<string, number>;
-  max_vram_allocated: number;
-  max_cpu_allocated: number;
-  enable_auto_scaling: boolean;
-  auto_scale_threshold: number;
+export interface UserWithKey {
+  user: User;
+  key: ClientKey;
 }
 
 class FlakyOllamaSDK {
@@ -214,19 +120,26 @@ class FlakyOllamaSDK {
         ...options.headers 
       },
     });
-    
+
     if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(error.error || `Request failed with status ${res.status}`);
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
     }
-    
+
     if (res.status === 204) return {} as T;
     return res.json();
   }
 
-  // Cluster & Nodes
-  async getStatus(): Promise<ClusterStatus> {
+  async getClusterStatus(): Promise<ClusterStatus> {
     return this.request<ClusterStatus>('/api/v1/status');
+  }
+
+  async getLogs(): Promise<ReadableStream> {
+    const baseUrl = getBaseUrl();
+    const res = await fetch(`${baseUrl}/api/v1/logs`, {
+      headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    return res.body!;
   }
 
   async getNodes(): Promise<NodeStatus[]> {
@@ -241,15 +154,14 @@ class FlakyOllamaSDK {
     return this.request(`/api/v1/nodes/${id}/undrain`, { method: 'POST' });
   }
 
-  // Models
-  async pullModel(model: string, nodeId?: string): Promise<{ job_id: string; status: string }> {
-    return this.request('/api/v1/models/pull', {
+  async pullModel(name: string, nodeId?: string): Promise<{ job_id: string }> {
+    return this.request<{ job_id: string }>('/api/v1/models/pull', {
       method: 'POST',
-      body: JSON.stringify({ model, node_id: nodeId }),
+      body: JSON.stringify({ model: name, node_id: nodeId }),
     });
   }
 
-  async deleteModel(name: string): Promise<{ job_id: string; status: string }> {
+  async deleteModel(name: string): Promise<{ status: string }> {
     return this.request(`/api/v1/models/${name}`, { method: 'DELETE' });
   }
 
@@ -261,106 +173,46 @@ class FlakyOllamaSDK {
   }
 
   // Jobs
-  async getJob(id: string): Promise<Job> {
-    return this.request<Job>(`/api/v1/jobs/${id}`);
+  async getJobStatus(id: string): Promise<{ status: string, progress: number, message?: string }> {
+    return this.request(`/api/v1/jobs/${id}`);
   }
 
-  async waitForJob(id: string, onProgress?: (job: Job) => void): Promise<Job> {
-    while (true) {
-      const job = await this.getJob(id);
-      if (onProgress) onProgress(job);
-      
-      if (job.status === 'completed') return job;
-      if (job.status === 'failed') throw new Error(job.message || 'Job failed');
-      
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
-
-  // Inference
-  async testInference(req: InferenceRequest): Promise<InferenceResponse> {
-    return this.request<InferenceResponse>('/api/v1/test', {
-      method: 'POST',
-      body: JSON.stringify(req),
-    });
-  }
-
-  // Logs
-  streamLogs(onMessage: (msg: string) => void): () => void {
-    const baseUrl = getBaseUrl();
-    const token = getToken();
-    let logUrl = `${baseUrl}/api/v1/logs`;
-    if (!logUrl.startsWith('http')) {
-      logUrl = new URL(logUrl, window.location.origin).toString();
-    }
-    const url = new URL(logUrl);
-    url.searchParams.set('token', token);
-
-    let eventSource: EventSource | null = null;
-    let retryTimeout: any = null;
-
-    const connect = () => {
-      console.log(`[SSE] Connecting to ${url.toString()}...`);
-      eventSource = new EventSource(url.toString(), { withCredentials: false });
-      
-      eventSource.onopen = () => {
-        console.log('[SSE] Connection established');
+  async waitForJob(id: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const check = async () => {
+        try {
+          const res = await this.getJobStatus(id);
+          if (res.status === 'completed') resolve();
+          else if (res.status === 'failed') reject(new Error(res.message || 'Job failed'));
+          else setTimeout(check, 1000);
+        } catch (err) { reject(err); }
       };
-
-      eventSource.onmessage = (event) => {
-        console.debug('[SSE] Received message:', event.data);
-        onMessage(event.data);
-      };
-
-      eventSource.onerror = (err) => {
-        console.error('[SSE] EventSource failed:', err);
-        if (eventSource) eventSource.close();
-        
-        // Retry after 3s
-        clearTimeout(retryTimeout);
-        retryTimeout = setTimeout(connect, 3000);
-      };
-    };
-
-    connect();
-
-    return () => {
-      console.log('[SSE] Closing connection');
-      if (eventSource) eventSource.close();
-      clearTimeout(retryTimeout);
-    };
-  }
-
-  // Config
-  async getConfig(): Promise<Config> {
-    return this.request<Config>('/api/v1/config');
-  }
-
-  async updateConfig(config: Config): Promise<{ status: string }> {
-    return this.request('/api/v1/config', {
-      method: 'POST',
-      body: JSON.stringify(config),
+      check();
     });
   }
 
   // Model Requests
-  async getModelRequests(status?: string): Promise<ModelRequest[]> {
-    const path = status ? `/api/v1/requests?status=${status}` : '/api/v1/requests';
-    return this.request<ModelRequest[]>(path);
+  async getModelRequests(): Promise<ModelRequest[]> {
+    return this.request<ModelRequest[]>('/api/v1/requests');
   }
 
-  async approveModelRequest(id: string): Promise<{ status: string; job_id?: string }> {
+  async approveRequest(id: string): Promise<{ status: string }> {
     return this.request(`/api/v1/requests/${id}/approve`, { method: 'POST' });
   }
 
-  async declineModelRequest(id: string): Promise<{ status: string }> {
+  async declineRequest(id: string): Promise<{ status: string }> {
     return this.request(`/api/v1/requests/${id}/decline`, { method: 'POST' });
   }
 
-  async setModelPolicy(model: string, nodeID: string, banned: boolean, pinned: boolean): Promise<{ status: string }> {
-    return this.request('/api/v1/policies', {
+  // Configuration
+  async getConfig(): Promise<any> {
+    return this.request('/api/v1/config');
+  }
+
+  async updateConfig(cfg: any): Promise<{ status: string }> {
+    return this.request('/api/v1/config', {
       method: 'POST',
-      body: JSON.stringify({ model, node_id: nodeID, banned, pinned }),
+      body: JSON.stringify(cfg),
     });
   }
 
@@ -395,19 +247,18 @@ class FlakyOllamaSDK {
   async getMe(): Promise<ProfileResponse> {
     return this.request<ProfileResponse>('/api/v1/me');
   }
-}
 
-export interface User {
-  id: string;
-  sub: string;
-  email: string;
-  name: string;
-  is_admin: boolean;
-}
+  // User Management (Admin)
+  async getUsers(): Promise<UserWithKey[]> {
+    return this.request<UserWithKey[]>('/api/v1/users');
+  }
 
-export interface ProfileResponse {
-  user: User;
-  key: ClientKey;
+  async updateUserQuota(userId: string, quota: number): Promise<{ status: string }> {
+    return this.request(`/api/v1/users/${userId}/quota`, {
+      method: 'POST',
+      body: JSON.stringify({ quota_limit: quota }),
+    });
+  }
 }
 
 export const sdk = new FlakyOllamaSDK();

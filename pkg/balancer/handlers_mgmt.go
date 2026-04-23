@@ -792,3 +792,49 @@ func (b *Balancer) HandleV1ConfigUpdate(w http.ResponseWriter, r *http.Request) 
 
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "config updated"})
 }
+
+func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
+	users, err := b.Storage.ListUsers()
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, "failed to list users: "+err.Error())
+		return
+	}
+
+	type userWithKey struct {
+		models.User
+		Key models.ClientKey `json:"key"`
+	}
+
+	var resp []userWithKey
+	for _, u := range users {
+		k, _ := b.Storage.GetClientKeyByUserID(u.ID)
+		resp = append(resp, userWithKey{User: u, Key: k})
+	}
+
+	b.jsonResponse(w, http.StatusOK, resp)
+}
+
+func (b *Balancer) HandleV1UserUpdateQuota(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		QuotaLimit int64 `json:"quota_limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	k, err := b.Storage.GetClientKeyByUserID(id)
+	if err != nil {
+		b.jsonError(w, http.StatusNotFound, "user has no client key")
+		return
+	}
+
+	k.QuotaLimit = req.QuotaLimit
+	if err := b.Storage.UpdateClientKey(k); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, "failed to update quota: "+err.Error())
+		return
+	}
+
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "quota updated"})
+}

@@ -103,7 +103,16 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			node_id TEXT,
 			credits_earned REAL DEFAULT 0,
 			reputation REAL DEFAULT 1.0,
-			active BOOLEAN DEFAULT 1
+			active BOOLEAN DEFAULT 1,
+			user_id TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS user_model_policies (
+			user_id TEXT,
+			model TEXT,
+			reward_factor REAL DEFAULT 1.0,
+			cost_factor REAL DEFAULT 1.0,
+			is_disabled BOOLEAN DEFAULT 0,
+			PRIMARY KEY (user_id, model)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_token_usage_node ON token_usage (node_id);`,
 	}
@@ -364,8 +373,8 @@ func (s *SQLiteStorage) GetClientKeyByUserID(userID string) (models.ClientKey, e
 
 // Agent Key Management
 func (s *SQLiteStorage) CreateAgentKey(k models.AgentKey) error {
-	_, err := s.db.Exec(`INSERT INTO agent_keys (key, label, node_id) VALUES (?, ?, ?)`,
-		k.Key, k.Label, k.NodeID)
+	_, err := s.db.Exec(`INSERT INTO agent_keys (key, label, node_id, user_id) VALUES (?, ?, ?, ?)`,
+		k.Key, k.Label, k.NodeID, k.UserID)
 	return err
 }
 
@@ -377,13 +386,17 @@ func (s *SQLiteStorage) RecordReputation(key string, change float64) error {
 
 func (s *SQLiteStorage) GetAgentKey(key string) (models.AgentKey, error) {
 	var k models.AgentKey
-	err := s.db.QueryRow(`SELECT key, label, node_id, credits_earned, reputation, active FROM agent_keys WHERE key = ?`, key).
-		Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active)
+	var userID sql.NullString
+	err := s.db.QueryRow(`SELECT key, label, node_id, credits_earned, reputation, active, user_id FROM agent_keys WHERE key = ?`, key).
+		Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID)
+	if userID.Valid {
+		k.UserID = userID.String
+	}
 	return k, err
 }
 
 func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
-	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active FROM agent_keys`)
+	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id FROM agent_keys`)
 	if err != nil {
 		return nil, err
 	}
@@ -391,12 +404,93 @@ func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
 	var keys []models.AgentKey
 	for rows.Next() {
 		var k models.AgentKey
-		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active); err != nil {
+		var userID sql.NullString
+		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID); err != nil {
+			return nil, err
+		}
+		if userID.Valid {
+			k.UserID = userID.String
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+func (s *SQLiteStorage) ListUsers() ([]models.User, error) {
+	rows, err := s.db.Query(`SELECT id, sub, email, name, is_admin FROM users`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, nil
+}
+
+func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, error) {
+	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id FROM agent_keys WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []models.AgentKey
+	for rows.Next() {
+		var k models.AgentKey
+		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &k.UserID); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
 	}
 	return keys, nil
+}
+
+func (s *SQLiteStorage) UpdateClientKey(k models.ClientKey) error {
+	_, err := s.db.Exec(`UPDATE client_keys SET label = ?, quota_limit = ?, quota_used = ?, credits = ?, active = ? WHERE key = ?`,
+		k.Label, k.QuotaLimit, k.QuotaUsed, k.Credits, k.Active, k.Key)
+	return err
+}
+
+func (s *SQLiteStorage) SetUserModelPolicy(p models.UserModelPolicy) error {
+	_, err := s.db.Exec(`INSERT INTO user_model_policies (user_id, model, reward_factor, cost_factor, is_disabled) 
+		VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, model) DO UPDATE SET 
+		reward_factor = excluded.reward_factor, cost_factor = excluded.cost_factor, is_disabled = excluded.is_disabled`,
+		p.UserID, p.Model, p.RewardFactor, p.CostFactor, p.Disabled)
+	return err
+}
+
+func (s *SQLiteStorage) GetUserModelPolicy(userID, model string) (models.UserModelPolicy, error) {
+	var p models.UserModelPolicy
+	err := s.db.QueryRow(`SELECT user_id, model, reward_factor, cost_factor, is_disabled FROM user_model_policies 
+		WHERE user_id = ? AND model = ?`, userID, model).
+		Scan(&p.UserID, &p.Model, &p.RewardFactor, &p.CostFactor, &p.Disabled)
+	if err != nil {
+		// Default policy
+		return models.UserModelPolicy{UserID: userID, Model: model, RewardFactor: 1.0, CostFactor: 1.0, Disabled: false}, nil
+	}
+	return p, nil
+}
+
+func (s *SQLiteStorage) ListUserModelPolicies(userID string) ([]models.UserModelPolicy, error) {
+	rows, err := s.db.Query(`SELECT user_id, model, reward_factor, cost_factor, is_disabled FROM user_model_policies WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []models.UserModelPolicy
+	for rows.Next() {
+		var p models.UserModelPolicy
+		if err := rows.Scan(&p.UserID, &p.Model, &p.RewardFactor, &p.CostFactor, &p.Disabled); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, nil
 }
 
 func (s *SQLiteStorage) GetModelPolicies() (map[string]map[string]struct{ Banned, Pinned bool }, error) {

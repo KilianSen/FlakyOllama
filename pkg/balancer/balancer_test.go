@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/shared/models"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +14,7 @@ func TestBalancer_Route(t *testing.T) {
 	b, _ := NewBalancer(":8080", ":memory:", nil)
 
 	// Test case 1: No agents
-	_, _, err := b.Route(models.InferenceRequest{Model: "llama2"}, "")
+	_, _, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
 	if err == nil {
 		t.Errorf("Expected error when no agents available, got nil")
 	}
@@ -31,7 +32,7 @@ func TestBalancer_Route(t *testing.T) {
 	// Wait for actor to process upsert
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err := b.Route(models.InferenceRequest{Model: "llama2"}, "")
+	id, addr, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestBalancer_Route(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err = b.Route(models.InferenceRequest{Model: "llama2"}, "")
+	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestBalancer_Route(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err = b.Route(models.InferenceRequest{Model: "llama2"}, "")
+	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
 	}
