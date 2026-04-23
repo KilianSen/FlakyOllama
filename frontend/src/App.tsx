@@ -74,9 +74,28 @@ const App = () => {
   }
 
   if (!user && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage) {
-    // Redirect to OIDC login via proxy to maintain cookie context
-    window.location.href = `/auth/login`;
-    return null;
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+            <Zap size={20} className="text-primary animate-pulse" />
+          </div>
+          <div>
+            <p className="text-sm font-black uppercase tracking-widest">FlakyOllama</p>
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">Authentication Required</p>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground font-bold text-center max-w-sm">
+          You must be logged in to access the orchestrator console.
+        </p>
+        <Button 
+          className="font-black uppercase tracking-widest text-xs px-8"
+          onClick={() => window.location.href = '/auth/login'}
+        >
+          Login with OIDC
+        </Button>
+      </div>
+    );
   }
 
   if (!status && !isConfigPage && !isPortalPage) {

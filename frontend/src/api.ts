@@ -1,7 +1,20 @@
 import { Ollama } from 'ollama/browser';
 import OpenAI from 'openai';
 
-const getBaseUrl = () => localStorage.getItem('BALANCER_URL') || import.meta.env.VITE_BALANCER_URL || '';
+const getBaseUrl = () => {
+  const stored = localStorage.getItem('BALANCER_URL');
+  if (stored) return stored;
+  
+  // If we are in development and the env var is a full URL, 
+  // we likely want to use the Vite proxy instead of direct cross-origin calls
+  // to ensure cookies work.
+  const envUrl = import.meta.env.VITE_BALANCER_URL;
+  if (envUrl && envUrl.startsWith('http') && window.location.hostname === 'localhost') {
+    return ''; 
+  }
+  
+  return envUrl || '';
+};
 const getToken = () => localStorage.getItem('BALANCER_TOKEN') || import.meta.env.VITE_BALANCER_TOKEN || 'your-secret-balancer-token';
 
 export const getOllamaClient = () => {

@@ -21,16 +21,19 @@ export default defineConfig(({ mode }) => {
           target,
           changeOrigin: true,
           secure: false,
+          xfwd: true,
         },
         '/v1': {
           target,
           changeOrigin: true,
           secure: false,
+          xfwd: true,
         },
         '/auth': {
           target,
           changeOrigin: true,
           secure: false,
+          xfwd: true,
         }
       }
     }

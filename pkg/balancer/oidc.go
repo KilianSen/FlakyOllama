@@ -244,15 +244,18 @@ func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
 func randString(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func setCookie(r *http.Request, w http.ResponseWriter, name, value string, duration time.Duration) {
 	// Determine if we should use Secure flag
-	// Always false for localhost/127.0.0.1 unless explicitly using HTTPS
-	host := r.Host
-	isLocal := strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1")
+	// Check X-Forwarded-Host because proxies like Vite change r.Host
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
 
+	isLocal := strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1")
 	secure := (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https") && !isLocal
 
 	http.SetCookie(w, &http.Cookie{
