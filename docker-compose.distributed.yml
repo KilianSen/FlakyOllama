@@ -42,7 +42,7 @@ services:
       - OIDC_CLIENT_SECRET=1He5qvuu8fRfE6A9BdQ01kfbM25neG1H
       - OIDC_REDIRECT_URL=http://localhost:5173/auth/callback
       - OIDC_ADMIN_CLAIM=groups
-      - OIDC_ADMIN_VALUE=admins
+      - OIDC_ADMIN_VALUE=admin
     restart: always
 
 volumes:

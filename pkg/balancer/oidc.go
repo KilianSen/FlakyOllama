@@ -118,12 +118,13 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	isAdmin := false
 	if b.Config.OIDC.AdminClaim != "" {
 		if val, ok := claims[b.Config.OIDC.AdminClaim]; ok {
+			target := strings.ToLower(b.Config.OIDC.AdminValue)
 			switch v := val.(type) {
 			case string:
-				isAdmin = v == b.Config.OIDC.AdminValue
+				isAdmin = strings.ToLower(v) == target
 			case []interface{}:
 				for _, item := range v {
-					if s, ok := item.(string); ok && s == b.Config.OIDC.AdminValue {
+					if s, ok := item.(string); ok && strings.ToLower(s) == target {
 						isAdmin = true
 						break
 					}
@@ -131,6 +132,7 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	logging.Global.Infof("OIDC: User %s (admin: %v)", name, isAdmin)
 
 	// Find or create user
 	user, err := b.Storage.GetUserBySub(sub)
