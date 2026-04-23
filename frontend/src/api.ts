@@ -12,16 +12,16 @@ export interface NodeStatus {
   address: string;
   state: number;
   tier: string;
-  cpu_usage: float64;
+  cpu_usage: number;
   cpu_cores: number;
-  memory_usage: float64;
+  memory_usage: number;
   memory_total: number;
   vram_total: number;
   vram_used: number;
   gpu_model: string;
   gpu_temp: number;
   active_models: string[];
-  local_models: Array<{ name: string, size: number }>;
+  local_models: Array<{ model: string, size: number }>;
   input_tokens: number;
   output_tokens: number;
   token_reward: number;
@@ -31,6 +31,7 @@ export interface NodeStatus {
   has_gpu: boolean;
   draining: boolean;
   last_seen: string;
+  agent_key?: string;
 }
 
 export interface ClusterStatus {
@@ -43,6 +44,16 @@ export interface ClusterStatus {
   performance: Record<string, { avg_ttft_ms: number, avg_duration_ms: number, requests: number }>;
   total_vram: number;
   used_vram: number;
+  uptime_seconds: number;
+  queue_depth: number;
+  total_cpu_cores: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_reward: number;
+  total_cost: number;
+  node_workloads: Record<string, number>;
+  in_progress_pulls: Record<string, string>;
+  model_policies: Record<string, Record<string, { banned: boolean, pinned: boolean }>>;
 }
 
 export interface ClientKey {
@@ -107,6 +118,12 @@ export interface UserWithKey {
   key: ClientKey;
 }
 
+export type Identity = {
+    type: 'client' | 'agent';
+    label: string;
+    data: any;
+};
+
 class FlakyOllamaSDK {
   private async request<T>(path: string, options: RequestInit = {}, tokenOverride?: string): Promise<T> {
     const baseUrl = getBaseUrl();
@@ -130,8 +147,17 @@ class FlakyOllamaSDK {
     return res.json();
   }
 
+  // Legacy/Compatibility
+  async getStatus(): Promise<ClusterStatus> {
+    return this.getClusterStatus();
+  }
+
   async getClusterStatus(): Promise<ClusterStatus> {
     return this.request<ClusterStatus>('/api/v1/status');
+  }
+
+  async streamLogs(): Promise<ReadableStream> {
+      return this.getLogs();
   }
 
   async getLogs(): Promise<ReadableStream> {
@@ -154,8 +180,8 @@ class FlakyOllamaSDK {
     return this.request(`/api/v1/nodes/${id}/undrain`, { method: 'POST' });
   }
 
-  async pullModel(name: string, nodeId?: string): Promise<{ job_id: string }> {
-    return this.request<{ job_id: string }>('/api/v1/models/pull', {
+  async pullModel(name: string, nodeId?: string): Promise<{ status: string, job_id: string }> {
+    return this.request<{ status: string, job_id: string }>('/api/v1/models/pull', {
       method: 'POST',
       body: JSON.stringify({ model: name, node_id: nodeId }),
     });
@@ -196,8 +222,16 @@ class FlakyOllamaSDK {
     return this.request<ModelRequest[]>('/api/v1/requests');
   }
 
+  async approveModelRequest(id: string): Promise<{ status: string }> {
+      return this.approveRequest(id);
+  }
+
   async approveRequest(id: string): Promise<{ status: string }> {
     return this.request(`/api/v1/requests/${id}/approve`, { method: 'POST' });
+  }
+
+  async declineModelRequest(id: string): Promise<{ status: string }> {
+      return this.declineRequest(id);
   }
 
   async declineRequest(id: string): Promise<{ status: string }> {
@@ -239,6 +273,14 @@ class FlakyOllamaSDK {
     });
   }
 
+  // Policies
+  async setModelPolicy(model: string, nodeId: string, banned: boolean, pinned: boolean): Promise<{status: string}> {
+      return this.request('/api/v1/policies', {
+          method: 'POST',
+          body: JSON.stringify({ model, node_id: nodeId, is_banned: banned, is_pinned: pinned })
+      });
+  }
+
   // Public / Self-service
   async getCatalog(): Promise<Catalog> {
     return this.request<Catalog>('/api/v1/catalog');
@@ -257,6 +299,25 @@ class FlakyOllamaSDK {
     return this.request(`/api/v1/users/${userId}/quota`, {
       method: 'POST',
       body: JSON.stringify({ quota_limit: quota }),
+    });
+  }
+
+  async testInference(req: any): Promise<any> {
+      return this.request('/api/v1/test', {
+          method: 'POST',
+          body: JSON.stringify(req)
+      });
+  }
+
+  getOllamaClient() {
+    return new Ollama({ host: getBaseUrl() || window.location.origin });
+  }
+
+  getOpenAIClient() {
+    return new OpenAI({ 
+        baseURL: (getBaseUrl() || window.location.origin) + '/v1', 
+        apiKey: getToken(),
+        dangerouslyAllowBrowser: true 
     });
   }
 }
