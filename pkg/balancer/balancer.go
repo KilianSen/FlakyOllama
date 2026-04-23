@@ -8,11 +8,7 @@ import (
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
-	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,12 +19,13 @@ import (
 type Balancer struct {
 	Address string
 	Config  *config.Config
-	State   *state.Actor
+	State   *state.ClusterStateActor
 	Storage *storage.SQLiteStorage
-	Jobs    *jobs.Manager
+	Jobs    *jobs.JobManager
 	Queue   *RequestQueue
 
 	httpClient *http.Client
+	StartTime  time.Time
 
 	// Performance cache: node_id:model -> PerformanceMetric
 	perfMu    sync.RWMutex
@@ -78,13 +75,14 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 	b := &Balancer{
 		Address: addr,
 		Config:  cfg,
-		State:   state.NewActor(),
+		State:   state.NewClusterStateActor(),
 		Storage: s,
-		Jobs:    jobs.NewManager(),
+		Jobs:    jobs.NewJobManager(),
 		Queue:   NewRequestQueue(),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Minute, // Long timeout for inference
 		},
+		StartTime:      time.Now(),
 		PerfCache:      make(map[string]storage.PerformanceMetric),
 		ClientAffinity: make(map[string]string),
 		MetricCh:       make(chan metricEntry, 1000),
@@ -93,6 +91,8 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		logChs:         make(map[chan string]bool),
 		stopCh:         make(chan struct{}),
 	}
+
+	b.State.Start()
 
 	return b, nil
 }
