@@ -264,6 +264,9 @@ func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 					next.ServeHTTP(w, r)
 					return
 				}
+				logging.Global.Warnf("AdminOnly: Access denied for user %s (Not an Admin)", user.Email)
+			} else {
+				logging.Global.Warnf("AdminOnly: Context user has wrong type: %T", val)
 			}
 		}
 
@@ -275,6 +278,7 @@ func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 			}
 		}
 
+		logging.Global.Warnf("AdminOnly: Forbidden access to %s from %s", r.URL.Path, r.RemoteAddr)
 		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
 	})
 }
