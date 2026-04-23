@@ -195,7 +195,7 @@ export const PlaygroundPage: React.FC = () => {
                   <SelectContent>
                     <SelectItem value="dynamic" className="font-bold text-xs">⚖️ Dynamic Balancing</SelectItem>
                     <Separator className="my-1" />
-                    {nodes.map(n => (
+                    {nodes.filter(n => n.id).map(n => (
                       <SelectItem key={n.id} value={n.id} className="font-bold text-xs">
                         {n.has_gpu ? '⚡' : '●'} {n.id}
                       </SelectItem>

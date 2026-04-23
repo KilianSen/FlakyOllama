@@ -170,6 +170,12 @@ func (b *Balancer) NewMux() *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(b.CORS)
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			logging.Global.Infof("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Use(b.SessionMiddleware)
 
 	// OIDC Auth

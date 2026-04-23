@@ -33,25 +33,26 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             <SelectValue placeholder={placeholder} />
           </SelectTrigger>
           <SelectContent className="max-h-80">
-            {models.length === 0 && (
-              <SelectItem value="" disabled className="text-xs">No models in cluster</SelectItem>
+            {models.length === 0 ? (
+              <SelectItem value="none" disabled className="text-xs">No models in cluster</SelectItem>
+            ) : (
+              models.map(m => {
+                const r = status ? computeRoutability(m, status) : null;
+                const hint = r ? LATENCY_HINTS[r.latencyHint] : null;
+                return (
+                  <SelectItem key={m} value={m} className="pr-2">
+                    <div className="flex items-center gap-2 w-full min-w-0">
+                      <span className="font-bold text-xs font-mono truncate flex-1">{m}</span>
+                      {hint && (
+                        <span className={`text-[9px] font-black shrink-0 ${hint.color}`}>
+                          {hint.label}
+                        </span>
+                      )}
+                    </div>
+                  </SelectItem>
+                );
+              })
             )}
-            {models.map(m => {
-              const r = status ? computeRoutability(m, status) : null;
-              const hint = r ? LATENCY_HINTS[r.latencyHint] : null;
-              return (
-                <SelectItem key={m} value={m} className="pr-2">
-                  <div className="flex items-center gap-2 w-full min-w-0">
-                    <span className="font-bold text-xs font-mono truncate flex-1">{m}</span>
-                    {hint && (
-                      <span className={`text-[9px] font-black shrink-0 ${hint.color}`}>
-                        {hint.label}
-                      </span>
-                    )}
-                  </div>
-                </SelectItem>
-              );
-            })}
           </SelectContent>
         </Select>
 

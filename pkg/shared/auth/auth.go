@@ -22,6 +22,7 @@ type KeyManager interface {
 }
 
 // Middleware checks for a Bearer token in the Authorization header or query param.
+// It prioritizes OIDC sessions from SessionMiddleware if present.
 func Middleware(token string, km KeyManager, next http.HandlerFunc) http.HandlerFunc {
 	token = strings.TrimSpace(token)
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +30,16 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 		if r.Method == "OPTIONS" {
 			next(w, r)
 			return
+		}
+
+		// 0. Check if we have a user from SessionMiddleware (OIDC)
+		// We check this FIRST so that browser sessions take precedence over default tokens
+		if val := r.Context().Value(ContextKeyUser); val != nil {
+			if _, ok := val.(models.User); ok {
+				next(w, r)
+				return
+			}
+			logging.Global.Warnf("Auth: Context user has wrong type: %T for %s", val, r.URL.Path)
 		}
 
 		authHeader := r.Header.Get("Authorization")
@@ -45,13 +56,7 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 		}
 
 		if receivedToken == "" {
-			// Check if we have a user from SessionMiddleware
-			if _, ok := r.Context().Value(ContextKeyUser).(models.User); ok {
-				next(w, r)
-				return
-			}
-
-			logging.Global.Warnf("Auth failure: No token provided for %s %s", r.Method, r.URL.Path)
+			logging.Global.Warnf("Auth failure: No session or token provided for %s %s", r.Method, r.URL.Path)
 			http.Error(w, "Authorization required", http.StatusUnauthorized)
 			return
 		}

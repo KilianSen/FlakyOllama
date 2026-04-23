@@ -273,7 +273,7 @@ export const RegistryPage: React.FC = () => {
                        <SelectTrigger className="h-8 w-24 text-[9px] font-black uppercase">Deploy</SelectTrigger>
                        <SelectContent>
                           <SelectItem value="cluster">Cluster</SelectItem>
-                          {nodes.map(n => <SelectItem key={n.id} value={n.id}>{n.id}</SelectItem>)}
+                          {nodes.filter(n => n.id).map(n => <SelectItem key={n.id} value={n.id}>{n.id}</SelectItem>)}
                        </SelectContent>
                     </Select>
                   </div>

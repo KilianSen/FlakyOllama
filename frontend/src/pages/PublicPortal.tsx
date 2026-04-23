@@ -37,7 +37,8 @@ export const PublicPortal: React.FC = () => {
       toast.success('Identity verified');
     } catch (err: any) {
       setProfile(null);
-      toast.error('Authentication failed. Please login via the main console.');
+      // If unauthorized, redirect to login via proxy
+      window.location.href = `/auth/login`;
     } finally {
       setLoading(false);
     }

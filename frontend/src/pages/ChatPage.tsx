@@ -250,7 +250,7 @@ export const ChatPage: React.FC = () => {
               <SelectValue placeholder="Model..." />
             </SelectTrigger>
             <SelectContent>
-              {models.map(m => {
+              {models.filter(m => m).map(m => {
                 const r = status ? computeRoutability(m, status) : null;
                 const hint = r ? LATENCY_HINTS[r.latencyHint] : null;
                 return (

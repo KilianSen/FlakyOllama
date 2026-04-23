@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/shared/auth"
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/rand"
@@ -17,7 +18,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-var jwtKey = []byte("flakyollama-secret-key-change-me") // In production, this should be in config
+var jwtKey = []byte("flakyollama-secret-key-change-me")
 
 type Claims struct {
 	UserID  string `json:"user_id"`
@@ -47,6 +48,7 @@ func (b *Balancer) initOIDC() (*oidc.Provider, oauth2.Config, error) {
 }
 
 func (b *Balancer) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	logging.Global.Infof("OIDC: Login initiated from %s", r.RemoteAddr)
 	_, oauth2Config, err := b.initOIDC()
 	if err != nil {
 		http.Error(w, "OIDC Provider Error: "+err.Error(), http.StatusInternalServerError)
@@ -60,26 +62,36 @@ func (b *Balancer) HandleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
+	logging.Global.Infof("OIDC: Callback received")
 	state, err := r.Cookie("oidc_state")
-	if err != nil || r.URL.Query().Get("state") != state.Value {
+	if err != nil {
+		logging.Global.Errorf("OIDC: State cookie missing")
+		http.Error(w, "Invalid state", http.StatusBadRequest)
+		return
+	}
+	if r.URL.Query().Get("state") != state.Value {
+		logging.Global.Errorf("OIDC: State mismatch. Expected %s, got %s", state.Value, r.URL.Query().Get("state"))
 		http.Error(w, "Invalid state", http.StatusBadRequest)
 		return
 	}
 
 	provider, oauth2Config, err := b.initOIDC()
 	if err != nil {
+		logging.Global.Errorf("OIDC: Provider init failed: %v", err)
 		http.Error(w, "OIDC Provider Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	token, err := oauth2Config.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
+		logging.Global.Errorf("OIDC: Token exchange failed: %v", err)
 		http.Error(w, "Failed to exchange token", http.StatusInternalServerError)
 		return
 	}
 
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok {
+		logging.Global.Errorf("OIDC: No id_token in exchange response")
 		http.Error(w, "No id_token", http.StatusInternalServerError)
 		return
 	}
@@ -87,12 +99,14 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	verifier := provider.Verifier(&oidc.Config{ClientID: b.Config.OIDC.ClientID})
 	idToken, err := verifier.Verify(r.Context(), rawIDToken)
 	if err != nil {
+		logging.Global.Errorf("OIDC: ID Token verification failed: %v", err)
 		http.Error(w, "Failed to verify ID Token", http.StatusInternalServerError)
 		return
 	}
 
 	var claims map[string]interface{}
 	if err := idToken.Claims(&claims); err != nil {
+		logging.Global.Errorf("OIDC: Failed to parse claims: %v", err)
 		http.Error(w, "Failed to parse claims", http.StatusInternalServerError)
 		return
 	}
@@ -129,21 +143,26 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			Name:    name,
 			IsAdmin: isAdmin,
 		}
-		b.Storage.CreateUser(user)
+		if err := b.Storage.CreateUser(user); err != nil {
+			logging.Global.Errorf("OIDC: Failed to create user in DB: %v", err)
+			http.Error(w, "Failed to register user", http.StatusInternalServerError)
+			return
+		}
 
 		// Create a personal client key for them
 		personalKey := models.ClientKey{
 			Key:        fmt.Sprintf("sk-%s", randString(32)),
 			Label:      fmt.Sprintf("Personal Key for %s", user.Name),
-			QuotaLimit: 1000000, // 1M tokens default
+			QuotaLimit: 1000000,
 			QuotaUsed:  0,
 			Credits:    10.0,
 			Active:     true,
 			UserID:     user.ID,
 		}
-		b.Storage.CreateClientKey(personalKey)
+		if err := b.Storage.CreateClientKey(personalKey); err != nil {
+			logging.Global.Errorf("OIDC: Failed to create client key for user: %v", err)
+		}
 	} else {
-		// Update user info
 		user.Email = email
 		user.Name = name
 		user.IsAdmin = isAdmin
@@ -163,29 +182,33 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwtClaims)
 	tokenString, err := jwtToken.SignedString(jwtKey)
 	if err != nil {
+		logging.Global.Errorf("OIDC: Failed to sign JWT: %v", err)
 		http.Error(w, "Internal Error", http.StatusInternalServerError)
 		return
 	}
 
+	logging.Global.Infof("OIDC: Setting session_token cookie for user %s", user.ID)
 	setCookie(r, w, "session_token", tokenString, 24*time.Hour)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (b *Balancer) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	logging.Global.Infof("OIDC: Logging out")
 	setCookie(r, w, "session_token", "", -1)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
-	user, ok := r.Context().Value(auth.ContextKeyUser).(models.User)
+	val := r.Context().Value(auth.ContextKeyUser)
+	user, ok := val.(models.User)
 	if !ok {
+		logging.Global.Warnf("HandleV1Me: User context missing or wrong type. Got: %T", val)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
 	key, err := b.Storage.GetClientKeyByUserID(user.ID)
 	if err != nil {
-		// If they don't have a key, create one (safety fallback)
 		key = models.ClientKey{
 			Key:        fmt.Sprintf("sk-%s", randString(32)),
 			Label:      fmt.Sprintf("Personal Key for %s", user.Name),
@@ -214,6 +237,9 @@ func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("session_token")
 		if err != nil {
+			if err != http.ErrNoCookie {
+				logging.Global.Errorf("SessionMiddleware: Error reading cookie: %v", err)
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -226,18 +252,22 @@ func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
 		})
 
 		if err != nil || !tkn.Valid {
+			logging.Global.Errorf("SessionMiddleware: Invalid token: %v. Clearing cookie.", err)
+			setCookie(r, w, "session_token", "", -1)
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		user, err := b.Storage.GetUserByID(claims.UserID)
-		if err == nil {
-			ctx := context.WithValue(r.Context(), auth.ContextKeyUser, user)
-			next.ServeHTTP(w, r.WithContext(ctx))
+		if err != nil {
+			logging.Global.Errorf("SessionMiddleware: User %s not found in DB", claims.UserID)
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		logging.Global.Infof("Session: Authenticated user %s (%s)", user.Name, user.ID)
+		ctx := context.WithValue(r.Context(), auth.ContextKeyUser, user)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -248,8 +278,6 @@ func randString(n int) string {
 }
 
 func setCookie(r *http.Request, w http.ResponseWriter, name, value string, duration time.Duration) {
-	// Determine if we should use Secure flag
-	// Check X-Forwarded-Host because proxies like Vite change r.Host
 	host := r.Header.Get("X-Forwarded-Host")
 	if host == "" {
 		host = r.Host

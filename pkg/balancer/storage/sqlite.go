@@ -295,8 +295,8 @@ func (s *SQLiteStorage) GetPerformanceAnalytics() (map[string]struct {
 
 // Client Key Management
 func (s *SQLiteStorage) CreateClientKey(k models.ClientKey) error {
-	_, err := s.db.Exec(`INSERT INTO client_keys (key, label, quota_limit, credits) VALUES (?, ?, ?, ?)`,
-		k.Key, k.Label, k.QuotaLimit, k.Credits)
+	_, err := s.db.Exec(`INSERT INTO client_keys (key, label, quota_limit, credits, user_id) VALUES (?, ?, ?, ?, ?)`,
+		k.Key, k.Label, k.QuotaLimit, k.Credits, k.UserID)
 	return err
 }
 
