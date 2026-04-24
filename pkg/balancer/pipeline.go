@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
-	"time"
 )
 
 // ResolveVirtualModel handles the initial resolution of a virtual model name to a real model.
