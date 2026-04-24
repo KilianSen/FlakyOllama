@@ -98,6 +98,8 @@ func DefaultConfig() *Config {
 		ModelCostFactors:       make(map[string]float64),
 		EnableAutoScaling:      true,
 		AutoScaleThreshold:     5,
+		MaxVRAMAllocated:       12 * 1024 * 1024 * 1024, // 12GB
+		MaxCPUAllocated:        8,
 	}
 }
 

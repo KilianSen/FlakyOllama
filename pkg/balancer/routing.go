@@ -14,7 +14,7 @@ import (
 )
 
 // Route finds the best agent for an inference request using adaptive heuristics and session stickiness.
-func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clientIP string) (string, string, error) {
+func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clientIP string, contextHash string) (string, string, error) {
 	// Clean model name (strip prefixes like a. added by some tools)
 	if strings.HasPrefix(req.Model, "a.") {
 		req.Model = strings.TrimPrefix(req.Model, "a.")
@@ -46,6 +46,10 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 
 	b.affinityMu.RLock()
 	affinityID := b.ClientAffinity[clientIP]
+	contextNodeID := ""
+	if contextHash != "" {
+		contextNodeID = b.ContextAffinity[contextHash]
+	}
 	b.affinityMu.RUnlock()
 
 	var bestAgent models.NodeStatus
@@ -139,6 +143,9 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 		if a.ID == affinityID {
 			score += 2.0
 		}
+		if contextHash != "" && a.ID == contextNodeID {
+			score += 10.0 // Massive bonus for KV Cache reuse
+		}
 
 		// 8. Model Residency (Hot vs Warm vs Cold)
 		isHot := false
@@ -186,6 +193,9 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 		})
 		b.affinityMu.Lock()
 		b.ClientAffinity[clientIP] = bestAgent.ID
+		if contextHash != "" {
+			b.ContextAffinity[contextHash] = bestAgent.ID
+		}
 		b.affinityMu.Unlock()
 	}
 

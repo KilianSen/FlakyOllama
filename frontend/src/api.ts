@@ -51,6 +51,8 @@ export interface ClusterStatus {
   total_output_tokens: number;
   total_reward: number;
   total_cost: number;
+  model_reward_factors: Record<string, number>;
+  model_cost_factors: Record<string, number>;
   node_workloads: Record<string, number>;
   in_progress_pulls: Record<string, string>;
   model_policies: Record<string, Record<string, { Banned: boolean, Pinned: boolean }>>;
@@ -127,7 +129,6 @@ export type Identity = {
 export interface Config {
   keep_alive_duration_sec: number;
   stale_threshold: number;
-  load_threshold: number;
   poll_interval_ms: number;
   weights: {
     cpu_load_weight: number;
@@ -179,7 +180,7 @@ export class FlakyOllamaSDK {
     const token = tokenOverride || getToken();
     const res = await fetch(`${baseUrl}${path}`, {
       ...options,
-      credentials: 'include',
+      credentials: 'same-origin',
       headers: { 
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -215,6 +216,15 @@ export class FlakyOllamaSDK {
       headers: { 'Authorization': `Bearer ${getToken()}` },
     });
     return res.body!;
+  }
+
+  async getHistoricalLogs(params: { node_id?: string, level?: string, query?: string, limit?: number }): Promise<LogEntry[]> {
+    const q = new URLSearchParams();
+    if (params.node_id) q.set('node_id', params.node_id);
+    if (params.level) q.set('level', params.level);
+    if (params.query) q.set('query', params.query);
+    if (params.limit) q.set('limit', params.limit.toString());
+    return this.request<LogEntry[]>(`/api/v1/logs/history?${q.toString()}`);
   }
 
   async getNodes(): Promise<NodeStatus[]> {

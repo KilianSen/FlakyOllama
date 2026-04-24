@@ -219,7 +219,7 @@ func (b *Balancer) worker() {
 					break
 				}
 
-				id, addr, err := b.Route(req.Ctx, req.Request, req.ClientIP)
+				id, addr, err := b.Route(req.Ctx, req.Request, req.ClientIP, req.ContextHash)
 				req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
 
 				select {

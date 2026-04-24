@@ -106,6 +106,26 @@ func (b *Balancer) HandleV1Logs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (b *Balancer) HandleV1LogHistory(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("node_id")
+	level := r.URL.Query().Get("level")
+	query := r.URL.Query().Get("query")
+	limitStr := r.URL.Query().Get("limit")
+
+	limit := 100
+	if limitStr != "" {
+		fmt.Sscanf(limitStr, "%d", &limit)
+	}
+
+	logs, err := b.Storage.SearchLogs(limit, nodeID, level, query)
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	b.jsonResponse(w, http.StatusOK, logs)
+}
+
 func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request) {
 	snapshot := b.State.GetSnapshot()
 
@@ -206,6 +226,8 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 		TotalOutputTokens: int(totalOutput),
 		TotalReward:       totalReward,
 		TotalCost:         totalCost,
+		ModelRewardFactors: b.Config.ModelRewardFactors,
+		ModelCostFactors:   b.Config.ModelCostFactors,
 		Performance: make(map[string]struct {
 			AvgTTFT     float64 `json:"avg_ttft_ms"`
 			AvgDuration float64 `json:"avg_duration_ms"`
@@ -551,8 +573,8 @@ func (b *Balancer) HandleV1ModelPolicySet(w http.ResponseWriter, r *http.Request
 	var req struct {
 		Model  string `json:"model"`
 		NodeID string `json:"node_id"`
-		Banned bool   `json:"banned"`
-		Pinned bool   `json:"pinned"`
+		Banned bool   `json:"is_banned"`
+		Pinned bool   `json:"is_pinned"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -685,6 +707,9 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
+	// Lock in surge
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
 	body, _ := json.Marshal(req)
 	resp, agentID, _, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, false, 0)
 
@@ -697,7 +722,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	// Capture usage
 	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	go b.captureUsage(agentID, req.Model, bodyBytes, clientKey, 0, 0)
+	go b.captureUsage(agentID, req.Model, bodyBytes, clientKey, 0, 0, surge)
 
 	var result models.InferenceResponse
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {
@@ -735,16 +760,33 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 	// Get authenticated token from context
 	token, _ := r.Context().Value(auth.ContextKeyToken).(string)
 
-	b.State.UpsertNode(addr, &models.NodeStatus{
-		ID:       req.ID,
-		AgentKey: token,
-		Address:  addr,
-		Tier:     req.Tier,
-		HasGPU:   req.HasGPU,
-		GPUModel: req.GPUModel,
-		State:    models.StateHealthy,
-		Errors:   0,
-		LastSeen: time.Now(),
+	b.State.Do(func(s *state.ClusterState) {
+		existing, exists := s.Agents[addr]
+		
+		status := &models.NodeStatus{
+			ID:       req.ID,
+			AgentKey: token,
+			Address:  addr,
+			Tier:     req.Tier,
+			HasGPU:   req.HasGPU,
+			GPUModel: req.GPUModel,
+			State:    models.StateHealthy,
+			Errors:   0,
+			LastSeen: time.Now(),
+		}
+
+		if exists {
+			// Preserve sticky state
+			status.Reputation = existing.Reputation
+			status.InputTokens = existing.InputTokens
+			status.OutputTokens = existing.OutputTokens
+			status.TokenReward = existing.TokenReward
+			status.Draining = existing.Draining
+		} else {
+			status.Reputation = 1.0 // Initial
+		}
+
+		s.Agents[addr] = status
 	})
 
 	logging.Global.Infof("Registered agent: %s at %s [Tier: %s, GPU: %v (%s)]", req.ID, addr, req.Tier, req.HasGPU, req.GPUModel)

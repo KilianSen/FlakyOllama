@@ -47,8 +47,17 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		req.Priority = priority
 	}
 
+	// Lock in surge pricing for the duration of this request
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
+	// Compute Context Hash for KV cache stickiness
+	contextHash := ""
+	if req.Prompt != "" {
+		contextHash = b.computeHash(req.Prompt)
+	}
+
 	body, _ := json.Marshal(req)
-	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, req.AllowHedging, req.Priority)
+	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, req.AllowHedging, req.Priority, contextHash)
 	if err != nil {
 		logging.Global.Errorf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -56,7 +65,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentAddr, req.Model, r)
+	b.finalizeProxy(w, resp, agentAddr, req.Model, r, surge)
 }
 
 func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
@@ -93,15 +102,25 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		req.Priority = priority
 	}
 
+	// Lock in surge pricing for the duration of this request
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
+	// Compute Context Hash for KV cache stickiness
+	contextHash := ""
+	if len(req.Messages) > 0 {
+		hData, _ := json.Marshal(req.Messages)
+		contextHash = b.computeHash(string(hData))
+	}
+
 	body, _ := json.Marshal(req)
-	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/chat", body, r.RemoteAddr, req.AllowHedging, req.Priority)
+	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/chat", body, r.RemoteAddr, req.AllowHedging, req.Priority, contextHash)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentAddr, req.Model, r)
+	b.finalizeProxy(w, resp, agentAddr, req.Model, r, surge)
 }
 
 func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {

@@ -8,6 +8,8 @@ import (
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"sync"
 	"time"
@@ -32,8 +34,9 @@ type Balancer struct {
 	PerfCache map[string]storage.PerformanceMetric
 
 	// Client affinity: IP -> NodeID
-	affinityMu     sync.RWMutex
-	ClientAffinity map[string]string
+	affinityMu      sync.RWMutex
+	ClientAffinity  map[string]string
+	ContextAffinity map[string]string // context_hash -> NodeID
 
 	// Channel for async metric processing
 	MetricCh chan metricEntry
@@ -82,15 +85,29 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		httpClient: &http.Client{
 			Timeout: 10 * time.Minute, // Long timeout for inference
 		},
-		StartTime:      time.Now(),
-		PerfCache:      make(map[string]storage.PerformanceMetric),
-		ClientAffinity: make(map[string]string),
-		MetricCh:       make(chan metricEntry, 1000),
+		StartTime:       time.Now(),
+		PerfCache:       make(map[string]storage.PerformanceMetric),
+		ClientAffinity:  make(map[string]string),
+		ContextAffinity: make(map[string]string),
+		MetricCh:        make(chan metricEntry, 1000),
 		TokenCh:        make(chan tokenUsageEntry, 1000),
 		LogCh:          make(chan models.LogEntry, 1000),
 		logChs:         make(map[chan string]bool),
 		stopCh:         make(chan struct{}),
 	}
+
+	// Start reputation normalization loop (drifts toward 1.0 every hour)
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		for {
+			select {
+			case <-ticker.C:
+				b.Storage.NormalizeReputation(0.05)
+			case <-b.stopCh:
+				return
+			}
+		}
+	}()
 
 	b.State.Start()
 
@@ -210,6 +227,7 @@ func (b *Balancer) NewMux() *chi.Mux {
 
 			r.Get("/status", b.HandleV1ClusterStatus)
 			r.Get("/logs", b.HandleV1Logs)
+			r.Get("/logs/history", b.HandleV1LogHistory)
 
 			r.Route("/nodes", func(r chi.Router) {
 				r.Get("/", b.HandleV1Nodes)
@@ -318,4 +336,9 @@ func (b *Balancer) getRequestPriority(r *http.Request) int {
 	}
 
 	return 0
+}
+
+func (b *Balancer) computeHash(data string) string {
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
 }

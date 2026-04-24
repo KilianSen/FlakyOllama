@@ -68,7 +68,7 @@ func (t *ttftTrackingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request) {
+func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64) {
 	start := time.Now()
 	// Get client key from context
 	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
@@ -129,7 +129,7 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	}
 
 	// Try to parse usage from the captured response (Ollama format)
-	go b.captureUsage(agentAddr, modelName, usageBuf.Bytes(), clientKey, ttft.Milliseconds(), duration.Milliseconds())
+	go b.captureUsage(agentAddr, modelName, usageBuf.Bytes(), clientKey, ttft.Milliseconds(), duration.Milliseconds(), surge)
 
 	b.recordSuccess(agentAddr)
 	select {
@@ -149,7 +149,7 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(duration.Seconds())
 }
 
-func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey string, ttft, duration int64) {
+func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey string, ttft, duration int64, surge float64) {
 	if len(body) == 0 {
 		return
 	}
@@ -202,10 +202,6 @@ func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey strin
 				}
 			}
 		})
-
-		// Calculate surge multiplier based on queue depth
-		queueDepth := b.Queue.QueueDepth()
-		surge := 1.0 + (float64(queueDepth) * 0.02)
 
 		// Reward (Agent)
 		rFactor := 1.0

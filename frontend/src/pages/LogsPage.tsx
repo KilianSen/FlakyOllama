@@ -38,12 +38,34 @@ export const LogsPage: React.FC = () => {
   const [paused, setPaused] = useState(false);
   const [filter, setFilter] = useState('');
   const [levelFilter, setLevelFilter] = useState<LogEntry['level'] | 'all'>('all');
+  const [mode, setMode] = useState<'live' | 'history'>('live');
   const pausedRef = useRef(paused);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   pausedRef.current = paused;
 
+  const loadHistory = async () => {
+    try {
+      const data = await sdk.getHistoricalLogs({
+        level: levelFilter === 'all' ? undefined : levelFilter,
+        query: filter || undefined,
+        limit: 200
+      });
+      setLogs(data.map(d => ({
+        timestamp: new Date(d.timestamp),
+        raw: `[${d.node_id}] ${d.message}`,
+        level: (d.level.toLowerCase() as LogEntry['level']) || 'info'
+      })));
+    } catch (err) {
+      console.error('History load error:', err);
+    }
+  };
+
   useEffect(() => {
+    if (mode === 'history') {
+        loadHistory();
+        return;
+    }
     let active = true;
     let reader: ReadableStreamDefaultReader | null = null;
 
@@ -115,10 +137,22 @@ export const LogsPage: React.FC = () => {
     <div className="flex flex-col h-[calc(100vh-57px)]">
       {/* Controls */}
       <div className="flex items-center gap-3 px-6 py-3 border-b border-border/50 shrink-0">
+        <div className="flex bg-muted/30 p-0.5 rounded-lg border border-border/50 mr-2">
+            {['live', 'history'].map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m as any)}
+                className={`px-3 py-1 text-[9px] font-black uppercase tracking-tighter rounded-md transition-all ${mode === m ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {m}
+              </button>
+            ))}
+        </div>
+
         <div className="flex items-center gap-1.5">
-          <div className={`w-2 h-2 rounded-full ${paused ? 'bg-muted-foreground' : 'bg-emerald-400 animate-pulse'}`} />
+          <div className={`w-2 h-2 rounded-full ${paused || mode === 'history' ? 'bg-muted-foreground' : 'bg-emerald-400 animate-pulse'}`} />
           <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">
-            {paused ? 'Paused' : 'Live'}
+            {mode === 'history' ? 'Search Mode' : (paused ? 'Paused' : 'Live')}
           </span>
         </div>
         <Badge variant="outline" className="text-[9px] font-black h-5">{filtered.length} entries</Badge>
@@ -153,11 +187,21 @@ export const LogsPage: React.FC = () => {
         <Button
           variant="ghost" size="sm"
           className="h-7 text-[9px] font-black uppercase gap-1"
+          disabled={mode === 'history'}
           onClick={() => setPaused(p => !p)}
         >
           {paused ? <Play size={11} /> : <Pause size={11} />}
           {paused ? 'Resume' : 'Pause'}
         </Button>
+        {mode === 'history' && (
+          <Button
+            variant="outline" size="sm"
+            className="h-7 text-[9px] font-black uppercase"
+            onClick={loadHistory}
+          >
+            Search
+          </Button>
+        )}
         <Button
           variant="ghost" size="sm"
           className="h-7 text-[9px] font-black uppercase gap-1 text-muted-foreground"

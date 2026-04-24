@@ -73,6 +73,8 @@ export const FleetPage: React.FC = () => {
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">CPU</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">VRAM / RAM</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Reputation</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground text-center">Throughput</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground text-right">Rewards</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Models</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Status</TableHead>
                 <TableHead className="text-right text-[9px] font-black uppercase tracking-widest text-muted-foreground">Actions</TableHead>
@@ -136,6 +138,15 @@ export const FleetPage: React.FC = () => {
                        <TrendingUp size={12} className={(node.reputation || 1.0) >= 1.0 ? 'text-emerald-400' : 'text-amber-400'} />
                        <span className="text-[11px] font-black">{(node.reputation || 1.0).toFixed(2)}</span>
                     </div>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <div className="flex flex-col gap-0.5">
+                       <span className="text-[10px] font-black">{((node.input_tokens || 0) + (node.output_tokens || 0)).toLocaleString()}</span>
+                       <span className="text-[8px] font-bold text-muted-foreground uppercase">{(node.output_tokens || 0).toLocaleString()} out</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <span className="text-[10px] font-black text-amber-400">{node.token_reward?.toLocaleString(undefined, { maximumFractionDigits: 1 }) || 0} φ</span>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1 max-w-[160px]">

@@ -35,7 +35,7 @@ func (p *peekReader) Read(buf []byte) (int, error) {
 	return n, err
 }
 
-func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte, clientIP string, allowHedging bool, priority int) (*http.Response, string, string, error) {
+func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path string, body []byte, clientIP string, allowHedging bool, priority int, contextHash string) (*http.Response, string, string, error) {
 	p90, _ := b.Storage.GetP90Latency(modelName)
 	if p90 == 0 {
 		p90 = 2 * time.Second
@@ -47,7 +47,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 
 	// First attempt
 	ctx1, cancel1 := context.WithCancel(ctx)
-	go b.singleAttemptSpeculative(ctx1, cancel1, modelName, path, body, clientIP, priority, results)
+	go b.singleAttemptSpeculative(ctx1, cancel1, modelName, path, body, clientIP, priority, contextHash, results)
 
 	shouldHedge := allowHedging && b.Queue.pq.Len() == 0
 
@@ -117,7 +117,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 				secondStarted = true
 				timer.Stop()
 				ctx2, cancel2 := context.WithCancel(ctx)
-				go b.singleAttemptSpeculative(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
+				go b.singleAttemptSpeculative(ctx2, cancel2, modelName, path, body, clientIP, priority, contextHash, results)
 			} else if i == 1 || !shouldHedge {
 				return nil, "", "", firstErr
 			}
@@ -125,7 +125,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 			if !secondStarted && shouldHedge {
 				secondStarted = true
 				ctx2, cancel2 := context.WithCancel(ctx)
-				go b.singleAttemptSpeculative(ctx2, cancel2, modelName, path, body, clientIP, priority, results)
+				go b.singleAttemptSpeculative(ctx2, cancel2, modelName, path, body, clientIP, priority, contextHash, results)
 			}
 			i--
 		case <-ctx.Done():
@@ -136,8 +136,8 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	return nil, "", "", firstErr
 }
 
-func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.CancelFunc, modelName, path string, body []byte, clientIP string, priority int, results chan<- HedgedResult) {
-	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, priority, clientIP, ctx)
+func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.CancelFunc, modelName, path string, body []byte, clientIP string, priority int, contextHash string, results chan<- HedgedResult) {
+	resCh := b.Queue.Push(models.InferenceRequest{Model: modelName}, priority, clientIP, contextHash, ctx)
 
 	var qr QueuedResponse
 	select {
@@ -165,12 +165,15 @@ func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		b.recordError(qr.AgentAddr, "http_error")
+		// Decrement workload since we didn't start the token race
 		b.State.DoAsync(func(s *state.ClusterState) { s.NodeWorkloads[qr.AgentAddr]-- })
 		results <- HedgedResult{Err: err, AgentID: qr.AgentID, AgentAddr: qr.AgentAddr, Cancel: cancel}
 		return
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Decrement workload for non-200 responses
+		b.State.DoAsync(func(s *state.ClusterState) { s.NodeWorkloads[qr.AgentAddr]-- })
 		results <- HedgedResult{Resp: resp, AgentID: qr.AgentID, AgentAddr: qr.AgentAddr, Cancel: cancel}
 		return
 	}

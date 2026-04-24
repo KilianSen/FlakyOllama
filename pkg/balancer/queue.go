@@ -12,8 +12,9 @@ type QueuedRequest struct {
 	Request  models.InferenceRequest
 	Priority int // Higher value means higher priority
 	Sequence int64
-	ClientIP string
-	Ctx      context.Context
+	ClientIP    string
+	ContextHash string
+	Ctx         context.Context
 	Response chan QueuedResponse
 	Index    int // The index of the item in the heap.
 }
@@ -76,19 +77,20 @@ func NewRequestQueue() *RequestQueue {
 	return rq
 }
 
-func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP string, ctx context.Context) chan QueuedResponse {
+func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP string, contextHash string, ctx context.Context) chan QueuedResponse {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
 	resCh := make(chan QueuedResponse, 1)
 	rq.sequence++
 	item := &QueuedRequest{
-		Request:  req,
-		Priority: priority,
-		Sequence: rq.sequence,
-		ClientIP: clientIP,
-		Ctx:      ctx,
-		Response: resCh,
+		Request:     req,
+		Priority:    priority,
+		Sequence:    rq.sequence,
+		ClientIP:    clientIP,
+		ContextHash: contextHash,
+		Ctx:         ctx,
+		Response:    resCh,
 	}
 	heap.Push(&rq.pq, item)
 

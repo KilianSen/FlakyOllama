@@ -378,6 +378,15 @@ func (s *SQLiteStorage) CreateAgentKey(k models.AgentKey) error {
 	return err
 }
 
+func (s *SQLiteStorage) NormalizeReputation(amount float64) error {
+	// Drift up toward 1.0
+	_, err := s.db.Exec(`UPDATE agent_keys SET reputation = MIN(1.0, reputation + ?) WHERE reputation < 1.0`, amount)
+	if err != nil { return err }
+	// Drift down toward 1.0
+	_, err = s.db.Exec(`UPDATE agent_keys SET reputation = MAX(1.0, reputation - ?) WHERE reputation > 1.0`, amount)
+	return err
+}
+
 func (s *SQLiteStorage) RecordReputation(key string, change float64) error {
 	_, err := s.db.Exec(`UPDATE agent_keys SET reputation = MAX(0.1, MIN(5.0, reputation + ?)) WHERE key = ?`,
 		change, key)
@@ -549,6 +558,43 @@ func (s *SQLiteStorage) GetRecentLogs(limit int) ([]struct {
 			Component string
 			Message   string
 		}
+		if err := rows.Scan(&l.Timestamp, &l.NodeID, &l.Level, &l.Component, &l.Message); err != nil {
+			return nil, err
+		}
+		logs = append(logs, l)
+	}
+	return logs, nil
+}
+
+func (s *SQLiteStorage) SearchLogs(limit int, nodeID, level, query string) ([]models.LogEntry, error) {
+	sqlStr := "SELECT timestamp, node_id, level, component, message FROM logs WHERE 1=1"
+	var args []interface{}
+
+	if nodeID != "" {
+		sqlStr += " AND node_id = ?"
+		args = append(args, nodeID)
+	}
+	if level != "" {
+		sqlStr += " AND level = ?"
+		args = append(args, level)
+	}
+	if query != "" {
+		sqlStr += " AND message LIKE ?"
+		args = append(args, "%"+query+"%")
+	}
+
+	sqlStr += " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.Query(sqlStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []models.LogEntry
+	for rows.Next() {
+		var l models.LogEntry
 		if err := rows.Scan(&l.Timestamp, &l.NodeID, &l.Level, &l.Component, &l.Message); err != nil {
 			return nil, err
 		}

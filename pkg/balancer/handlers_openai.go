@@ -46,9 +46,19 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
+	// Lock in surge pricing for the duration of this request
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
+	// Compute Context Hash
+	contextHash := ""
+	if len(ollamaReq.Messages) > 0 {
+		hData, _ := json.Marshal(ollamaReq.Messages)
+		contextHash = b.computeHash(string(hData))
+	}
+
 	body, _ := json.Marshal(ollamaReq)
 	priority := b.getRequestPriority(r)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body, r.RemoteAddr, ollamaReq.AllowHedging, priority)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/chat", body, r.RemoteAddr, ollamaReq.AllowHedging, priority, contextHash)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -56,13 +66,13 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if !oaiReq.Stream {
-		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentAddr, r)
+		b.handleOpenAIChatNonStream(w, resp, oaiReq.Model, agentAddr, r, surge)
 	} else {
-		b.handleOpenAIChatStream(w, resp, oaiReq.Model, agentAddr, r)
+		b.handleOpenAIChatStream(w, resp, oaiReq.Model, agentAddr, r, surge)
 	}
 }
 
-func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
+func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request, surge float64) {
 	var ollamaResp struct {
 		Message         models.ChatMessage `json:"message"`
 		PromptEvalCount int                `json:"prompt_eval_count"`
@@ -100,8 +110,6 @@ func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.R
 				rewardKey = a.AgentKey
 			}
 		})
-		// Surge pricing
-		surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
 		// Calculate reward (Agent)
 		rFactor := 1.0
@@ -136,7 +144,7 @@ func (b *Balancer) handleOpenAIChatNonStream(w http.ResponseWriter, resp *http.R
 	json.NewEncoder(w).Encode(oaiResp)
 }
 
-func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
+func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request, surge float64) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -174,14 +182,14 @@ func (b *Balancer) handleOpenAIChatStream(w http.ResponseWriter, resp *http.Resp
 			if f, ok := b.Config.ModelRewardFactors[model]; ok {
 				rFactor = f
 			}
-			reward := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier
+			reward := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier * surge
 
 			// Calculate cost (Client)
 			cFactor := 1.0
 			if f, ok := b.Config.ModelCostFactors[model]; ok {
 				cFactor = f
 			}
-			cost := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * cFactor * b.Config.GlobalCostMultiplier
+			cost := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * cFactor * b.Config.GlobalCostMultiplier * surge
 
 			trackingID := agentID
 			if rewardKey != "" {
@@ -260,9 +268,18 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 		})
 	}()
 
+	// Lock in surge pricing for the duration of this request
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
+	// Compute Context Hash
+	contextHash := ""
+	if ollamaReq.Prompt != "" {
+		contextHash = b.computeHash(ollamaReq.Prompt)
+	}
+
 	body, _ := json.Marshal(ollamaReq)
 	priority := b.getRequestPriority(r)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body, r.RemoteAddr, ollamaReq.AllowHedging, priority)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), ollamaReq.Model, "/inference", body, r.RemoteAddr, ollamaReq.AllowHedging, priority, contextHash)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -270,13 +287,13 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 	defer resp.Body.Close()
 
 	if !oaiReq.Stream {
-		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentAddr, r)
+		b.handleOpenAICompletionNonStream(w, resp, oaiReq.Model, agentAddr, r, surge)
 	} else {
-		b.handleOpenAICompletionStream(w, resp, oaiReq.Model, agentAddr, r)
+		b.handleOpenAICompletionStream(w, resp, oaiReq.Model, agentAddr, r, surge)
 	}
 }
 
-func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
+func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request, surge float64) {
 	var ollamaResp struct {
 		Response        string `json:"response"`
 		PromptEvalCount int    `json:"prompt_eval_count"`
@@ -312,8 +329,6 @@ func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *
 				rewardKey = a.AgentKey
 			}
 		})
-		// Surge pricing
-		surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
 		// Calculate reward (Agent)
 		rFactor := 1.0
@@ -348,7 +363,7 @@ func (b *Balancer) handleOpenAICompletionNonStream(w http.ResponseWriter, resp *
 	json.NewEncoder(w).Encode(oaiResp)
 }
 
-func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request) {
+func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *http.Response, model, agentAddr string, r *http.Request, surge float64) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -386,14 +401,14 @@ func (b *Balancer) handleOpenAICompletionStream(w http.ResponseWriter, resp *htt
 			if f, ok := b.Config.ModelRewardFactors[model]; ok {
 				rFactor = f
 			}
-			reward := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier
+			reward := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * rFactor * b.Config.GlobalRewardMultiplier * surge
 
 			// Calculate cost (Client)
 			cFactor := 1.0
 			if f, ok := b.Config.ModelCostFactors[model]; ok {
 				cFactor = f
 			}
-			cost := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * cFactor * b.Config.GlobalCostMultiplier
+			cost := float64(ollamaChunk.PromptEvalCount+ollamaChunk.EvalCount) * cFactor * b.Config.GlobalCostMultiplier * surge
 
 			trackingID := agentID
 			if rewardKey != "" {
@@ -479,6 +494,15 @@ func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Lock in surge pricing
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+
+	// Compute Context Hash
+	contextHash := ""
+	if hData, err := json.Marshal(oaiReq.Input); err == nil {
+		contextHash = b.computeHash(string(hData))
+	}
+
 	// Map OpenAI to Ollama
 	ollamaReq := struct {
 		Model string      `json:"model"`
@@ -489,7 +513,7 @@ func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request
 	}
 
 	body, _ := json.Marshal(ollamaReq)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), oaiReq.Model, "/embeddings", body, r.RemoteAddr, false, 0)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), oaiReq.Model, "/embeddings", body, r.RemoteAddr, false, 0, contextHash)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -514,6 +538,28 @@ func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request
 				Index:     0,
 			},
 		},
+	}
+
+	// Calculate reward (Agent)
+	rFactor := 1.0
+	if f, ok := b.Config.ModelRewardFactors[oaiReq.Model]; ok {
+		rFactor = f
+	}
+	reward := float64(len(ollamaResp.Embedding)) * 0.1 * rFactor * b.Config.GlobalRewardMultiplier * surge
+
+	// Calculate cost (Client)
+	cFactor := 1.0
+	if f, ok := b.Config.ModelCostFactors[oaiReq.Model]; ok {
+		cFactor = f
+	}
+	cost := float64(len(ollamaResp.Embedding)) * 0.1 * cFactor * b.Config.GlobalCostMultiplier * surge
+
+	// Get client key
+	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
+	select {
+	case b.TokenCh <- tokenUsageEntry{agentAddr, oaiReq.Model, 1, 1, reward, cost, 0, 0, clientKey}:
+	default:
 	}
 
 	b.recordSuccess(agentAddr)

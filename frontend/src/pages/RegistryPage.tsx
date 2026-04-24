@@ -167,12 +167,18 @@ export const RegistryPage: React.FC = () => {
                 <TableRow className="hover:bg-transparent border-border/50">
                   <TableHead className="w-[200px] text-[10px] font-black uppercase tracking-widest py-4 pl-6">Model Identifier</TableHead>
                   {nodes.map(n => (
-                    <TableHead key={n.id} className="text-center min-w-[120px]">
-                      <div className="flex flex-col items-center gap-1">
+                    <TableHead key={n.id} className="text-center min-w-[120px] py-4">
+                      <div className="flex flex-col items-center gap-1.5">
                         <span className="text-[10px] font-black uppercase tracking-tight truncate max-w-[100px]">{n.id}</span>
-                        <Badge variant="outline" className="text-[8px] font-bold h-3 px-1 border-border/30 opacity-60">
-                          {n.has_gpu ? 'GPU' : 'CPU'}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                           <div className="flex items-center gap-0.5 text-[9px] font-black text-amber-400">
+                             <TrendingUp size={10} />
+                             {(n.reputation || 1.0).toFixed(1)}
+                           </div>
+                           <Badge variant="outline" className={`text-[8px] font-bold h-3.5 px-1 border-border/30 ${n.vram_total > 0 && (n.vram_used/n.vram_total) > 0.8 ? 'text-red-400' : 'opacity-60'}`}>
+                             {n.vram_total > 0 ? `${((n.vram_used / n.vram_total) * 100).toFixed(0)}%` : 'CPU'}
+                           </Badge>
+                        </div>
                       </div>
                     </TableHead>
                   ))}
@@ -187,10 +193,20 @@ export const RegistryPage: React.FC = () => {
                   </TableRow>
                 ) : filteredModels.map(model => (
                   <TableRow key={model} className="border-border/40 hover:bg-muted/5 group">
-                    <TableCell className="font-mono text-[11px] font-black pl-6">
-                      <div className="flex items-center gap-2">
-                        <Box size={12} className="text-muted-foreground" />
-                        {model}
+                    <TableCell className="font-mono text-[11px] font-black pl-6 py-4">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <Box size={12} className="text-muted-foreground" />
+                          {model}
+                        </div>
+                        <div className="flex items-center gap-2 ml-5">
+                           <Badge variant="outline" className="text-[7px] h-3 px-1 border-amber-500/20 text-amber-500 uppercase">
+                             R: {(status?.model_policies?.[model]?.reward_factor || 1.0).toFixed(1)}x
+                           </Badge>
+                           <Badge variant="outline" className="text-[7px] h-3 px-1 border-blue-500/20 text-blue-400 uppercase">
+                             C: {(status?.model_policies?.[model]?.cost_factor || 1.0).toFixed(1)}x
+                           </Badge>
+                        </div>
                       </div>
                     </TableCell>
                     {nodes.map(n => {
