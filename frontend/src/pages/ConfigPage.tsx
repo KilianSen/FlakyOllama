@@ -223,6 +223,7 @@ function VirtualModelTable({
 }
 
 export const ConfigPage: React.FC = () => {
+  const { status } = useCluster();
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);

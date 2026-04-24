@@ -177,6 +177,7 @@ export interface Config {
   max_cpu_allocated: number;
   enable_auto_scaling: boolean;
   auto_scale_threshold: number;
+  virtual_models: Record<string, VirtualModelConfig>;
   oidc: {
     enabled: boolean;
     issuer: string;
