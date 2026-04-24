@@ -1,6 +1,7 @@
 package config
 
 import (
+	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
 	"os"
 )
