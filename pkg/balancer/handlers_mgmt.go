@@ -801,8 +801,8 @@ func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type userWithKey struct {
-		models.User
-		Key models.ClientKey `json:"key"`
+		User models.User      `json:"user"`
+		Key  models.ClientKey `json:"key"`
 	}
 
 	var resp []userWithKey

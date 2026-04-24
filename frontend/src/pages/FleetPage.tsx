@@ -98,7 +98,7 @@ export const FleetPage: React.FC = () => {
                   </TableCell>
                   <TableCell>
                     <div>
-                      <Badge variant="outline" className="text-[9px] font-bold h-4 mb-1 uppercase tracking-tighter">{node.tier}</Badge>
+                      <Badge variant="outline" className="text-[9px] font-bold h-4 mb-1 uppercase tracking-tighter">{node.tier || 'default'}</Badge>
                       <p className="text-[9px] text-muted-foreground truncate max-w-[140px]">
                         {node.has_gpu ? (node.gpu_model || 'Unknown GPU') : 'CPU ONLY'}
                       </p>
@@ -221,7 +221,7 @@ export const FleetPage: React.FC = () => {
                     <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-3">Hardware</p>
                     <div className="grid grid-cols-2 gap-3">
                       {[
-                        { label: 'Tier', val: selectedNode.tier.toUpperCase() },
+                        { label: 'Tier', val: (selectedNode.tier || 'default').toUpperCase() },
                         { label: 'CPU Cores', val: selectedNode.cpu_cores },
                         { label: 'GPU', val: selectedNode.has_gpu ? 'Yes' : 'No' },
                         { label: 'GPU Model', val: selectedNode.gpu_model || '—' },

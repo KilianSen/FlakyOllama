@@ -359,6 +359,11 @@ func (b *Balancer) pollAgents() {
 					status.Errors = currentAgent.Errors
 					status.Draining = currentAgent.Draining
 					status.LastSeen = time.Now()
+					status.AgentKey = currentAgent.AgentKey
+					status.Tier = currentAgent.Tier
+					status.GPUModel = currentAgent.GPUModel
+					status.Message = currentAgent.Message
+					status.CooloffUntil = currentAgent.CooloffUntil
 
 					s.Agents[address] = &status
 
