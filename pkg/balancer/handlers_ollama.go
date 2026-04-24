@@ -58,6 +58,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := json.Marshal(req)
 	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, req.AllowHedging, req.Priority, contextHash)
+
 	if err != nil {
 		logging.Global.Errorf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -114,6 +115,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := json.Marshal(req)
 	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/chat", body, r.RemoteAddr, req.AllowHedging, req.Priority, contextHash)
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

@@ -788,7 +788,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
 	body, _ := json.Marshal(req)
-	resp, agentID, _, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, false, 0)
+	resp, agentID, _, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, false, 0, "")
 
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
