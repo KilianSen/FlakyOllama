@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Zap, Cpu, Server, Activity, Database, Layers, Coins } from 'lucide-react';
+import { Zap, Cpu, Server, Activity, Database, Layers, Coins, Shield } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
@@ -8,7 +8,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip as RechartTooltip, ResponsiveContainer
 } from 'recharts';
-import type { NodeStatus } from '../api';
+import sdk, { type NodeStatus } from '../api';
 import { useCluster } from '../ClusterContext';
 import { computeRoutability, LATENCY_HINTS } from '../lib/modelUtils';
 
@@ -29,6 +29,12 @@ const nodeStateColor = (node: NodeStatus) => {
 
 export const OverviewPage: React.FC = () => {
   const { status } = useCluster();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    sdk.getMe().then(res => setIsAdmin(res.user.is_admin)).catch(() => {});
+  }, []);
+
   if (!status) return null;
   const nodes = Object.values(status.nodes) as NodeStatus[];
   const healthyNodes = nodes.filter(n => n.state === 0).length;
@@ -149,9 +155,17 @@ export const OverviewPage: React.FC = () => {
             <CardTitle className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-2">
               <Zap size={12} className="text-primary" /> Routing Topology
             </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4">
+            </CardHeader>
+            <CardContent className="p-4 relative">
+            {!isAdmin && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/60 backdrop-blur-[2px] p-6 text-center">
+                <Shield className="text-muted-foreground/40 mb-2" size={24} />
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">Admin Access Required</p>
+                <p className="text-[9px] text-muted-foreground/60 mt-1">Topology visualization is restricted to cluster operators.</p>
+              </div>
+            )}
             <div className="relative w-full overflow-hidden rounded-lg bg-muted/20 border border-dashed border-border/40" style={{ minHeight: 280 }}>
+
               <div className="absolute inset-0 bg-[radial-gradient(oklch(1_0_0/5%)_1px,transparent_1px)] [background-size:20px_20px]" />
               <svg viewBox="0 0 440 320" className="w-full h-auto">
                 {/* Balancer center */}
@@ -209,8 +223,15 @@ export const OverviewPage: React.FC = () => {
             <CardTitle className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-2">
               <Zap size={12} className="text-purple-400" /> Accelerated Resource Utilization
             </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4">
+            </CardHeader>
+            <CardContent className="p-4 relative">
+            {!isAdmin && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/60 backdrop-blur-[2px] p-6 text-center">
+                <Shield className="text-muted-foreground/40 mb-2" size={24} />
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">Admin Access Required</p>
+              </div>
+            )}
+
             {vramData.length > 0 ? (
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={vramData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
@@ -247,8 +268,15 @@ export const OverviewPage: React.FC = () => {
             <CardTitle className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-2">
               <Cpu size={12} className="text-sky-400" /> Resource Load by Node
             </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4">
+            </CardHeader>
+            <CardContent className="p-4 relative">
+            {!isAdmin && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/60 backdrop-blur-[2px] p-6 text-center">
+                <Shield className="text-muted-foreground/40 mb-2" size={24} />
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">Admin Access Required</p>
+              </div>
+            )}
+
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={cpuData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(1 0 0 / 5%)" />

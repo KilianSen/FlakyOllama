@@ -201,41 +201,66 @@ func (b *Balancer) HandleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
+	var user models.User
+	var clientKey models.ClientKey
+	var agentKeys []models.AgentKey
+
 	val := r.Context().Value(auth.ContextKeyUser)
-	user, ok := val.(models.User)
-	if !ok {
+	if u, ok := val.(models.User); ok {
+		user = u
+	} else if u, ok := val.(*models.User); ok {
+		user = *u
+	} else {
+		// Try token-based auth fallback
+		if tkn, ok := r.Context().Value(auth.ContextKeyToken).(string); ok {
+			if tkn == b.Config.AuthToken {
+				user = models.User{ID: "master", Name: "Master Admin", Email: "admin@local", IsAdmin: true}
+				clientKey = models.ClientKey{Key: tkn, Label: "Master Token", Credits: 999999, QuotaLimit: -1, Active: true}
+			} else if ck, ok := r.Context().Value(auth.ContextKeyClientData).(models.ClientKey); ok {
+				user = models.User{ID: "token-user", Name: ck.Label, Email: "client@token", IsAdmin: false}
+				clientKey = ck
+			}
+		}
+	}
+
+	if user.ID == "" {
 		logging.Global.Warnf("HandleV1Me: User context missing or wrong type. Got: %T", val)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	clientKey, err := b.Storage.GetClientKeyByUserID(user.ID)
-	if err != nil {
-		clientKey = models.ClientKey{
-			Key:        fmt.Sprintf("sk-%s", randString(32)),
-			Label:      fmt.Sprintf("Personal Key for %s", user.Name),
-			QuotaLimit: 1000000,
-			QuotaUsed:  0,
-			Credits:    10.0,
-			Active:     true,
-			UserID:     user.ID,
+	// If we still need to fetch details for OIDC user
+	if user.ID != "master" && user.ID != "token-user" {
+		ck, err := b.Storage.GetClientKeyByUserID(user.ID)
+		if err != nil {
+			ck = models.ClientKey{
+				Key:        fmt.Sprintf("sk-%s", randString(32)),
+				Label:      fmt.Sprintf("Personal Key for %s", user.Name),
+				QuotaLimit: 1000000,
+				QuotaUsed:  0,
+				Credits:    10.0,
+				Active:     true,
+				UserID:     user.ID,
+			}
+			b.Storage.CreateClientKey(ck)
 		}
-		b.Storage.CreateClientKey(clientKey)
-	}
+		clientKey = ck
 
-	agentKeys, err := b.Storage.GetAgentKeysByUserID(user.ID)
-	if err != nil || len(agentKeys) == 0 {
-		// Create a default agent key
-		newAgentKey := models.AgentKey{
-			Key:           fmt.Sprintf("ak-%s", randString(32)),
-			Label:         fmt.Sprintf("Default Agent for %s", user.Name),
-			CreditsEarned: 0,
-			Reputation:    1.0,
-			Active:        true,
-			UserID:        user.ID,
+		ak, err := b.Storage.GetAgentKeysByUserID(user.ID)
+		if err != nil || len(ak) == 0 {
+			newAgentKey := models.AgentKey{
+				Key:           fmt.Sprintf("ak-%s", randString(32)),
+				Label:         fmt.Sprintf("Default Agent for %s", user.Name),
+				CreditsEarned: 0,
+				Reputation:    1.0,
+				Active:        true,
+				UserID:        user.ID,
+			}
+			b.Storage.CreateAgentKey(newAgentKey)
+			agentKeys = []models.AgentKey{newAgentKey}
+		} else {
+			agentKeys = ak
 		}
-		b.Storage.CreateAgentKey(newAgentKey)
-		agentKeys = []models.AgentKey{newAgentKey}
 	}
 
 	resp := struct {

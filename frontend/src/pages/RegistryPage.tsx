@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Search, Download, Trash2, CheckCircle2, Box, RefreshCw, ShieldX, Pin, Clock
+import {
+  Search, Download, Trash2, CheckCircle2, Box, RefreshCw, ShieldX, Pin, Clock, ChevronRight, TrendingUp
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -201,10 +201,10 @@ export const RegistryPage: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2 ml-5">
                            <Badge variant="outline" className="text-[7px] h-3 px-1 border-amber-500/20 text-amber-500 uppercase">
-                             R: {(status?.model_policies?.[model]?.reward_factor || 1.0).toFixed(1)}x
+                             R: {(status?.model_reward_factors?.[model] || 1.0).toFixed(1)}x
                            </Badge>
                            <Badge variant="outline" className="text-[7px] h-3 px-1 border-blue-500/20 text-blue-400 uppercase">
-                             C: {(status?.model_policies?.[model]?.cost_factor || 1.0).toFixed(1)}x
+                             C: {(status?.model_cost_factors?.[model] || 1.0).toFixed(1)}x
                            </Badge>
                         </div>
                       </div>
@@ -285,13 +285,31 @@ export const RegistryPage: React.FC = () => {
                         <p className="text-[10px] text-muted-foreground font-bold">{model.size}</p>
                       </div>
                     </div>
-                    <Select onValueChange={(v) => handlePull(model.name, v === 'cluster' ? undefined : v)}>
-                       <SelectTrigger className="h-8 w-24 text-[9px] font-black uppercase">Deploy</SelectTrigger>
-                       <SelectContent>
-                          <SelectItem value="cluster">Cluster</SelectItem>
-                          {nodes.filter(n => n.id).map(n => <SelectItem key={n.id} value={n.id}>{n.id}</SelectItem>)}
-                       </SelectContent>
-                    </Select>
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        size="sm" 
+                        variant="secondary"
+                        className="h-7 text-[9px] font-black uppercase"
+                        onClick={() => handlePull(model.name)}
+                      >
+                        Deploy Cluster
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="sm" className="h-7 px-2">
+                             <ChevronRight size={12} className="rotate-90" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuLabel className="text-[10px] font-black uppercase opacity-50">Target Node</DropdownMenuLabel>
+                          {nodes.map(n => (
+                            <DropdownMenuItem key={n.id} className="text-[11px] font-bold cursor-pointer" onClick={() => handlePull(model.name, n.id)}>
+                              {n.id}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2">{model.desc}</p>
                 </CardContent>

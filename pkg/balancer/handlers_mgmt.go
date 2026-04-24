@@ -204,8 +204,66 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 	}
 	sort.Strings(allModels)
 
+	// Check Admin status
+	isAdmin := false
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok {
+			isAdmin = u.IsAdmin
+		} else if u, ok := val.(*models.User); ok {
+			isAdmin = u.IsAdmin
+		}
+	}
+	if tkn, ok := r.Context().Value(auth.ContextKeyToken).(string); ok {
+		if tkn == b.Config.AuthToken {
+			isAdmin = true
+		}
+	}
+
 	// Performance Analytics
 	perf, _ := b.Storage.GetPerformanceAnalytics()
+
+	if !isAdmin {
+		// Sanitize for non-admins
+		sanitizedNodes := make(map[string]*models.NodeStatus)
+		for _, n := range agentsCopy {
+			// Create a public summary node
+			publicNode := &models.NodeStatus{
+				State:      n.State,
+				Tier:       n.Tier,
+				HasGPU:     n.HasGPU,
+				GPUModel:   n.GPUModel,
+				VRAMTotal:  n.VRAMTotal,
+				VRAMUsed:   n.VRAMUsed,
+				Draining:   n.Draining,
+				Reputation: n.Reputation,
+			}
+			sanitizedNodes["node-"+n.ID[:4]] = publicNode
+		}
+
+		status := models.ClusterStatus{
+			Nodes:           sanitizedNodes,
+			PendingRequests: pendingRequestsCopy,
+			InProgressPulls: snapshot.InProgressPulls,
+			QueueDepth:      b.Queue.pq.Len(),
+			ActiveWorkloads: totalWorkloads,
+			AllModels:       allModels,
+			UptimeSeconds:   int64(time.Since(b.StartTime).Seconds()),
+			Performance: make(map[string]struct {
+				AvgTTFT     float64 `json:"avg_ttft_ms"`
+				AvgDuration float64 `json:"avg_duration_ms"`
+				Requests    int     `json:"requests"`
+			}),
+		}
+		for m, p := range perf {
+			status.Performance[m] = struct {
+				AvgTTFT     float64 `json:"avg_ttft_ms"`
+				AvgDuration float64 `json:"avg_duration_ms"`
+				Requests    int     `json:"requests"`
+			}{AvgTTFT: p.AvgTTFT, AvgDuration: p.AvgDuration, Requests: p.Requests}
+		}
+		b.jsonResponse(w, http.StatusOK, status)
+		return
+	}
 
 	status := models.ClusterStatus{
 		Nodes:             agentsCopy,
@@ -467,6 +525,12 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req struct {
+		NodeID   string `json:"node_id"`
+		NodeAddr string `json:"node_addr"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
 	// Manual Approval Mode
 	if b.Config.EnableModelApproval {
 		requestID := generateJobID()
@@ -474,6 +538,7 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 			ID:          requestID,
 			Type:        models.RequestDelete,
 			Model:       name,
+			NodeID:      req.NodeID,
 			Status:      models.StatusPending,
 			RequestedAt: time.Now(),
 		})
@@ -493,7 +558,7 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 	b.Jobs.CreateJob(jobID, "model_delete")
 
 	go func() {
-		b.executeDelete(jobID, name)
+		b.executeDelete(jobID, name, req.NodeID, req.NodeAddr)
 	}()
 
 	b.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
@@ -502,10 +567,22 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (b *Balancer) executeDelete(jobID, name string) {
+func (b *Balancer) executeDelete(jobID, name, nodeID, nodeAddr string) {
 	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) { j.Status = jobs.StatusRunning })
 	body, _ := json.Marshal(map[string]string{"model": name})
-	b.Broadcast("/models/delete", body)
+
+	if nodeID != "" || nodeAddr != "" {
+		snapshot := b.State.GetSnapshot()
+		for addr, agent := range snapshot.Agents {
+			if agent.Address == nodeAddr || agent.ID == nodeID {
+				b.sendToAgentWithContext(context.Background(), addr, "/models/delete", body)
+				break
+			}
+		}
+	} else {
+		b.Broadcast("/models/delete", body)
+	}
+
 	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
 		j.Status = jobs.StatusCompleted
 		j.Message = "Delete triggered for " + name
@@ -550,7 +627,7 @@ func (b *Balancer) HandleV1ModelRequestApprove(w http.ResponseWriter, r *http.Re
 		case models.RequestPull:
 			b.executePull(jobID, req.Model, req.NodeID, "")
 		case models.RequestDelete:
-			b.executeDelete(jobID, req.Model)
+			b.executeDelete(jobID, req.Model, req.NodeID, "")
 		}
 	}()
 

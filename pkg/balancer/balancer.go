@@ -220,12 +220,12 @@ func (b *Balancer) NewMux() *chi.Mux {
 
 		r.Get("/catalog", b.HandleV1Catalog)
 		r.Get("/me", b.HandleV1Me)
+		r.Get("/status", b.HandleV1ClusterStatus)
 
 		// Gated Admin Routes
 		r.Group(func(r chi.Router) {
 			r.Use(b.AdminOnly)
 
-			r.Get("/status", b.HandleV1ClusterStatus)
 			r.Get("/logs", b.HandleV1Logs)
 			r.Get("/logs/history", b.HandleV1LogHistory)
 

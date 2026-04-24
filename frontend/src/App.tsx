@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router';
+import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useCluster } from './ClusterContext';
 import {
   LayoutDashboard, Server, Database, Terminal, ScrollText,
@@ -20,8 +20,10 @@ import sdk, { type ClusterStatus, type User } from './api';
 
 const baseNavItems = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, admin: true },
+  { to: '/portal', label: 'Marketplace', icon: Zap },
   { to: '/fleet', label: 'Fleet', icon: Server, admin: true },
   { to: '/registry', label: 'Registry', icon: Database, admin: true },
+  { to: '/users', label: 'Users', icon: UserIcon, admin: true },
   { to: '/keys', label: 'Access', icon: Key, admin: true },
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
@@ -43,12 +45,19 @@ function getOfflineCount(status: ClusterStatus) {
 const App = () => {
   const { status, error, isLoading, refresh } = useCluster();
   const location = useLocation();
+  const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
     sdk.getMe()
-      .then(res => setUser(res.user))
+      .then(res => {
+        setUser(res.user);
+        // Redirect non-admins away from index if they land there
+        if (location.pathname === '/' && !res.user.is_admin) {
+          navigate('/portal');
+        }
+      })
       .catch(() => {
         // If not authenticated, we don't redirect yet to allow playground/chat if they have tokens
         // But for dashboard access, we might want to redirect

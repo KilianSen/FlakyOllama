@@ -10,6 +10,7 @@ import { ChatPage } from './pages/ChatPage';
 import { LogsPage } from './pages/LogsPage';
 import { ConfigPage } from './pages/ConfigPage';
 import ProfilePage from './pages/ProfilePage';
+import { UsersPage } from './pages/UsersPage';
 
 export const router = createBrowserRouter([
   {
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
       { index: true, element: <OverviewPage /> },
       { path: 'fleet', element: <FleetPage /> },
       { path: 'registry', element: <RegistryPage /> },
+      { path: 'users', element: <UsersPage /> },
       { path: 'keys', element: <KeysPage /> },
       { path: 'portal', element: <PublicPortal /> },
       { path: 'playground', element: <PlaygroundPage /> },
