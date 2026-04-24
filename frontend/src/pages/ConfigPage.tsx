@@ -9,6 +9,7 @@ import { Slider } from '@/components/ui/slider';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { api, type Config } from '../api';
 
@@ -22,12 +23,12 @@ function FieldRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-6 py-3">
+    <div className="flex flex-col gap-3 py-3 md:flex-row md:items-start md:justify-between md:gap-6">
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-bold">{label}</p>
-        {description && <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{description}</p>}
+        <p className="text-sm font-semibold leading-tight">{label}</p>
+        {description && <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{description}</p>}
       </div>
-      <div className="shrink-0 w-40">{children}</div>
+      <div className="w-full shrink-0 md:w-56">{children}</div>
     </div>
   );
 }
@@ -56,7 +57,7 @@ function NumberField({
         const v = step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value);
         if (!isNaN(v)) onChange(v);
       }}
-      className="h-8 bg-muted/50 border-border/50 text-xs font-mono text-right"
+      className="h-9 bg-muted/50 border-border/50 text-sm font-mono text-right"
     />
   );
 }
@@ -65,9 +66,9 @@ function FactorTable({ title, factors, onUpdate }: { title: string, factors: Rec
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-         <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">{title}</p>
-         <Button 
-           variant="outline" size="sm" className="h-6 text-[8px] font-black uppercase"
+         <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</p>
+         <Button
+           variant="outline" size="sm" className="h-8 text-xs font-semibold"
            onClick={() => {
              const m = prompt('Enter model name:');
              if (m) onUpdate({ ...factors, [m]: 1.0 });
@@ -76,26 +77,26 @@ function FactorTable({ title, factors, onUpdate }: { title: string, factors: Rec
       </div>
       <div className="space-y-2">
         {Object.entries(factors).map(([model, factor]) => (
-          <div key={model} className="flex items-center gap-2 bg-muted/20 p-2 rounded-lg border border-border/30 group">
-            <span className="text-[9px] font-mono font-black flex-1 truncate">{model}</span>
+          <div key={model} className="grid grid-cols-1 gap-2 rounded-lg border border-border/40 bg-muted/20 p-3 sm:grid-cols-[minmax(0,1fr)_96px_32px] sm:items-center">
+            <span className="truncate text-xs font-mono font-semibold">{model}</span>
             <Input
               type="number"
-              className="h-6 w-16 bg-background text-[9px] font-black p-1"
+              className="h-8 w-full bg-background text-sm font-medium"
               value={factor}
               onChange={e => onUpdate({ ...factors, [model]: parseFloat(e.target.value) })}
             />
             <Button 
-              variant="ghost" size="sm" className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100"
+              variant="ghost" size="sm" className="h-8 w-8 p-0"
               onClick={() => {
                 const next = { ...factors };
                 delete next[model];
                 onUpdate(next);
               }}
-            ><Trash2 size={10} /></Button>
+            ><Trash2 size={14} /></Button>
           </div>
         ))}
         {Object.keys(factors).length === 0 && (
-          <p className="text-[9px] italic text-muted-foreground/40 text-center py-2">No custom factors defined</p>
+          <p className="py-2 text-center text-xs italic text-muted-foreground/70">No custom factors defined</p>
         )}
       </div>
     </div>
@@ -108,6 +109,18 @@ export const ConfigPage: React.FC = () => {
   const [error, setError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [activeTab, setActiveTab] = useState('conn');
+
+  const sections = [
+    { value: 'conn', label: 'Connection', icon: Shield, color: 'text-emerald-400', requiresConfig: false },
+    { value: 'econ', label: 'Economics', icon: BarChart2, color: 'text-amber-400', requiresConfig: true },
+    { value: 'hedging', label: 'Hedging', icon: Zap, color: 'text-primary', requiresConfig: true },
+    { value: 'routing', label: 'Routing', icon: BarChart2, color: 'text-purple-400', requiresConfig: true },
+    { value: 'circuit', label: 'Circuit Breaker', icon: Shield, color: 'text-red-400', requiresConfig: true },
+    { value: 'limits', label: 'System Limits', icon: Clock, color: 'text-teal-400', requiresConfig: true },
+    { value: 'autoscaling', label: 'Auto-Scaling', icon: TrendingUp, color: 'text-pink-400', requiresConfig: true },
+    { value: 'agentcaps', label: 'Agent Control', icon: Cpu, color: 'text-orange-400', requiresConfig: true },
+  ] as const;
 
   // Connection settings (localStorage)
   const [localUrl, setLocalUrl] = useState(localStorage.getItem('BALANCER_URL') || '');
@@ -154,21 +167,22 @@ export const ConfigPage: React.FC = () => {
       await api.updateConfig(config);
       toast.success('Configuration applied');
       setDirty(false);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to save configuration');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : (err as { message?: string })?.message || 'Failed to save configuration';
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-6xl space-y-6 p-4 pb-28 sm:p-6 sm:pb-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-black uppercase tracking-widest">Cluster Configuration</h2>
+          <h2 className="text-lg font-black uppercase tracking-widest sm:text-xl">Cluster Configuration</h2>
           <p className="text-sm text-muted-foreground mt-0.5">Live runtime parameters — changes apply immediately</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="hidden flex-wrap items-center gap-2 sm:flex">
           {dirty && <Badge className="text-xs font-black bg-amber-500/15 text-amber-400 border-amber-500/30">Unsaved changes</Badge>}
           <Button variant="outline" size="sm" className="h-9 text-xs font-bold gap-1.5" onClick={load} disabled={loading}>
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Reload
@@ -180,33 +194,39 @@ export const ConfigPage: React.FC = () => {
         </div>
       </div>
 
-      <Tabs defaultValue="conn" className="flex flex-col md:flex-row gap-6">
-        <TabsList className="flex md:flex-col justify-start h-auto bg-transparent space-y-1 w-full md:w-48 shrink-0 overflow-x-auto md:overflow-visible">
-          <TabsTrigger value="conn" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full">
-            <Shield size={14} className="text-emerald-400" /> Connection
-          </TabsTrigger>
-          <TabsTrigger value="econ" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full" disabled={!config}>
-            <BarChart2 size={14} className="text-amber-400" /> Economics
-          </TabsTrigger>
-          <TabsTrigger value="hedging" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full" disabled={!config}>
-            <Zap size={14} className="text-primary" /> Hedging
-          </TabsTrigger>
-          <TabsTrigger value="routing" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full" disabled={!config}>
-            <BarChart2 size={14} className="text-purple-400" /> Routing
-          </TabsTrigger>
-          <TabsTrigger value="circuit" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full" disabled={!config}>
-            <Shield size={14} className="text-red-400" /> Circuit Breaker
-          </TabsTrigger>
-          <TabsTrigger value="limits" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full" disabled={!config}>
-            <Clock size={14} className="text-teal-400" /> System Limits
-          </TabsTrigger>
-          <TabsTrigger value="autoscaling" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full" disabled={!config}>
-            <TrendingUp size={14} className="text-pink-400" /> Auto-Scaling
-          </TabsTrigger>
-          <TabsTrigger value="agentcaps" className="justify-start gap-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:shadow-sm w-full" disabled={!config}>
-            <Cpu size={14} className="text-orange-400" /> Agent Control
-          </TabsTrigger>
-        </TabsList>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-6">
+        <div className="space-y-3">
+          <div className="sm:hidden">
+            <Select value={activeTab} onValueChange={setActiveTab}>
+              <SelectTrigger className="h-10 text-sm">
+                <SelectValue placeholder="Select section" />
+              </SelectTrigger>
+              <SelectContent>
+                {sections.map(section => (
+                  <SelectItem key={section.value} value={section.value} disabled={section.requiresConfig && !config}>
+                    {section.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <TabsList className="hidden h-auto grid-cols-1 gap-2 bg-transparent p-0 sm:grid lg:content-start">
+            {sections.map(section => {
+              const Icon = section.icon;
+              return (
+                <TabsTrigger
+                  key={section.value}
+                  value={section.value}
+                  disabled={section.requiresConfig && !config}
+                  className="h-10 justify-start gap-2 px-3 text-sm font-semibold data-[state=active]:bg-card data-[state=active]:shadow-sm lg:w-full"
+                >
+                  <Icon size={14} className={section.color} /> {section.label}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+        </div>
 
         <div className="flex-1 min-w-0">
           <TabsContent value="conn" className="mt-0">
@@ -225,7 +245,7 @@ export const ConfigPage: React.FC = () => {
                     value={localUrl}
                     onChange={e => { setLocalUrl(e.target.value); setConnDirty(true); }}
                     placeholder="Default (Relative)"
-                    className="h-8 bg-muted/50 border-border/50 text-xs font-mono"
+                    className="h-9 bg-muted/50 border-border/50 text-sm font-mono"
                   />
                 </FieldRow>
                 <FieldRow label="API Token" description="Bearer token for cluster authentication">
@@ -234,14 +254,14 @@ export const ConfigPage: React.FC = () => {
                     value={localToken}
                     onChange={e => { setLocalToken(e.target.value); setConnDirty(true); }}
                     placeholder="Default from ENV"
-                    className="h-8 bg-muted/50 border-border/50 text-xs font-mono"
+                    className="h-9 bg-muted/50 border-border/50 text-sm font-mono"
                   />
                 </FieldRow>
                 <div className="flex justify-end pt-4">
                   <Button
                     size="sm"
                     variant="secondary"
-                    className="h-8 text-xs font-black uppercase"
+                    className="h-9 text-xs font-black uppercase"
                     disabled={!connDirty}
                     onClick={saveConnection}
                   >
@@ -506,6 +526,23 @@ export const ConfigPage: React.FC = () => {
           )}
         </div>
       </Tabs>
+
+      <Card className="fixed inset-x-3 bottom-3 z-30 border-border/60 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/70 sm:hidden">
+        <CardContent className="flex items-center justify-between gap-2 p-3">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold">{dirty ? 'Unsaved changes' : 'All changes saved'}</p>
+            <p className="text-[11px] text-muted-foreground">Current section: {sections.find(s => s.value === activeTab)?.label}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="h-9" onClick={load} disabled={loading}>
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </Button>
+            <Button size="sm" className="h-9" onClick={save} disabled={saving || !dirty || error}>
+              {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };
