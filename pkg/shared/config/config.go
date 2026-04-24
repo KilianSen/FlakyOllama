@@ -34,6 +34,9 @@ type Config struct {
 	EnableAutoScaling  bool `json:"enable_auto_scaling"`
 	AutoScaleThreshold int  `json:"auto_scale_threshold"` // Queue depth per model
 
+	// Virtual Models & Pipelines
+	VirtualModels map[string]models.VirtualModelConfig `json:"virtual_models"`
+
 	// OIDC Configuration
 	OIDC OIDCConfig `json:"oidc"`
 }
@@ -100,6 +103,7 @@ func DefaultConfig() *Config {
 		AutoScaleThreshold:     5,
 		MaxVRAMAllocated:       12 * 1024 * 1024 * 1024, // 12GB
 		MaxCPUAllocated:        8,
+		VirtualModels:          make(map[string]models.VirtualModelConfig),
 	}
 }
 

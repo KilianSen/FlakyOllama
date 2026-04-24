@@ -9,6 +9,7 @@ import { Slider } from '@/components/ui/slider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { toast } from 'sonner';
+import { generateId } from '@/lib/utils';
 import type OpenAI from 'openai';
 import sdk from '../api';
 import { useCluster } from '../ClusterContext';
@@ -126,11 +127,11 @@ export const ChatPage: React.FC = () => {
     if (!input.trim() || !selectedModel || loading) return;
 
     const userMsg: Message = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       role: 'user',
       content: input.trim(),
     };
-    const assistantId = crypto.randomUUID();
+    const assistantId = generateId();
     const assistantMsg: Message = {
       id: assistantId,
       role: 'assistant',

@@ -147,6 +147,8 @@ type ClusterStatus struct {
 	ModelRewardFactors map[string]float64 `json:"model_reward_factors"`
 	ModelCostFactors   map[string]float64 `json:"model_cost_factors"`
 
+	VirtualModels map[string]VirtualModelConfig `json:"virtual_models"`
+
 	Performance map[string]struct {
 		AvgTTFT     float64 `json:"avg_ttft_ms"`
 		AvgDuration float64 `json:"avg_duration_ms"`
@@ -233,4 +235,23 @@ type AgentKey struct {
 	Reputation    float64 `json:"reputation"`
 	Active        bool    `json:"active"`
 	UserID        string  `json:"user_id,omitempty"` // ID of the user owning this key
+}
+
+// VirtualModelConfig defines how a virtual model resolves to real models.
+type VirtualModelConfig struct {
+	Type       string         `json:"type"`        // "pipeline", "arena", "metric"
+	Strategy   string         `json:"strategy"`    // "fastest", "cheapest", "random"
+	JudgeModel string         `json:"judge_model"` // If type is judge/pipeline
+	Targets    []string       `json:"targets"`     // Real backing models
+	Steps      []PipelineStep `json:"steps"`       // Execution flow
+}
+
+type PipelineStep struct {
+	Action       string            `json:"action"` // "generate", "classify", "check"
+	Model        string            `json:"model"`
+	SystemPrompt string            `json:"system_prompt"`
+	MaxRetries   int               `json:"max_retries"`
+	OnSuccess    string            `json:"on_success"` // "next", "return"
+	OnFail       string            `json:"on_fail"`    // "retry", "fallback", "error"
+	Routes       map[string]string `json:"routes"`     // If action is classify
 }

@@ -52,6 +52,29 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 	}
 	b.affinityMu.RUnlock()
 
+	// ── Targeted Node Logic (Playground Override) ──
+	// If contextHash is explicitly a node ID, we ONLY route to that node.
+	var targetNode models.NodeStatus
+	isStrictTarget := false
+	for _, a := range snapshot.Agents {
+		if a.ID == contextHash {
+			targetNode = a
+			isStrictTarget = true
+			break
+		}
+	}
+
+	if isStrictTarget {
+		// Strict routing: Bypass scoring
+		if targetNode.State == models.StateHealthy || targetNode.State == models.StateDegraded {
+			b.State.DoAsync(func(s *state.ClusterState) {
+				s.NodeWorkloads[targetNode.Address]++
+			})
+			return targetNode.ID, targetNode.Address, nil
+		}
+		return "", "", fmt.Errorf("targeted node %s is offline", contextHash)
+	}
+
 	var bestAgent models.NodeStatus
 	var bestScore = -1000.0
 	var foundBest = false

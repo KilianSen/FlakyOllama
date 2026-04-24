@@ -18,11 +18,15 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. Resolve Virtual Model
+	resolvedModel, vConfig, isVirtual := b.ResolveVirtualModel(oaiReq.Model)
+
 	// Map OpenAI to Ollama/Internal
 	ollamaReq := models.ChatRequest{
-		Model:   oaiReq.Model,
-		Stream:  oaiReq.Stream,
-		Options: oaiReq.Options,
+		Model:    resolvedModel,
+		Stream:   oaiReq.Stream,
+		Priority: 0, // baseline
+		Options:  oaiReq.Options,
 	}
 	for _, m := range oaiReq.Messages {
 		ollamaReq.Messages = append(ollamaReq.Messages, models.ChatMessage{
@@ -31,6 +35,41 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 2. Handle Pipeline execution (Non-streaming only for now)
+	if isVirtual && vConfig.Type == "pipeline" {
+		if oaiReq.Stream {
+			http.Error(w, "Streaming not yet supported for recursive pipelines", http.StatusBadRequest)
+			return
+		}
+		
+		output, err := b.ExecutePipeline(r.Context(), ollamaReq, vConfig)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		
+		// Respond with final pipeline output
+		oaiResp := models.OpenAIChatResponse{
+			ID:      fmt.Sprintf("chatcmpl-pipe-%d", time.Now().Unix()),
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   oaiReq.Model,
+			Choices: []models.OpenAIChoice{
+				{
+					Index: 0,
+					Message: &models.OpenAIMessage{
+						Role:    "assistant",
+						Content: output,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(oaiResp)
+		return
+	}
+
+	// 3. Regular path (resolved real model)
 	// Load Shedding: Check if queue is at capacity
 	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
 		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
@@ -49,9 +88,9 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	// Lock in surge pricing for the duration of this request
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
-	// Compute Context Hash
-	contextHash := ""
-	if len(ollamaReq.Messages) > 0 {
+	// Compute Context Hash or use Targeted Node
+	contextHash := r.Header.Get("X-Node-Id")
+	if contextHash == "" && len(ollamaReq.Messages) > 0 {
 		hData, _ := json.Marshal(ollamaReq.Messages)
 		contextHash = b.computeHash(string(hData))
 	}
@@ -246,8 +285,14 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// 1. Resolve Virtual Model
+	resolvedModel, _, isVirtual := b.ResolveVirtualModel(oaiReq.Model)
+	if isVirtual {
+		// Completions don't support complex pipelines yet, only aliasing/metric
+	}
+
 	ollamaReq := models.InferenceRequest{
-		Model:   oaiReq.Model,
+		Model:   resolvedModel,
 		Prompt:  oaiReq.Prompt,
 		Stream:  oaiReq.Stream,
 		Options: oaiReq.Options,
@@ -271,9 +316,9 @@ func (b *Balancer) HandleOpenAICompletions(w http.ResponseWriter, r *http.Reques
 	// Lock in surge pricing for the duration of this request
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
-	// Compute Context Hash
-	contextHash := ""
-	if ollamaReq.Prompt != "" {
+	// Compute Context Hash or use Targeted Node
+	contextHash := r.Header.Get("X-Node-Id")
+	if contextHash == "" && ollamaReq.Prompt != "" {
 		contextHash = b.computeHash(ollamaReq.Prompt)
 	}
 
@@ -480,6 +525,16 @@ func (b *Balancer) HandleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Add Virtual Models
+	for name := range b.Config.VirtualModels {
+		oaiModels = append(oaiModels, models.OpenAIModel{
+			ID:      name,
+			Object:  "model",
+			Created: time.Now().Unix(),
+			OwnedBy: "flakyollama-virtual",
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models.OpenAIModelList{
 		Object: "list",
@@ -497,10 +552,12 @@ func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request
 	// Lock in surge pricing
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
-	// Compute Context Hash
-	contextHash := ""
-	if hData, err := json.Marshal(oaiReq.Input); err == nil {
-		contextHash = b.computeHash(string(hData))
+	// Compute Context Hash or use Targeted Node
+	contextHash := r.Header.Get("X-Node-Id")
+	if contextHash == "" {
+		if hData, err := json.Marshal(oaiReq.Input); err == nil {
+			contextHash = b.computeHash(string(hData))
+		}
 	}
 
 	// Map OpenAI to Ollama

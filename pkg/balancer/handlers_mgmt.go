@@ -286,6 +286,7 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 		TotalCost:         totalCost,
 		ModelRewardFactors: b.Config.ModelRewardFactors,
 		ModelCostFactors:   b.Config.ModelCostFactors,
+		VirtualModels:      b.Config.VirtualModels,
 		Performance: make(map[string]struct {
 			AvgTTFT     float64 `json:"avg_ttft_ms"`
 			AvgDuration float64 `json:"avg_duration_ms"`
@@ -749,9 +750,29 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 		}
 
 		catalog = append(catalog, modelInfo{
-			Name: m, Reward: reward, Cost: cost,
+			Name:   m,
+			Reward: reward,
+			Cost:   cost,
 		})
-	}
+		}
+
+		// Add Virtual Models
+		for name := range b.Config.VirtualModels {
+		reward := 1.0
+		if f, ok := b.Config.ModelRewardFactors[name]; ok {
+			reward = f
+		}
+		cost := 1.0
+		if f, ok := b.Config.ModelCostFactors[name]; ok {
+			cost = f
+		}
+		catalog = append(catalog, modelInfo{
+			Name:   name,
+			Reward: reward,
+			Cost:   cost,
+		})
+		}
+
 
 	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"global_reward_multiplier": b.Config.GlobalRewardMultiplier,

@@ -34,6 +34,19 @@ export interface NodeStatus {
   agent_key?: string;
 }
 
+export interface VirtualModelConfig {
+  type: 'pipeline' | 'arena' | 'metric';
+  strategy?: 'fastest' | 'cheapest' | 'random';
+  judge_model?: string;
+  targets: string[];
+  steps?: Array<{
+    action: string;
+    model: string;
+    system_prompt?: string;
+    max_retries?: number;
+  }>;
+}
+
 export interface ClusterStatus {
   nodes: Record<string, NodeStatus>;
   active_workloads: number;
@@ -53,6 +66,7 @@ export interface ClusterStatus {
   total_cost: number;
   model_reward_factors: Record<string, number>;
   model_cost_factors: Record<string, number>;
+  virtual_models: Record<string, VirtualModelConfig>;
   node_workloads: Record<string, number>;
   in_progress_pulls: Record<string, string>;
   model_policies: Record<string, Record<string, { Banned: boolean, Pinned: boolean }>>;

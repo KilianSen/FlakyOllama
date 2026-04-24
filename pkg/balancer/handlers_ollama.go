@@ -142,8 +142,9 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	targetNode := r.Header.Get("X-Node-Id")
 	body, _ := json.Marshal(req)
-	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/show", body, r.RemoteAddr, false, 0, "")
+	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/show", body, r.RemoteAddr, false, 0, targetNode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -187,6 +188,19 @@ func (b *Balancer) HandleTags(w http.ResponseWriter, _ *http.Request) {
 		modelList = append(modelList, m)
 	}
 
+	// Add Virtual Models
+	for name := range b.Config.VirtualModels {
+		modelList = append(modelList, models.ModelInfo{
+			Name:       name,
+			Model:      name,
+			ModifiedAt: time.Now(),
+			Details: &models.ModelDetails{
+				Format: "virtual",
+				Family: "pipeline",
+			},
+		})
+	}
+
 	sort.Slice(modelList, func(i, j int) bool {
 		return modelList[i].Name < modelList[j].Name
 	})
@@ -209,7 +223,8 @@ func (b *Balancer) HandleEmbed(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/embeddings", body, r.RemoteAddr, false, 0, "")
+	targetNode := r.Header.Get("X-Node-Id")
+	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/embeddings", body, r.RemoteAddr, false, 0, targetNode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

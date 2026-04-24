@@ -49,6 +49,14 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, modelName string, path s
 	ctx1, cancel1 := context.WithCancel(ctx)
 	go b.singleAttemptSpeculative(ctx1, cancel1, modelName, path, body, clientIP, priority, contextHash, results)
 
+	// Check if this is a targeted request (Playground node selection)
+	isTargeted := strings.HasPrefix(contextHash, "node-") || (len(contextHash) > 0 && !strings.Contains(contextHash, " ")) // basic heuristic
+
+	// Override shouldHedge if targeted
+	if isTargeted {
+		allowHedging = false
+	}
+
 	shouldHedge := allowHedging && b.Queue.pq.Len() == 0
 
 	timer := time.NewTimer(p90)
