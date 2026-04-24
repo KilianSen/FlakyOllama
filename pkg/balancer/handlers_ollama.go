@@ -143,7 +143,7 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	body, _ := json.Marshal(req)
-	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/show", body, r.RemoteAddr, false, 0)
+	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/show", body, r.RemoteAddr, false, 0, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -209,7 +209,7 @@ func (b *Balancer) HandleEmbed(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/embeddings", body, r.RemoteAddr, false, 0)
+	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/embeddings", body, r.RemoteAddr, false, 0, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
