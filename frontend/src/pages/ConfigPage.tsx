@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, RefreshCw, Shield, Zap, BarChart2, Clock, Trash2, TrendingUp, Cpu } from 'lucide-react';
+import { Save, RefreshCw, Shield, Zap, BarChart2, Clock, Trash2, TrendingUp, Cpu, Layers, Plus } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,9 +9,11 @@ import { Slider } from '@/components/ui/slider';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { api, type Config } from '../api';
+import { useCluster } from '../ClusterContext';
 
 function FieldRow({
   label,
@@ -103,6 +105,123 @@ function FactorTable({ title, factors, onUpdate }: { title: string, factors: Rec
   );
 }
 
+function VirtualModelTable({ 
+    virtualModels, 
+    onUpdate,
+    availableModels 
+  }: { 
+    virtualModels: Record<string, any>, 
+    onUpdate: (f: Record<string, any>) => void,
+    availableModels: string[]
+  }) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+           <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Registered Virtual Models</p>
+           <Button
+             variant="outline" size="sm" className="h-8 text-[10px] font-black uppercase tracking-widest gap-2"
+             onClick={() => {
+               const m = prompt('Enter virtual model alias (e.g. auto-coder):');
+               if (m) onUpdate({ ...virtualModels, [m]: { type: 'metric', strategy: 'fastest', targets: [] } });
+             }}
+           ><Plus size={12} /> New Alias</Button>
+        </div>
+        <div className="space-y-3">
+          {Object.entries(virtualModels || {}).map(([name, vConfig]) => (
+            <div key={name} className="rounded-xl border border-border/50 bg-muted/20 p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="font-mono text-[10px] font-black px-2 bg-background">{name}</Badge>
+                  <Select value={vConfig.type} onValueChange={(t) => onUpdate({ ...virtualModels, [name]: { ...vConfig, type: t } })}>
+                    <SelectTrigger className="h-7 w-28 text-[9px] font-black uppercase">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="metric">Metric</SelectItem>
+                      <SelectItem value="arena">Arena</SelectItem>
+                      <SelectItem value="pipeline">Pipeline</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button 
+                  variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                  onClick={() => {
+                    const next = { ...virtualModels };
+                    delete next[name];
+                    onUpdate(next);
+                  }}
+                ><Trash2 size={12} /></Button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {vConfig.type === 'metric' && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase opacity-50">Selection Strategy</Label>
+                    <Select value={vConfig.strategy} onValueChange={(s) => onUpdate({ ...virtualModels, [name]: { ...vConfig, strategy: s } })}>
+                      <SelectTrigger className="h-8 text-xs font-bold">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="fastest">Fastest (TTFT)</SelectItem>
+                        <SelectItem value="cheapest">Cheapest (Factor)</SelectItem>
+                        <SelectItem value="most_reliable">Most Reliable</SelectItem>
+                        <SelectItem value="random">Random (Canary)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {vConfig.type === 'pipeline' && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase opacity-50">Judge Model</Label>
+                    <Select value={vConfig.judge_model} onValueChange={(j) => onUpdate({ ...virtualModels, [name]: { ...vConfig, judge_model: j } })}>
+                      <SelectTrigger className="h-8 text-xs font-bold">
+                        <SelectValue placeholder="Select Judge..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-[9px] font-black uppercase opacity-50">Backing Target Models</Label>
+                  <div className="flex flex-wrap gap-2 p-2 rounded-lg bg-background/50 border border-border/30">
+                    {vConfig.targets?.map((t: string) => (
+                      <Badge key={t} className="gap-1 pl-2 pr-1 h-6 text-[10px] font-bold">
+                        {t}
+                        <button onClick={() => {
+                           const nextTargets = vConfig.targets.filter((target: string) => target !== t);
+                           onUpdate({ ...virtualModels, [name]: { ...vConfig, targets: nextTargets } });
+                        }} className="hover:text-red-400 p-0.5"><Trash2 size={10} /></button>
+                      </Badge>
+                    ))}
+                    <Select onValueChange={(v) => {
+                       if (vConfig.targets?.includes(v)) return;
+                       const nextTargets = [...(vConfig.targets || []), v];
+                       onUpdate({ ...virtualModels, [name]: { ...vConfig, targets: nextTargets } });
+                    }}>
+                      <SelectTrigger className="h-6 w-32 text-[9px] font-black uppercase border-dashed">
+                        + Add Target
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+          {Object.keys(virtualModels || {}).length === 0 && (
+            <p className="py-8 text-center text-xs italic text-muted-foreground/50 border border-dashed rounded-xl">No virtual models defined</p>
+          )}
+        </div>
+      </div>
+    );
+}
+
 export const ConfigPage: React.FC = () => {
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
@@ -120,6 +239,7 @@ export const ConfigPage: React.FC = () => {
     { value: 'limits', label: 'System Limits', icon: Clock, color: 'text-teal-400', requiresConfig: true },
     { value: 'autoscaling', label: 'Auto-Scaling', icon: TrendingUp, color: 'text-pink-400', requiresConfig: true },
     { value: 'agentcaps', label: 'Agent Control', icon: Cpu, color: 'text-orange-400', requiresConfig: true },
+    { value: 'virtual', label: 'Virtual Models', icon: Layers, color: 'text-sky-400', requiresConfig: true },
   ] as const;
 
   // Connection settings (localStorage)
@@ -519,6 +639,26 @@ export const ConfigPage: React.FC = () => {
                         min={0}
                       />
                     </FieldRow>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="virtual" className="mt-0">
+                <Card className="border-border/50">
+                  <CardHeader>
+                    <CardTitle className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
+                      <Layers size={16} className="text-sky-400" /> Virtual Models & Pipelines
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      Define model aliases that intelligently route to specialists or execute multi-stage workflows.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <VirtualModelTable 
+                      virtualModels={config.virtual_models || {}} 
+                      onUpdate={(next) => set('virtual_models', next)}
+                      availableModels={status?.all_models || []}
+                    />
                   </CardContent>
                 </Card>
               </TabsContent>
