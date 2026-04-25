@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -177,6 +178,7 @@ func (b *Balancer) NewMux() *chi.Mux {
 	remoteToken := b.Config.RemoteToken
 	r := chi.NewRouter()
 
+	r.Use(middleware.Compress(5))
 	r.Use(b.CORS)
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +196,11 @@ func (b *Balancer) NewMux() *chi.Mux {
 	// Base
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/metrics", b.HandleMetrics)
+
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		logging.Global.Warnf("404 Not Found: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		http.NotFound(w, r)
+	})
 
 	// Legacy Ollama Layer
 	r.Group(func(r chi.Router) {

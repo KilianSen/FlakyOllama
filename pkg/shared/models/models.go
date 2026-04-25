@@ -148,6 +148,7 @@ type ClusterStatus struct {
 	ModelCostFactors   map[string]float64 `json:"model_cost_factors"`
 
 	VirtualModels map[string]VirtualModelConfig `json:"virtual_models"`
+	OIDCEnabled   bool                         `json:"oidc_enabled"`
 
 	Performance map[string]struct {
 		AvgTTFT     float64 `json:"avg_ttft_ms"`

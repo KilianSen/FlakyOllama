@@ -82,7 +82,7 @@ const App = () => {
     );
   }
 
-  if (!user && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage) {
+  if (!user && status?.oidc_enabled && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage) {
     // Redirect to OIDC login via proxy to maintain cookie context
     window.location.href = `/auth/login`;
     return null;

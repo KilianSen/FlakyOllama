@@ -67,6 +67,7 @@ export interface ClusterStatus {
   model_reward_factors: Record<string, number>;
   model_cost_factors: Record<string, number>;
   virtual_models: Record<string, VirtualModelConfig>;
+  oidc_enabled: boolean;
   node_workloads: Record<string, number>;
   in_progress_pulls: Record<string, string>;
   model_policies: Record<string, Record<string, { Banned: boolean, Pinned: boolean }>>;

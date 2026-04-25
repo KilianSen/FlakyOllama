@@ -287,6 +287,7 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 		ModelRewardFactors: b.Config.ModelRewardFactors,
 		ModelCostFactors:   b.Config.ModelCostFactors,
 		VirtualModels:      b.Config.VirtualModels,
+		OIDCEnabled:        b.Config.OIDC.Enabled,
 		Performance: make(map[string]struct {
 			AvgTTFT     float64 `json:"avg_ttft_ms"`
 			AvgDuration float64 `json:"avg_duration_ms"`
@@ -884,6 +885,15 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 
 	// Get authenticated token from context
 	token, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
+	// Verify key if it's not the master remote token
+	if token != b.Config.RemoteToken {
+		if _, err := b.Storage.GetAgentKey(token); err != nil {
+			logging.Global.Warnf("Unauthorized registration attempt from %s with invalid AgentKey", addr)
+			b.jsonError(w, http.StatusUnauthorized, "invalid agent key")
+			return
+		}
+	}
 
 	b.State.Do(func(s *state.ClusterState) {
 		existing, exists := s.Agents[addr]

@@ -46,10 +46,15 @@ func (b *Balancer) initOIDC() (*oidc.Provider, oauth2.Config, error) {
 }
 
 func (b *Balancer) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	if !b.Config.OIDC.Enabled {
+		logging.Global.Warnf("OIDC: Login attempt while OIDC is disabled")
+		http.Error(w, "OIDC is disabled in cluster configuration", http.StatusForbidden)
+		return
+	}
 	logging.Global.Infof("OIDC: Login initiated from %s", r.RemoteAddr)
-	_, oauth2Config, err := b.initOIDC()
-	if err != nil {
-		http.Error(w, "OIDC Provider Error: "+err.Error(), http.StatusInternalServerError)
+	provider, oauth2Config, err := b.initOIDC()
+	if err != nil || provider == nil {
+		http.Error(w, "OIDC Provider Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -109,7 +114,12 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sub := claims["sub"].(string)
+	sub, ok := claims["sub"].(string)
+	if !ok || sub == "" {
+		logging.Global.Errorf("OIDC: Missing 'sub' claim")
+		http.Error(w, "Invalid token claims", http.StatusBadRequest)
+		return
+	}
 	email, _ := claims["email"].(string)
 	name, _ := claims["name"].(string)
 

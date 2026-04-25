@@ -141,19 +141,55 @@ func (b *Balancer) broadcastLog(msg string) {
 
 func (b *Balancer) StartMetricProcessor() {
 	go func() {
+		tokenBatch := make([]tokenUsageEntry, 0, 50)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case m := <-b.MetricCh:
 				b.Storage.RecordMetric(m.nodeID, m.model, m.latency, m.success)
 			case t := <-b.TokenCh:
-				if err := b.Storage.RecordTokenUsage(t.nodeID, t.model, t.input, t.output, t.reward, t.cost, t.ttft, t.duration, t.clientKey); err != nil {
-					logging.Global.Errorf("Failed to record token usage: %v", err)
+				tokenBatch = append(tokenBatch, t)
+				if len(tokenBatch) >= 50 {
+					b.flushTokenBatch(tokenBatch)
+					tokenBatch = tokenBatch[:0]
+				}
+			case <-ticker.C:
+				if len(tokenBatch) > 0 {
+					b.flushTokenBatch(tokenBatch)
+					tokenBatch = tokenBatch[:0]
 				}
 			case <-b.stopCh:
+				if len(tokenBatch) > 0 {
+					b.flushTokenBatch(tokenBatch)
+				}
 				return
 			}
 		}
 	}()
+}
+
+func (b *Balancer) flushTokenBatch(batch []tokenUsageEntry) {
+	entries := make([]struct {
+		NodeID, Model, ClientKey string
+		Input, Output            int
+		Reward, Cost             float64
+		TTFT, Duration           int64
+	}, len(batch))
+
+	for i, t := range batch {
+		entries[i] = struct {
+			NodeID, Model, ClientKey string
+			Input, Output            int
+			Reward, Cost             float64
+			TTFT, Duration           int64
+		}{t.nodeID, t.model, t.clientKey, t.input, t.output, t.reward, t.cost, t.ttft, t.duration}
+	}
+
+	if err := b.Storage.RecordTokenUsageBatch(entries); err != nil {
+		logging.Global.Errorf("Failed to record token usage batch: %v", err)
+	}
 }
 
 func (b *Balancer) StartPerfCacheRefresher() {
@@ -213,21 +249,22 @@ func (b *Balancer) worker() {
 			if !ok {
 				return // Queue closed
 			}
-			for {
-				req := b.Queue.Pop()
-				if req == nil {
-					break
-				}
 
-				id, addr, err := b.Route(req.Ctx, req.Request, req.ClientIP, req.ContextHash)
-				req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
+			req := b.Queue.Pop()
+			if req == nil {
+				continue
+			}
 
+			// If there's more work, signal another worker to wake up
+			if b.Queue.QueueDepth() > 0 {
 				select {
-				case <-b.stopCh:
-					return
+				case b.Queue.ch <- struct{}{}:
 				default:
 				}
 			}
+
+			id, addr, err := b.Route(req.Ctx, req.Request, req.ClientIP, req.ContextHash)
+			req.Response <- QueuedResponse{AgentID: id, AgentAddr: addr, Err: err}
 		}
 	}
 }

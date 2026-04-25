@@ -206,35 +206,51 @@ func (s *SQLiteStorage) SetModelPolicy(model, nodeID string, banned, pinned bool
 }
 
 func (s *SQLiteStorage) RecordTokenUsage(nodeID, model string, input, output int, reward, cost float64, ttft, duration int64, clientKey string) error {
+	return s.RecordTokenUsageBatch([]struct {
+		NodeID, Model, ClientKey string
+		Input, Output            int
+		Reward, Cost             float64
+		TTFT, Duration           int64
+	}{{nodeID, model, clientKey, input, output, reward, cost, ttft, duration}})
+}
+
+func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
+	NodeID, Model, ClientKey string
+	Input, Output            int
+	Reward, Cost             float64
+	TTFT, Duration           int64
+}) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	// 1. Record the usage
-	_, err = tx.Exec(`
-		INSERT INTO token_usage (timestamp, node_id, model, input_tokens, output_tokens, reward, cost, ttft_ms, duration_ms, client_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		time.Now(), nodeID, model, input, output, reward, cost, ttft, duration, clientKey)
-	if err != nil {
-		return err
-	}
-
-	// 2. Update Client Key Quota (if key provided)
-	if clientKey != "" {
-		_, err = tx.Exec(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ?`,
-			int64(input+output), cost, clientKey)
+	for _, e := range entries {
+		// 1. Record the usage
+		_, err = tx.Exec(`
+			INSERT INTO token_usage (timestamp, node_id, model, input_tokens, output_tokens, reward, cost, ttft_ms, duration_ms, client_key)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			time.Now(), e.NodeID, e.Model, e.Input, e.Output, e.Reward, e.Cost, e.TTFT, e.Duration, e.ClientKey)
 		if err != nil {
 			return err
 		}
-	}
 
-	// 3. Update Agent Key Reward
-	_, err = tx.Exec(`UPDATE agent_keys SET credits_earned = credits_earned + ? WHERE key = ?`,
-		reward, nodeID)
-	if err != nil {
-		return err
+		// 2. Update Client Key Quota (if key provided)
+		if e.ClientKey != "" {
+			_, err = tx.Exec(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ?`,
+				int64(e.Input+e.Output), e.Cost, e.ClientKey)
+			if err != nil {
+				return err
+			}
+		}
+
+		// 3. Update Agent Key Reward
+		_, err = tx.Exec(`UPDATE agent_keys SET credits_earned = credits_earned + ? WHERE key = ?`,
+			e.Reward, e.NodeID)
+		if err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
