@@ -30,10 +30,12 @@ type Agent struct {
 	Monitor          *monitoring.Monitor
 	Ollama           *ollama.Client
 	Config           *config.Config
-	LogCh            chan models.LogEntry
-	stopCh           chan struct{}
+	LogCh      chan models.LogEntry
+	stopCh     chan struct{}
+	httpServer *http.Server
 
 	// Caching to prevent telemetry storms
+
 	lastStatus     models.NodeStatus
 	lastStatusTime time.Time
 	statusMu       sync.Mutex
@@ -146,14 +148,29 @@ func (a *Agent) NewMux() *http.ServeMux {
 func (a *Agent) Serve() error {
 	logging.Global.Infof("Agent %s listening on %s (TLS: %v)", a.ID, a.Address, a.Config.TLS.Enabled)
 
+	a.httpServer = &http.Server{
+		Addr:    a.Address,
+		Handler: a.NewMux(),
+	}
+
 	// Start background tasks
 	go a.StartLogShipper()
 	go a.StartRegistrationLoop()
 
 	if a.Config.TLS.Enabled {
-		return http.ListenAndServeTLS(a.Address, a.Config.TLS.CertFile, a.Config.TLS.KeyFile, a.NewMux())
+		return a.httpServer.ListenAndServeTLS(a.Config.TLS.CertFile, a.Config.TLS.KeyFile)
 	}
-	return http.ListenAndServe(a.Address, a.NewMux())
+	return a.httpServer.ListenAndServe()
+}
+
+func (a *Agent) Stop() {
+	logging.Global.Infof("Agent %s shutting down...", a.ID)
+	close(a.stopCh)
+	if a.httpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.httpServer.Shutdown(ctx)
+	}
 }
 
 // StartRegistrationLoop ensures the agent stays registered even if the balancer restarts.
@@ -309,7 +326,7 @@ func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case <-done:
-		// Completed successfully
+		logging.Global.Infof("Inference completed for model %s", req.Model)
 	case <-r.Context().Done():
 		logging.Global.Infof("Inference cancelled by Balancer for model %s", req.Model)
 	}

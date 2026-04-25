@@ -754,10 +754,10 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 			Reward: reward,
 			Cost:   cost,
 		})
-		}
+	}
 
-		// Add Virtual Models
-		for name := range b.Config.VirtualModels {
+	// Add Virtual Models
+	for name := range b.Config.VirtualModels {
 		reward := 1.0
 		if f, ok := b.Config.ModelRewardFactors[name]; ok {
 			reward = f
@@ -771,8 +771,7 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 			Reward: reward,
 			Cost:   cost,
 		})
-		}
-
+	}
 
 	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"global_reward_multiplier": b.Config.GlobalRewardMultiplier,
@@ -793,6 +792,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 0. Track load for the requested model (even if virtual)
 	b.State.Do(func(s *state.ClusterState) {
 		s.PendingRequests[req.Model]++
 	})
@@ -802,6 +802,32 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 		})
 	}()
 
+	// 1. Resolve Virtual Model
+	resolvedModel, vConfig, isVirtual := b.ResolveVirtualModel(req.Model)
+
+	// 2. Handle Pipeline (Non-streaming only for test)
+	if isVirtual && vConfig.Type == "pipeline" {
+		// Map InferenceRequest to ChatRequest
+		chatReq := models.ChatRequest{
+			Model:    resolvedModel,
+			Messages: []models.ChatMessage{{Role: "user", Content: req.Prompt}},
+			Options:  req.Options,
+			Priority: req.Priority,
+		}
+		
+		output, err := b.ExecutePipeline(r.Context(), chatReq, vConfig, r.RemoteAddr)
+		if err != nil {
+			b.jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		
+		b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+			"agent_id": "pipeline-engine",
+			"response": output,
+		})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
@@ -809,7 +835,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
 	body, _ := json.Marshal(req)
-	resp, agentID, _, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, false, 0, "")
+	resp, agentID, _, err := b.DoHedgedRequest(ctx, resolvedModel, "/inference", body, r.RemoteAddr, false, 0, "")
 
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
@@ -818,9 +844,10 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	defer resp.Body.Close()
 
 	// Capture usage
-	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+	clientKey, _ := auth.GetTokenFromContext(r.Context())
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	go b.captureUsage(agentID, req.Model, bodyBytes, clientKey, 0, 0, surge)
+	go b.captureUsage(agentID, resolvedModel, bodyBytes, clientKey, 0, 0, surge)
+
 
 	var result models.InferenceResponse
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {
@@ -921,7 +948,9 @@ func (b *Balancer) HandleV1ConfigUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Update the live config
+	b.configMu.Lock()
 	*b.Config = newCfg
+	b.configMu.Unlock()
 
 	// Optionally save to disk if CONFIG_PATH is set
 	if path := os.Getenv("CONFIG_PATH"); path != "" {

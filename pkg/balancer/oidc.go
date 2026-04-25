@@ -18,8 +18,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-var jwtKey = []byte("flakyollama-secret-key-change-me")
-
 type Claims struct {
 	UserID  string `json:"user_id"`
 	IsAdmin bool   `json:"is_admin"`
@@ -182,7 +180,7 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwtClaims)
-	tokenString, err := jwtToken.SignedString(jwtKey)
+	tokenString, err := jwtToken.SignedString([]byte(b.Config.JWTSecret))
 	if err != nil {
 		logging.Global.Errorf("OIDC: Failed to sign JWT: %v", err)
 		http.Error(w, "Internal Error", http.StatusInternalServerError)
@@ -292,7 +290,7 @@ func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
 		claims := &Claims{}
 
 		tkn, err := jwt.ParseWithClaims(tknStr, claims, func(token *jwt.Token) (interface{}, error) {
-			return jwtKey, nil
+			return []byte(b.Config.JWTSecret), nil
 		})
 
 		if err != nil || !tkn.Valid {

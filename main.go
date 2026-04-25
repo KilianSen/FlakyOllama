@@ -5,8 +5,11 @@ import (
 	"FlakyOllama/pkg/balancer"
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
+	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -95,8 +98,17 @@ func main() {
 			os.Exit(1)
 		}
 		logging.Global.SetSink(b)
+
+		// Signal handling for graceful shutdown
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			b.Stop()
+		}()
+
 		b.StartBackgroundTasks()
-		if err := b.Serve(); err != nil {
+		if err := b.Serve(); err != nil && err != http.ErrServerClosed {
 			logging.Global.Errorf("Balancer failed: %v", err)
 			os.Exit(1)
 		}
@@ -120,6 +132,14 @@ func main() {
 		a := agent.NewAgent(id, addr, balancerURL, ollamaURL, cfg)
 		logging.Global.SetSink(a)
 
+		// Signal handling for graceful shutdown
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			a.Stop()
+		}()
+
 		if dbPath != "" {
 			logging.Global.Infof("Agent %s using storage at %s", id, dbPath)
 			// Future use: a.SetStorage(dbPath)
@@ -138,7 +158,7 @@ func main() {
 			}
 		}()
 
-		if err := a.Serve(); err != nil {
+		if err := a.Serve(); err != nil && err != http.ErrServerClosed {
 			logging.Global.Errorf("Agent failed: %v", err)
 			os.Exit(1)
 		}

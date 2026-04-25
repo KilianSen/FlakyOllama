@@ -15,6 +15,10 @@ import (
 
 // Route finds the best agent for an inference request using adaptive heuristics and session stickiness.
 func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clientIP string, contextHash string) (string, string, error) {
+	b.configMu.RLock()
+	cfg := *b.Config // Snapshot local copy
+	b.configMu.RUnlock()
+
 	// Clean model name (strip prefixes like a. added by some tools)
 	if strings.HasPrefix(req.Model, "a.") {
 		req.Model = strings.TrimPrefix(req.Model, "a.")
@@ -122,11 +126,11 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 		}
 
 		// 1. Foundation: CPU Load (Inverse)
-		score := (1.0 - (a.CPUUsage / 100.0)) * b.Config.Weights.CPULoadWeight
+		score := (1.0 - (a.CPUUsage / 100.0)) * cfg.Weights.CPULoadWeight
 
 		// 2. Least Connections: Penalize nodes with active workloads to prevent thundering herd
 		workload := snapshot.NodeWorkloads[addr]
-		score -= float64(workload) * b.Config.Weights.WorkloadPenalty
+		score -= float64(workload) * cfg.Weights.WorkloadPenalty
 
 		// 3. Thermal Protection
 		if a.GPUTemperature > 80.0 {
@@ -181,7 +185,7 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 		}
 
 		if isHot {
-			score += b.Config.Weights.LoadedModelBonus
+			score += cfg.Weights.LoadedModelBonus
 		} else {
 			// Check if model is on disk (Warm)
 			isWarm := false
@@ -193,7 +197,7 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 			}
 
 			if isWarm {
-				score += b.Config.Weights.LocalModelBonus
+				score += cfg.Weights.LocalModelBonus
 				freeVRAM := a.VRAMTotal - a.VRAMUsed
 				if freeVRAM < minVRAM {
 					score -= 1.0 // Eviction penalty
@@ -223,7 +227,7 @@ func (b *Balancer) Route(ctx context.Context, req models.InferenceRequest, clien
 	}
 
 	// Auto-allocation logic
-	if !foundLoaded || pending > b.Config.StaleThreshold {
+	if !foundLoaded || pending > cfg.StaleThreshold {
 		b.triggerAllocation(req.Model, minVRAM)
 	}
 

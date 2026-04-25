@@ -1,11 +1,14 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/state"
+	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"strings"
 )
@@ -93,12 +96,13 @@ func (b *Balancer) selectByMetric(targets []string, strategy string) string {
 }
 
 // ExecutePipeline implements the recursive/multi-stage logic.
-// For now, this is a placeholder for the full recursive state machine.
-func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, config models.VirtualModelConfig) (string, error) {
-	// 1. Initial Generation
-	// In a real implementation, we would loop through config.Steps
-	// For simplicity in this phase, let's implement a hardcoded "Check & Retry" loop
-	// if the pipeline type is "pipeline" and has steps.
+func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, config models.VirtualModelConfig, clientIP string) (string, error) {
+	// Snapshot config for surge
+	b.configMu.RLock()
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+	b.configMu.RUnlock()
+
+	clientToken, _ := auth.GetTokenFromContext(ctx)
 	
 	currentMessages := req.Messages
 	maxGlobalRetries := 3
@@ -107,25 +111,44 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 		// Use the first target as the primary worker
 		workerModel := config.Targets[0]
 		
+		// Track load for backing model
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[workerModel]++
+		})
+
 		// 1. Generate
 		workerReq := models.ChatRequest{
 			Model:    workerModel,
 			Messages: currentMessages,
 			Stream:   false, // We must buffer for pipelines to allow for checks
 			Options:  req.Options,
+			Priority: req.Priority,
 		}
 		
 		body, _ := json.Marshal(workerReq)
-		resp, _, _, err := b.DoHedgedRequest(ctx, workerModel, "/chat", body, "127.0.0.1", true, req.Priority, "")
+		resp, agentID, _, err := b.DoHedgedRequest(ctx, workerModel, "/chat", body, clientIP, true, req.Priority, "")
+		
+		// Decrement load
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[workerModel]--
+		})
+
 		if err != nil {
 			return "", err
 		}
 		
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// Capture usage for this step
+		go b.captureUsage(agentID, workerModel, bodyBytes, clientToken, 0, 0, surge)
+
 		var ollamaResp struct {
 			Message models.ChatMessage `json:"message"`
 		}
-		json.NewDecoder(resp.Body).Decode(&ollamaResp)
-		resp.Body.Close()
+		if err := json.Unmarshal(bodyBytes, &ollamaResp); err != nil {
+			return "", fmt.Errorf("failed to decode worker response: %v", err)
+		}
 		
 		workerOutput := ollamaResp.Message.Content
 		
@@ -133,6 +156,10 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 		if config.JudgeModel != "" {
 			logging.Global.Infof("Pipeline: Judge %s evaluating output from %s (attempt %d)", config.JudgeModel, workerModel, i+1)
 			
+			b.State.Do(func(s *state.ClusterState) {
+				s.PendingRequests[config.JudgeModel]++
+			})
+
 			judgePrompt := fmt.Sprintf("Evaluate the following response for correctness and quality.\nUser Prompt: %s\n\nModel Response: %s\n\nIf the response is good, reply with 'PASS'. If it needs correction, reply with 'FAIL: [REASON]'.", 
 				req.Messages[len(req.Messages)-1].Content, workerOutput)
 				
@@ -144,24 +171,38 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 			}
 			
 			jBody, _ := json.Marshal(judgeReq)
-			jResp, _, _, jErr := b.DoHedgedRequest(ctx, config.JudgeModel, "/chat", jBody, "127.0.0.1", true, 0, "")
+			jResp, jAgentID, _, jErr := b.DoHedgedRequest(ctx, config.JudgeModel, "/chat", jBody, clientIP, true, 0, "")
+			
+			b.State.Do(func(s *state.ClusterState) {
+				s.PendingRequests[config.JudgeModel]--
+			})
+
 			if jErr == nil {
+				jBodyBytes, _ := io.ReadAll(jResp.Body)
+				jResp.Body.Close()
+				
+				// Capture usage for judge
+				go b.captureUsage(jAgentID, config.JudgeModel, jBodyBytes, clientToken, 0, 0, surge)
+
 				var jOllamaResp struct {
 					Message models.ChatMessage `json:"message"`
 				}
-				json.NewDecoder(jResp.Body).Decode(&jOllamaResp)
-				jResp.Body.Close()
+				json.Unmarshal(jBodyBytes, &jOllamaResp)
 				
 				judgeVerdict := strings.ToUpper(jOllamaResp.Message.Content)
-				if strings.Contains(judgeVerdict, "PASS") {
-					logging.Global.Infof("Pipeline: Judge passed output")
-					return workerOutput, nil
-				} else {
+				if strings.Contains(judgeVerdict, "FAIL") {
 					logging.Global.Warnf("Pipeline: Judge failed output: %s", judgeVerdict)
 					// Recursive step: feed the failure back to the worker
 					currentMessages = append(currentMessages, models.ChatMessage{Role: "assistant", Content: workerOutput})
 					currentMessages = append(currentMessages, models.ChatMessage{Role: "user", Content: "Your previous answer was rejected by the grader: " + judgeVerdict + ". Please try again and fix the issues."})
 					continue
+				} else if strings.Contains(judgeVerdict, "PASS") {
+					logging.Global.Infof("Pipeline: Judge passed output")
+					return workerOutput, nil
+				} else {
+					// Ambiguous verdict, default to pass to avoid infinite loops if judge is uncooperative
+					logging.Global.Warnf("Pipeline: Ambiguous judge verdict: %s. Defaulting to PASS.", judgeVerdict)
+					return workerOutput, nil
 				}
 			}
 		}

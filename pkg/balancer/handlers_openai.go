@@ -18,6 +18,22 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Load Shedding: Check if queue is at capacity
+	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+		return
+	}
+
+	// 0. Track load for the requested model (even if virtual)
+	b.State.Do(func(s *state.ClusterState) {
+		s.PendingRequests[oaiReq.Model]++
+	})
+	defer func() {
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[oaiReq.Model]--
+		})
+	}()
+
 	// 1. Resolve Virtual Model
 	resolvedModel, vConfig, isVirtual := b.ResolveVirtualModel(oaiReq.Model)
 
@@ -35,19 +51,19 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// 2. Handle Pipeline execution (Non-streaming only for now)
+	// 2. Handle Pipeline execution
 	if isVirtual && vConfig.Type == "pipeline" {
 		if oaiReq.Stream {
 			http.Error(w, "Streaming not yet supported for recursive pipelines", http.StatusBadRequest)
 			return
 		}
 		
-		output, err := b.ExecutePipeline(r.Context(), ollamaReq, vConfig)
+		output, err := b.ExecutePipeline(r.Context(), ollamaReq, vConfig, r.RemoteAddr)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		
+
 		// Respond with final pipeline output
 		oaiResp := models.OpenAIChatResponse{
 			ID:      fmt.Sprintf("chatcmpl-pipe-%d", time.Now().Unix()),
@@ -70,20 +86,7 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Regular path (resolved real model)
-	// Load Shedding: Check if queue is at capacity
-	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
-		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
-		return
-	}
-
-	b.State.Do(func(s *state.ClusterState) {
-		s.PendingRequests[ollamaReq.Model]++
-	})
-	defer func() {
-		b.State.Do(func(s *state.ClusterState) {
-			s.PendingRequests[ollamaReq.Model]--
-		})
-	}()
+	// (Remove redundant pending request logic here)
 
 	// Lock in surge pricing for the duration of this request
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)

@@ -39,7 +39,8 @@ type Config struct {
 	VirtualModels map[string]models.VirtualModelConfig `json:"virtual_models"`
 
 	// OIDC Configuration
-	OIDC OIDCConfig `json:"oidc"`
+	OIDC      OIDCConfig `json:"oidc"`
+	JWTSecret string     `json:"jwt_secret"`
 }
 
 type OIDCConfig struct {
@@ -104,7 +105,29 @@ func DefaultConfig() *Config {
 		AutoScaleThreshold:     5,
 		MaxVRAMAllocated:       12 * 1024 * 1024 * 1024, // 12GB
 		MaxCPUAllocated:        8,
-		VirtualModels:          make(map[string]models.VirtualModelConfig),
+		VirtualModels: map[string]models.VirtualModelConfig{
+			"smart-fastest": {
+				Type:     "metric",
+				Strategy: "fastest",
+				Targets:  []string{"llama3:8b", "mistral:7b", "gemma2:2b"},
+			},
+			"smart-reliable": {
+				Type:     "metric",
+				Strategy: "most_reliable",
+				Targets:  []string{"llama3:8b", "mistral:7b"},
+			},
+			"smart-cheap": {
+				Type:     "metric",
+				Strategy: "cheapest",
+				Targets:  []string{"llama3.2:1b", "gemma2:2b", "phi3:latest"},
+			},
+			"auto-grader": {
+				Type:       "pipeline",
+				JudgeModel: "llama3:70b",
+				Targets:    []string{"llama3:8b"},
+			},
+		},
+		JWTSecret: "flakyollama-secret-change-me-immediately",
 	}
 }
 

@@ -22,7 +22,12 @@ type SQLiteStorage struct {
 }
 
 func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
-	db, err := sql.Open("sqlite3", path)
+	// Enable WAL mode and busy timeout for better concurrency
+	dsn := path
+	if path != ":memory:" {
+		dsn += "?_journal=WAL&_busy_timeout=5000"
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +86,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			duration_ms INTEGER DEFAULT 0,
 			client_key TEXT
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage (timestamp);`,
 		`CREATE TABLE IF NOT EXISTS client_keys (
 			key TEXT PRIMARY KEY,
 			label TEXT,

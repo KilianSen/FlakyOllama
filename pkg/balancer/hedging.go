@@ -198,16 +198,7 @@ func (b *Balancer) singleAttemptSpeculative(ctx context.Context, cancel context.
 	wrapped := &workloadBody{ReadCloser: peeker, b: b, addr: qr.AgentAddr}
 	resp.Body = &cancelBody{ReadCloser: wrapped, cancel: cancel}
 
-	// In speculative mode, we block here until first byte OR context cancel
-	// This ensures that the "winner" is actually generating tokens.
-	go func() {
-		select {
-		case <-firstByteReceived:
-			results <- HedgedResult{Resp: resp, AgentID: qr.AgentID, AgentAddr: qr.AgentAddr, Err: nil, Cancel: cancel}
-		case <-ctx.Done():
-			resp.Body.Close()
-		}
-	}()
+	results <- HedgedResult{Resp: resp, AgentID: qr.AgentID, AgentAddr: qr.AgentAddr, Err: nil, Cancel: cancel}
 }
 
 type cancelBody struct {

@@ -18,7 +18,10 @@ func TestAgentRegistrationWithToken(t *testing.T) {
 	bCfg.AuthToken = balancerToken // Clients need this
 	bCfg.RemoteToken = agentToken  // Agents need this
 
-	b, _ := balancer.NewBalancer("localhost:0", ":memory:", bCfg)
+	b, err := balancer.NewBalancer("localhost:0", ":memory:", bCfg)
+	if err != nil {
+		t.Fatalf("Failed to create balancer: %v", err)
+	}
 	balancerSrv := httptest.NewServer(b.NewMux())
 	defer balancerSrv.Close()
 
@@ -30,7 +33,7 @@ func TestAgentRegistrationWithToken(t *testing.T) {
 	a := agent.NewAgent("agent-test", "localhost:0", balancerSrv.URL, "http://localhost:11434", aCfg)
 
 	// 3. Try to register
-	err := a.Register()
+	err = a.Register()
 	if err != nil {
 		t.Fatalf("Registration failed with correct token: %v", err)
 	}

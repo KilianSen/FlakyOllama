@@ -32,6 +32,11 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 			return
 		}
 
+		if token == "" && km == nil {
+			next(w, r)
+			return
+		}
+
 		// 0. Check if we have a user from SessionMiddleware (OIDC)
 		// We check this FIRST so that browser sessions take precedence over default tokens
 		if val := r.Context().Value(ContextKeyUser); val != nil {
@@ -102,6 +107,20 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 		logging.Global.Warnf("Auth failure: Invalid token for %s %s", r.Method, r.URL.Path)
 		http.Error(w, "Invalid or missing token", http.StatusUnauthorized)
 	}
+}
+
+func WithKeyManager(km KeyManager, next http.HandlerFunc) http.HandlerFunc {
+	return Middleware("", km, next)
+}
+
+func GetTokenFromContext(ctx context.Context) (string, bool) {
+	val, ok := ctx.Value(ContextKeyToken).(string)
+	return val, ok
+}
+
+func GetClientDataFromContext(ctx context.Context) (models.ClientKey, bool) {
+	val, ok := ctx.Value(ContextKeyClientData).(models.ClientKey)
+	return val, ok
 }
 
 func min(a, b int) int {

@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"net/http"
@@ -11,10 +12,10 @@ import (
 )
 
 func TestBalancer_Route(t *testing.T) {
-	b, _ := NewBalancer(":8080", ":memory:", nil)
+	b, _ := NewBalancer(":8080", ":memory:", config.DefaultConfig())
 
 	// Test case 1: No agents
-	_, _, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
+	_, _, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
 	if err == nil {
 		t.Errorf("Expected error when no agents available, got nil")
 	}
@@ -32,7 +33,7 @@ func TestBalancer_Route(t *testing.T) {
 	// Wait for actor to process upsert
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
+	id, addr, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
 	}
@@ -55,7 +56,7 @@ func TestBalancer_Route(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
+	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestBalancer_Route(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "")
+	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
 	if err != nil {
 		t.Fatalf("Failed to route: %v", err)
 	}
@@ -82,11 +83,14 @@ func TestBalancer_Route(t *testing.T) {
 }
 
 func TestBalancer_HandleRegister(t *testing.T) {
-	b, _ := NewBalancer(":8080", ":memory:", nil)
+	cfg := config.DefaultConfig()
+	cfg.RemoteToken = "test-remote-token"
+	b, _ := NewBalancer(":8080", ":memory:", cfg)
 
 	// Mock registration request from an agent with 0.0.0.0
 	regBody := `{"id": "agent-0", "address": "0.0.0.0:8081"}`
 	req, _ := http.NewRequest("POST", "/register", strings.NewReader(regBody))
+	req.Header.Set("Authorization", "Bearer test-remote-token")
 	req.RemoteAddr = "192.168.1.50:54321" // Simulated remote address
 
 	rr := httptest.NewRecorder()

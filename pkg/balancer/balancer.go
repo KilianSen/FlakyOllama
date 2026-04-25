@@ -19,9 +19,10 @@ import (
 )
 
 type Balancer struct {
-	Address string
-	Config  *config.Config
-	State   *state.ClusterStateActor
+	Address  string
+	configMu sync.RWMutex
+	Config   *config.Config
+	State    *state.ClusterStateActor
 	Storage *storage.SQLiteStorage
 	Jobs    *jobs.JobManager
 	Queue   *RequestQueue
@@ -47,7 +48,8 @@ type Balancer struct {
 	logMu  sync.Mutex
 	logChs map[chan string]bool
 
-	stopCh chan struct{}
+	stopCh     chan struct{}
+	httpServer *http.Server
 }
 
 type metricEntry struct {
@@ -142,10 +144,26 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 
 func (b *Balancer) Serve() error {
 	logging.Global.Infof("Balancer listening on %s (TLS: %v)", b.Address, b.Config.TLS.Enabled)
-	if b.Config.TLS.Enabled {
-		return http.ListenAndServeTLS(b.Address, b.Config.TLS.CertFile, b.Config.TLS.KeyFile, b.NewMux())
+
+	b.httpServer = &http.Server{
+		Addr:    b.Address,
+		Handler: b.NewMux(),
 	}
-	return http.ListenAndServe(b.Address, b.NewMux())
+
+	if b.Config.TLS.Enabled {
+		return b.httpServer.ListenAndServeTLS(b.Config.TLS.CertFile, b.Config.TLS.KeyFile)
+	}
+	return b.httpServer.ListenAndServe()
+}
+
+func (b *Balancer) Stop() {
+	logging.Global.Infof("Balancer shutting down...")
+	close(b.stopCh)
+	if b.httpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		b.httpServer.Shutdown(ctx)
+	}
 }
 
 func (b *Balancer) HandleMetrics(w http.ResponseWriter, r *http.Request) {

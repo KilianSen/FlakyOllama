@@ -127,7 +127,7 @@ export const RegistryPage: React.FC = () => {
         </div>
       </div>
 
-      <Tabs defaultValue="matrix" onValueChange={setActiveTab} className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <div className="flex bg-muted/30 p-1 rounded-lg border border-border/50 w-fit">
            {['matrix', 'browser', 'requests'].map(t => (
              <button 

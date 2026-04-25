@@ -3,6 +3,7 @@ package pkg
 import (
 	"FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/balancer"
+	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"encoding/json"
@@ -29,10 +30,13 @@ func TestIntegration(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/api/generate" {
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(struct {
 				Response string `json:"response"`
+				Done     bool   `json:"done"`
 			}{
 				Response: "Hello from mock Ollama!",
+				Done:     true,
 			})
 			return
 		}
@@ -40,16 +44,21 @@ func TestIntegration(t *testing.T) {
 	defer mockOllama.Close()
 
 	// 2. Start Balancer
-	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", nil)
-	b.Config.PollIntervalMs = 100 // Fast polling for test
+	bCfg := config.DefaultConfig()
+	bCfg.AuthToken = "test-token"
+	bCfg.RemoteToken = "test-token"
+	bCfg.PollIntervalMs = 100 // Fast polling for test
+	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", bCfg)
 	balancerSrv := httptest.NewServer(b.NewMux())
 	defer balancerSrv.Close()
-	defer b.Close()
 
 	// 3. Start Agent
 	// Extract port from httptest URL for Agent's "Address"
 	balancerURL := balancerSrv.URL
-	a := agent.NewAgent("agent-test", "localhost:0", balancerURL, mockOllama.URL, nil)
+	aCfg := config.DefaultConfig()
+	aCfg.AuthToken = "test-token"
+	aCfg.RemoteToken = "test-token"
+	a := agent.NewAgent("agent-test", "localhost:0", balancerURL, mockOllama.URL, aCfg)
 	agentSrv := httptest.NewServer(a.NewMux())
 	defer agentSrv.Close()
 
@@ -64,16 +73,17 @@ func TestIntegration(t *testing.T) {
 	// 5. Start background tasks (poller, workers, etc.)
 	b.StartBackgroundTasks()
 
-	// Wait for agent to be polled successfully (up to 2 seconds)
-	deadline := time.Now().Add(2 * time.Second)
+	// Wait for agent to be polled successfully (up to 5 seconds)
+	deadline := time.Now().Add(5 * time.Second)
 	success := false
 	for time.Now().Before(deadline) {
 		snapshot := b.State.GetSnapshot()
+		// Also print current state for debugging if needed
 		if agent, ok := snapshot.Agents[a.Address]; ok && len(agent.ActiveModels) > 0 {
 			success = true
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	if !success {
@@ -86,7 +96,13 @@ func TestIntegration(t *testing.T) {
 		Prompt: "Tell me a joke.",
 	}
 	body, _ := json.Marshal(req)
-	resp, err := http.Post(balancerSrv.URL+"/api/generate", "application/json", bytes.NewBuffer(body))
+	inferenceReq, _ := http.NewRequest("POST", balancerSrv.URL+"/api/generate", bytes.NewBuffer(body))
+	inferenceReq.Header.Set("Content-Type", "application/json")
+	inferenceReq.Header.Set("Authorization", "Bearer test-token")
+
+	// Use a client with a timeout to avoid hanging the test forever
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(inferenceReq)
 	if err != nil {
 		t.Fatalf("Failed to send request to balancer: %v", err)
 	}

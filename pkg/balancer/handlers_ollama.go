@@ -20,14 +20,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.Global.Infof("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
-
-	// Load Shedding: Check if queue is at capacity
-	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
-		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
-		return
-	}
-
+	// 0. Track load for the requested model (even if virtual)
 	b.State.Do(func(s *state.ClusterState) {
 		s.PendingRequests[req.Model]++
 	})
@@ -37,20 +30,60 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
+	// 1. Resolve Virtual Model
+	resolvedModel, vConfig, isVirtual := b.ResolveVirtualModel(req.Model)
+
+	// 2. Handle Pipeline (Non-streaming only)
+	if isVirtual && vConfig.Type == "pipeline" {
+		if req.Stream {
+			http.Error(w, "Streaming not yet supported for recursive pipelines", http.StatusBadRequest)
+			return
+		}
+		
+		// Map InferenceRequest to ChatRequest for pipeline engine
+		chatReq := models.ChatRequest{
+			Model:    resolvedModel,
+			Messages: []models.ChatMessage{{Role: "user", Content: req.Prompt}},
+			Options:  req.Options,
+			Priority: req.Priority,
+		}
+		
+		output, err := b.ExecutePipeline(r.Context(), chatReq, vConfig, r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		
+		resp := map[string]interface{}{
+			"model":    req.Model,
+			"response": output,
+			"done":     true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// Update request with resolved model
+	req.Model = resolvedModel
+
+	logging.Global.Infof("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
+
+	// Load Shedding
+	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
 	priority := b.getRequestPriority(r)
-	if req.Priority > priority {
-		// allow override if master admin or high credit, but cap at real priority
-	} else if req.Priority == 0 {
+	if req.Priority == 0 {
 		req.Priority = priority
 	}
 
-	// Lock in surge pricing for the duration of this request
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
-
-	// Compute Context Hash for KV cache stickiness
 	contextHash := ""
 	if req.Prompt != "" {
 		contextHash = b.computeHash(req.Prompt)
@@ -60,7 +93,6 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, req.AllowHedging, req.Priority, contextHash)
 
 	if err != nil {
-		logging.Global.Errorf("Failed to fulfill GenerateRequest for %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -76,14 +108,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.Global.Infof("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
-
-	// Load Shedding: Check if queue is at capacity
-	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
-		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
-		return
-	}
-
+	// 0. Track load
 	b.State.Do(func(s *state.ClusterState) {
 		s.PendingRequests[req.Model]++
 	})
@@ -93,20 +118,53 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
+	// 1. Resolve Virtual Model
+	resolvedModel, vConfig, isVirtual := b.ResolveVirtualModel(req.Model)
+
+	// 2. Handle Pipeline
+	if isVirtual && vConfig.Type == "pipeline" {
+		if req.Stream {
+			http.Error(w, "Streaming not yet supported for recursive pipelines", http.StatusBadRequest)
+			return
+		}
+		
+		output, err := b.ExecutePipeline(r.Context(), req, vConfig, r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		
+		resp := map[string]interface{}{
+			"model": req.Model,
+			"message": models.ChatMessage{
+				Role:    "assistant",
+				Content: output,
+			},
+			"done": true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	req.Model = resolvedModel
+
+	logging.Global.Infof("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
+
+	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
 	priority := b.getRequestPriority(r)
-	if req.Priority > priority {
-		// allow override
-	} else if req.Priority == 0 {
+	if req.Priority == 0 {
 		req.Priority = priority
 	}
 
-	// Lock in surge pricing for the duration of this request
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
-
-	// Compute Context Hash for KV cache stickiness
 	contextHash := ""
 	if len(req.Messages) > 0 {
 		hData, _ := json.Marshal(req.Messages)
@@ -219,12 +277,25 @@ func (b *Balancer) HandleEmbed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 0. Track load
+	b.State.Do(func(s *state.ClusterState) {
+		s.PendingRequests[req.Model]++
+	})
+	defer func() {
+		b.State.Do(func(s *state.ClusterState) {
+			s.PendingRequests[req.Model]--
+		})
+	}()
+
+	// 1. Resolve Virtual Model
+	resolvedModel, _, _ := b.ResolveVirtualModel(req.Model)
+
 	body, _ := json.Marshal(req)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	targetNode := r.Header.Get("X-Node-Id")
-	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/embeddings", body, r.RemoteAddr, false, 0, targetNode)
+	resp, _, _, err := b.DoHedgedRequest(ctx, resolvedModel, "/embeddings", body, r.RemoteAddr, false, 0, targetNode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
