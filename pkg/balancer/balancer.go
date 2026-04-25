@@ -8,6 +8,7 @@ import (
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
