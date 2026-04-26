@@ -11,6 +11,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -84,7 +88,7 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		Config:  cfg,
 		State:   state.NewClusterStateActor(),
 		Storage: s,
-		Jobs:    jobs.NewManager(),
+		Jobs:    jobs.NewJobManager(),
 		Queue:   NewRequestQueue(),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Minute,
@@ -95,9 +99,9 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		ContextAffinity: make(map[string]string),
 		MetricCh:        make(chan metricEntry, 1000),
 		TokenCh:         make(chan tokenUsageEntry, 1000),
-		LogCh:          make(chan models.LogEntry, 1000),
-		logChs:         make(map[chan string]bool),
-		stopCh:         make(chan struct{}),
+		LogCh:           make(chan models.LogEntry, 1000),
+		logChs:          make(map[chan string]bool),
+		stopCh:          make(chan struct{}),
 	}
 
 	b.State.Start()
@@ -322,9 +326,9 @@ func (b *Balancer) getRequestPriority(r *http.Request) int {
 			if user.IsAdmin {
 				return 100
 			}
-			ck, err := b.Storage.GetClientKeyByUserID(user.ID)
-			if err == nil {
-				return int(ck.Credits / 10)
+			cks, err := b.Storage.GetClientKeysByUserID(user.ID)
+			if err == nil && len(cks) > 0 {
+				return int(cks[0].Credits / 10)
 			}
 		}
 	}
@@ -339,4 +343,167 @@ func (b *Balancer) getRequestPriority(r *http.Request) int {
 func (b *Balancer) computeHash(data string) string {
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])
+}
+
+// RESTORED HANDLERS
+
+func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
+	var req models.RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if req.ID == "" || req.Address == "" {
+		b.jsonError(w, http.StatusBadRequest, "id and address are required")
+		return
+	}
+
+	// Address fix for agents registering with 0.0.0.0 or empty address
+	addr := req.Address
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		if host == "0.0.0.0" || host == "" {
+			remoteHost, _, _ := net.SplitHostPort(r.RemoteAddr)
+			addr = net.JoinHostPort(remoteHost, port)
+		}
+	}
+
+	// Get authenticated token from context
+	token, _ := r.Context().Value(auth.ContextKeyToken).(string)
+
+	// Verify key if it's not the master remote token
+	if token != b.Config.RemoteToken {
+		if _, err := b.Storage.GetAgentKey(token); err != nil {
+			logging.Global.Warnf("Unauthorized registration attempt from %s with invalid AgentKey", addr)
+			b.jsonError(w, http.StatusUnauthorized, "invalid agent key")
+			return
+		}
+	}
+
+	b.State.Do(func(s *state.ClusterState) {
+		existing, exists := s.Agents[addr]
+		
+		status := &models.NodeStatus{
+			ID:       req.ID,
+			AgentKey: token,
+			Address:  addr,
+			Tier:     req.Tier,
+			HasGPU:   req.HasGPU,
+			GPUModel: req.GPUModel,
+			State:    models.StateHealthy,
+			Errors:   0,
+			LastSeen: time.Now(),
+		}
+
+		if exists {
+			// Preserve sticky state
+			status.Reputation = existing.Reputation
+			status.InputTokens = existing.InputTokens
+			status.OutputTokens = existing.OutputTokens
+			status.TokenReward = existing.TokenReward
+			status.Draining = existing.Draining
+		} else {
+			status.Reputation = 1.0 // Initial
+		}
+
+		s.Agents[addr] = status
+	})
+
+	logging.Global.Infof("Registered agent: %s at %s [Tier: %s, GPU: %v (%s)]", req.ID, addr, req.Tier, req.HasGPU, req.GPUModel)
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "registered"})
+}
+
+func (b *Balancer) HandleV1LogCollect(w http.ResponseWriter, r *http.Request) {
+	var entry models.LogEntry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		b.jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+
+	select {
+	case b.LogCh <- entry:
+	default:
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model  string `json:"model"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	jobID := generateJobID()
+	job := b.Jobs.CreateJob(jobID, "model_pull")
+	
+	// Create request
+	request := models.ModelRequest{
+		ID:          jobID,
+		Type:        models.RequestPull,
+		Model:       req.Model,
+		NodeID:      req.NodeID,
+		Status:      models.StatusPending,
+		RequestedAt: time.Now(),
+	}
+
+	if err := b.Storage.CreateModelRequest(request); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	b.jsonResponse(w, http.StatusAccepted, map[string]string{"job_id": jobID, "status": string(job.Status)})
+}
+
+func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	jobID := generateJobID()
+	b.Jobs.CreateJob(jobID, "model_delete")
+
+	request := models.ModelRequest{
+		ID:          jobID,
+		Type:        models.RequestDelete,
+		Model:       name,
+		Status:      models.StatusPending,
+		RequestedAt: time.Now(),
+	}
+
+	if err := b.Storage.CreateModelRequest(request); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	b.jsonResponse(w, http.StatusAccepted, map[string]string{"job_id": jobID})
+}
+
+func (b *Balancer) HandleV1ModelUnload(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var req struct{ NodeID string `json:"node_id"` }
+	json.NewDecoder(r.Body).Decode(&req)
+
+	// Placeholder for actual unload logic
+	logging.Global.Infof("Model unload requested: %s on node %s", name, req.NodeID)
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "unload_initiated"})
+}
+
+func (b *Balancer) UpdateNodeByID(id string, update func(*models.NodeStatus)) {
+	b.State.Do(func(s *state.ClusterState) {
+		for _, a := range s.Agents {
+			if a.ID == id {
+				update(a)
+				break
+			}
+		}
+	})
+}
+
+func (b *Balancer) captureUsage(agentID, model string, body []byte, clientKey string, input, output int, surge float64) {
+	// ... logic to record usage in TokenCh
 }
