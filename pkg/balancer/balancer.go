@@ -162,7 +162,9 @@ func (b *Balancer) SetupRoutes() http.Handler {
 				r.Post("/{id}/drain", b.HandleV1NodeDrain)
 				r.Post("/{id}/undrain", b.HandleV1NodeUndrain)
 				r.Delete("/{id}", b.HandleV1NodeDelete)
+				r.Post("/{id}/test", b.HandleV1TestInference)
 			})
+			r.Post("/nodes/test", b.HandleV1TestInference)
 			r.Route("/models", func(r chi.Router) {
 				r.Post("/pull", b.HandleV1ModelPull)
 				r.Delete("/{name}", b.HandleV1ModelDelete)

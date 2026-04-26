@@ -27,7 +27,8 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/v1/chat/completions", body, r.RemoteAddr, true, priority, contextHash)
+	// AGENT MAPPING: /v1/chat/completions -> /chat
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body, r.RemoteAddr, true, priority, contextHash)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -47,7 +48,8 @@ func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request
 	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	body, _ := json.Marshal(req)
-	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/v1/embeddings", body, r.RemoteAddr, false, 10, "")
+	// AGENT MAPPING: /v1/embeddings -> /api/embeddings (Ollama standard)
+	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/api/embeddings", body, r.RemoteAddr, false, 10, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

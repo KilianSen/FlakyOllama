@@ -7,6 +7,7 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -598,6 +599,71 @@ func (b *Balancer) HandleV1ConfigUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "config updated"})
+}
+
+func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model  string `json:"model"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	// 1. Select Target Agent
+	var agentAddr string
+	b.State.View(func(s ClusterState) {
+		for addr, n := range s.Agents {
+			if n.ID == req.NodeID {
+				agentAddr = addr
+				break
+			}
+		}
+	})
+
+	if agentAddr == "" {
+		b.jsonError(w, http.StatusNotFound, "target node not found")
+		return
+	}
+
+	// 2. Prepare test request
+	testPrompt := models.InferenceRequest{
+		Model:  req.Model,
+		Prompt: "Why is the sky blue?",
+		Stream: false,
+	}
+	body, _ := json.Marshal(testPrompt)
+
+	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
+	resp, err := b.sendToAgentWithContext(r.Context(), agentAddr, "/inference", body)
+	if err != nil {
+		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	// Capture usage
+	clientKey, _ := auth.GetTokenFromContext(r.Context())
+	var userID string
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok {
+			userID = u.ID
+		}
+	}
+	go b.captureUsage(req.NodeID, req.Model, 100, 100, 0, 0, clientKey, userID, surge)
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	var result models.InferenceResponse
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, "failed to decode response")
+		return
+	}
+
+	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"agent_id": req.NodeID,
+		"response": result.Response,
+	})
 }
 
 func (b *Balancer) HandleV1LogCollect(w http.ResponseWriter, r *http.Request) {
