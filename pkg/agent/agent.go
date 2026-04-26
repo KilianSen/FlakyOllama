@@ -46,9 +46,17 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
+	key := os.Getenv("AGENT_KEY")
+	if key == "" {
+		key = os.Getenv("AGENT_TOKEN")
+	}
+	if key == "" && cfg != nil {
+		key = cfg.RemoteToken
+	}
+
 	return &Agent{
 		ID:               id,
-		AgentKey:         os.Getenv("AGENT_KEY"),
+		AgentKey:         key,
 		Address:          address,
 		EffectiveAddress: address, // Default to listening address
 		BalancerURL:      balancerURL,

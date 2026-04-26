@@ -32,7 +32,11 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 			return
 		}
 
-		// 0. Check if we have a user from SessionMiddleware (OIDC)
+		// If no security is configured, allow all
+		if len(masterTokens) == 0 && km == nil {
+			next(w, r)
+			return
+		}
 		if val := r.Context().Value(ContextKeyUser); val != nil {
 			if u, ok := val.(models.User); ok {
 				// Check User-global Quota
