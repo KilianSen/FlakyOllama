@@ -355,6 +355,10 @@ export class FlakyOllamaSDK {
     });
   }
 
+  async deleteClientKey(key: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/keys/clients/${key}`, { method: 'DELETE' });
+  }
+
   async getAgentKeys(): Promise<AgentKey[]> {
     return this.request<AgentKey[]>('/api/v1/keys/agents');
   }
@@ -364,6 +368,10 @@ export class FlakyOllamaSDK {
       method: 'POST',
       body: JSON.stringify(k),
     });
+  }
+
+  async deleteAgentKey(key: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/keys/agents/${key}`, { method: 'DELETE' });
   }
 
   // Policies
@@ -403,6 +411,10 @@ export class FlakyOllamaSDK {
   // User Management (Admin)
   async getUsers(): Promise<UserWithKey[]> {
     return this.request<UserWithKey[]>('/api/v1/users');
+  }
+
+  async deleteUser(id: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/users/${id}`, { method: 'DELETE' });
   }
 
   async updateUserQuota(userId: string, quota: number): Promise<{ status: string }> {

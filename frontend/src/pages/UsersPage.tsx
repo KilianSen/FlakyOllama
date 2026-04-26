@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Shield, ShieldAlert, Coins, Search, RefreshCw, MoreHorizontal, UserCog } from 'lucide-react';
+import { User, Shield, ShieldAlert, Coins, Search, RefreshCw, MoreHorizontal, UserCog, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -42,6 +42,17 @@ export const UsersPage: React.FC = () => {
       refresh();
     } catch (err: any) {
       toast.error(err.message);
+    }
+  };
+
+  const handleDeleteUser = async (u: UserWithKey) => {
+    if (!confirm(`Are you sure you want to PERMANENTLY delete user ${u.user.email}? All associated keys and usage history will be lost.`)) return;
+    try {
+      await sdk.deleteUser(u.user.id);
+      toast.success('User deleted successfully');
+      refresh();
+    } catch (err: any) {
+      toast.error('Failed to delete user: ' + err.message);
     }
   };
 
@@ -152,9 +163,9 @@ export const UsersPage: React.FC = () => {
                         <span>Adjust Quota</span>
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem className="font-bold text-destructive cursor-not-allowed opacity-50">
-                        <ShieldAlert className="mr-2 h-4 w-4" />
-                        <span>Revoke Admin</span>
+                      <DropdownMenuItem className="font-bold text-destructive cursor-pointer" onClick={() => handleDeleteUser(u)}>
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        <span>Delete Account</span>
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

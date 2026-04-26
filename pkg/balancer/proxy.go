@@ -71,7 +71,7 @@ func (t *ttftTrackingReader) Read(p []byte) (int, error) {
 func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64) {
 	start := time.Now()
 	// Get client key from context
-	clientKey, _ := r.Context().Value(auth.ContextKeyToken).(string)
+	clientKey, _ := auth.GetTokenFromContext(r.Context())
 
 	// Wrap with Stall Protection
 	stallTimeout := time.Duration(b.Config.StallTimeoutSec) * time.Second
@@ -79,15 +79,19 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	defer reader.Close()
 
 	// Instrument for TTFT
-	ttftRecorded := false
 	var ttft time.Duration
+	var ttftMu sync.Mutex
+	ttftRecorded := false
+
 	trackingReader := &ttftTrackingReader{
 		Reader: reader,
 		onFirstByte: func() {
+			ttftMu.Lock()
 			if !ttftRecorded {
 				ttft = time.Since(start)
 				ttftRecorded = true
 			}
+			ttftMu.Unlock()
 		},
 	}
 
@@ -155,7 +159,9 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 						break
 					}
 				}
-				if len(body)-i > 2048 { break }
+				if len(body)-i > 2048 {
+					break
+				}
 			}
 		}
 	}
@@ -169,7 +175,10 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	})
 
 	if input > 0 || output > 0 {
-		go b.captureUsage(agentID, modelName, input, output, ttft, duration, clientKey, surge)
+		ttftMu.Lock()
+		actualTTFT := ttft
+		ttftMu.Unlock()
+		go b.captureUsage(agentID, modelName, input, output, actualTTFT, duration, clientKey, surge)
 	}
 
 	b.recordSuccess(agentAddr)

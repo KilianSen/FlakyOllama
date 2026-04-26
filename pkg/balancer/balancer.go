@@ -258,16 +258,19 @@ func (b *Balancer) NewMux() *chi.Mux {
 				r.Route("/clients", func(r chi.Router) {
 					r.Get("/", b.HandleV1ClientKeysList)
 					r.Post("/", b.HandleV1ClientKeyCreate)
+					r.Delete("/{key}", b.HandleV1ClientKeyDelete)
 				})
 				r.Route("/agents", func(r chi.Router) {
 					r.Get("/", b.HandleV1AgentKeysList)
 					r.Post("/", b.HandleV1AgentKeyCreate)
+					r.Delete("/{key}", b.HandleV1AgentKeyDelete)
 				})
 			})
 
 			r.Route("/users", func(r chi.Router) {
 				r.Get("/", b.HandleV1UsersList)
 				r.Post("/{id}/quota", b.HandleV1UserUpdateQuota)
+				r.Delete("/{id}", b.HandleV1UserDelete)
 			})
 
 			r.Route("/queue", func(r chi.Router) {

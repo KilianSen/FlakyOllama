@@ -521,6 +521,33 @@ func (b *Balancer) HandleV1UserUpdateQuota(w http.ResponseWriter, r *http.Reques
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "quota updated"})
 }
 
+func (b *Balancer) HandleV1ClientKeyDelete(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if err := b.Storage.DeleteClientKey(key); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (b *Balancer) HandleV1AgentKeyDelete(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if err := b.Storage.DeleteAgentKey(key); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (b *Balancer) HandleV1UserDelete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := b.Storage.DeleteUser(id); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 func (b *Balancer) HandleV1QueueList(w http.ResponseWriter, r *http.Request) {
 	b.jsonResponse(w, http.StatusOK, b.Queue.GetSnapshot())
 }

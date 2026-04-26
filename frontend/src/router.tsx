@@ -12,6 +12,8 @@ import { ConfigPage } from './pages/ConfigPage';
 import ProfilePage from './pages/ProfilePage';
 import { UsersPage } from './pages/UsersPage';
 
+import { QueuePage } from './pages/QueuePage';
+
 export const router = createBrowserRouter([
   {
     path: '/',
@@ -22,6 +24,7 @@ export const router = createBrowserRouter([
       { path: 'registry', element: <RegistryPage /> },
       { path: 'users', element: <UsersPage /> },
       { path: 'keys', element: <KeysPage /> },
+      { path: 'queue', element: <QueuePage /> },
       { path: 'portal', element: <PublicPortal /> },
       { path: 'playground', element: <PlaygroundPage /> },
       { path: 'chat', element: <ChatPage /> },

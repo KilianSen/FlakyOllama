@@ -243,10 +243,18 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 
 		// 2. Update Client Key Quota (if key provided)
 		if e.ClientKey != "" {
-			_, err = tx.Exec(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ?`,
-				int64(e.Input+e.Output), e.Cost, e.ClientKey)
+			var userID sql.NullString
+			err = tx.QueryRow(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ? RETURNING user_id`,
+				int64(e.Input+e.Output), e.Cost, e.ClientKey).Scan(&userID)
 			if err != nil {
 				return err
+			}
+
+			if userID.Valid && userID.String != "" {
+				_, err = tx.Exec(`UPDATE users SET quota_used = quota_used + ? WHERE id = ?`, int64(e.Input+e.Output), userID.String)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -534,6 +542,21 @@ func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, 
 func (s *SQLiteStorage) UpdateClientKey(k models.ClientKey) error {
 	_, err := s.db.Exec(`UPDATE client_keys SET label = ?, quota_limit = ?, quota_used = ?, credits = ?, active = ?, status = ? WHERE key = ?`,
 		k.Label, k.QuotaLimit, k.QuotaUsed, k.Credits, k.Active, k.Status, k.Key)
+	return err
+}
+
+func (s *SQLiteStorage) DeleteClientKey(key string) error {
+	_, err := s.db.Exec(`DELETE FROM client_keys WHERE key = ?`, key)
+	return err
+}
+
+func (s *SQLiteStorage) DeleteAgentKey(key string) error {
+	_, err := s.db.Exec(`DELETE FROM agent_keys WHERE key = ?`, key)
+	return err
+}
+
+func (s *SQLiteStorage) DeleteUser(id string) error {
+	_, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
 	return err
 }
 

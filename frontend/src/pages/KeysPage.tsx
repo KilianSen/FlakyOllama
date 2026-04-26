@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2} from 'lucide-react';
+import { Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -44,6 +44,18 @@ export const KeysPage: React.FC = () => {
     } catch (err: any) {
       toast.error(err.message);
     }
+  };
+
+  const handleDelete = async (type: 'client' | 'agent', key: string) => {
+     if (!confirm(`Are you sure you want to PERMANENTLY remove this ${type} token? This cannot be undone.`)) return;
+     try {
+       if (type === 'client') await sdk.deleteClientKey(key);
+       else await sdk.deleteAgentKey(key);
+       toast.success('Token revoked and deleted');
+       load();
+     } catch (err: any) {
+       toast.error(err.message);
+     }
   };
 
   const getStatusBadge = (status: string, active: boolean) => {
@@ -146,11 +158,9 @@ export const KeysPage: React.FC = () => {
                               </Button>
                             </>
                           )}
-                          {k.status !== 'pending' && (
-                             <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive">
-                                <Trash2 size={14} />
-                             </Button>
-                          )}
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDelete('client', k.key)}>
+                             <Trash2 size={14} />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -221,11 +231,9 @@ export const KeysPage: React.FC = () => {
                               </Button>
                             </>
                           )}
-                          {k.status !== 'pending' && (
-                             <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive">
-                                <Trash2 size={14} />
-                             </Button>
-                          )}
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDelete('agent', k.key)}>
+                             <Trash2 size={14} />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
