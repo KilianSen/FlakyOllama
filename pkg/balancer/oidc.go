@@ -147,11 +147,13 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// New user
 		user = models.User{
-			ID:      fmt.Sprintf("u_%d", time.Now().Unix()),
-			Sub:     sub,
-			Email:   email,
-			Name:    name,
-			IsAdmin: isAdmin,
+			ID:         fmt.Sprintf("u_%d", time.Now().Unix()),
+			Sub:        sub,
+			Email:      email,
+			Name:       name,
+			IsAdmin:    isAdmin,
+			QuotaLimit: 10000000, // 10M default global
+			QuotaUsed:  0,
 		}
 		if err := b.Storage.CreateUser(user); err != nil {
 			logging.Global.Errorf("OIDC: Failed to create user in DB: %v", err)
@@ -163,7 +165,7 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		personalKey := models.ClientKey{
 			Key:        fmt.Sprintf("sk-%s", randString(32)),
 			Label:      fmt.Sprintf("Personal Key for %s", user.Name),
-			QuotaLimit: 1000000,
+			QuotaLimit: 1000000, // 1M tokens sub-quota default
 			QuotaUsed:  0,
 			Credits:    10.0,
 			Active:     true,
@@ -210,7 +212,7 @@ func (b *Balancer) HandleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 	var user models.User
-	var clientKey models.ClientKey
+	var clientKeys []models.ClientKey
 	var agentKeys []models.AgentKey
 
 	val := r.Context().Value(auth.ContextKeyUser)
@@ -223,10 +225,10 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 		if tkn, ok := r.Context().Value(auth.ContextKeyToken).(string); ok {
 			if tkn == b.Config.AuthToken {
 				user = models.User{ID: "master", Name: "Master Admin", Email: "admin@local", IsAdmin: true}
-				clientKey = models.ClientKey{Key: tkn, Label: "Master Token", Credits: 999999, QuotaLimit: -1, Active: true}
+				clientKeys = []models.ClientKey{{Key: tkn, Label: "Master Token", Credits: 999999, QuotaLimit: -1, Active: true}}
 			} else if ck, ok := r.Context().Value(auth.ContextKeyClientData).(models.ClientKey); ok {
 				user = models.User{ID: "token-user", Name: ck.Label, Email: "client@token", IsAdmin: false}
-				clientKey = ck
+				clientKeys = []models.ClientKey{ck}
 			}
 		}
 	}
@@ -239,9 +241,15 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 
 	// If we still need to fetch details for OIDC user
 	if user.ID != "master" && user.ID != "token-user" {
-		ck, err := b.Storage.GetClientKeyByUserID(user.ID)
-		if err != nil {
-			ck = models.ClientKey{
+		// Fetch fresh user to get latest quotas
+		u, err := b.Storage.GetUserByID(user.ID)
+		if err == nil {
+			user = u
+		}
+
+		cks, err := b.Storage.GetClientKeysByUserID(user.ID)
+		if err != nil || len(cks) == 0 {
+			defaultKey := models.ClientKey{
 				Key:        fmt.Sprintf("sk-%s", randString(32)),
 				Label:      fmt.Sprintf("Personal Key for %s", user.Name),
 				QuotaLimit: 1000000,
@@ -250,48 +258,35 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 				Active:     true,
 				UserID:     user.ID,
 			}
-			b.Storage.CreateClientKey(ck)
+			b.Storage.CreateClientKey(defaultKey)
+			clientKeys = []models.ClientKey{defaultKey}
+		} else {
+			clientKeys = cks
 		}
-		clientKey = ck
 
 		ak, err := b.Storage.GetAgentKeysByUserID(user.ID)
-		if err != nil || len(ak) == 0 {
-			newAgentKey := models.AgentKey{
-				Key:           fmt.Sprintf("ak-%s", randString(32)),
-				Label:         fmt.Sprintf("Default Agent for %s", user.Name),
-				CreditsEarned: 0,
-				Reputation:    1.0,
-				Active:        true,
-				UserID:        user.ID,
-			}
-			b.Storage.CreateAgentKey(newAgentKey)
-			agentKeys = []models.AgentKey{newAgentKey}
-		} else {
+		if err == nil {
 			agentKeys = ak
 		}
 	}
 
 	resp := struct {
-		User      models.User       `json:"user"`
-		ClientKey models.ClientKey  `json:"client_key"`
-		AgentKeys []models.AgentKey `json:"agent_keys"`
+		User       models.User       `json:"user"`
+		ClientKeys []models.ClientKey `json:"client_keys"`
+		AgentKeys  []models.AgentKey `json:"agent_keys"`
 	}{
-		User:      user,
-		ClientKey: clientKey,
-		AgentKeys: agentKeys,
+		User:       user,
+		ClientKeys: clientKeys,
+		AgentKeys:  agentKeys,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	b.jsonResponse(w, http.StatusOK, resp)
 }
 
 func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("session_token")
 		if err != nil {
-			if err != http.ErrNoCookie {
-				logging.Global.Errorf("SessionMiddleware: Error reading cookie: %v", err)
-			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -304,7 +299,6 @@ func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
 		})
 
 		if err != nil || !tkn.Valid {
-			logging.Global.Errorf("SessionMiddleware: Invalid token: %v. Clearing cookie.", err)
 			setCookie(r, w, "session_token", "", -1)
 			next.ServeHTTP(w, r)
 			return
@@ -312,12 +306,10 @@ func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
 
 		user, err := b.Storage.GetUserByID(claims.UserID)
 		if err != nil {
-			logging.Global.Errorf("SessionMiddleware: User %s not found in DB", claims.UserID)
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		logging.Global.Infof("Session: Authenticated user %s (%s)", user.Name, user.ID)
 		ctx := context.WithValue(r.Context(), auth.ContextKeyUser, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

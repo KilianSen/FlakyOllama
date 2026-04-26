@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, User, Copy, Zap, Server } from 'lucide-react';
+import {Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2} from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +34,29 @@ export const KeysPage: React.FC = () => {
   const copy = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success('Key copied to clipboard');
+  };
+
+  const setStatus = async (type: 'client' | 'agent', key: string, status: string) => {
+    try {
+      await sdk.setKeyStatus(type, key, status);
+      toast.success(`Key ${status}`);
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
+  const getStatusBadge = (status: string, active: boolean) => {
+    switch (status) {
+      case 'active':
+        return <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[9px] font-black uppercase tracking-widest">Active</Badge>;
+      case 'pending':
+        return <Badge variant="outline" className="text-amber-400 border-amber-500/30 text-[9px] font-black uppercase tracking-widest gap-1"><Clock size={10}/> Pending</Badge>;
+      case 'rejected':
+        return <Badge variant="destructive" className="text-[9px] font-black uppercase tracking-widest">Rejected</Badge>;
+      default:
+        return <Badge variant="outline" className="text-[9px] font-black uppercase tracking-widest">{active ? 'Active' : 'Disabled'}</Badge>;
+    }
   };
 
   return (
@@ -73,8 +96,8 @@ export const KeysPage: React.FC = () => {
                     <TableHead className="text-[10px] font-black uppercase py-4 pl-6">Label / Owner</TableHead>
                     <TableHead className="text-[10px] font-black uppercase">API Key</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-center">Quota / Usage</TableHead>
-                    <TableHead className="text-[10px] font-black uppercase text-center">Linked User</TableHead>
-                    <TableHead className="text-[10px] font-black uppercase text-right pr-6">Status</TableHead>
+                    <TableHead className="text-[10px] font-black uppercase text-center">Status</TableHead>
+                    <TableHead className="text-[10px] font-black uppercase text-right pr-6">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -82,7 +105,12 @@ export const KeysPage: React.FC = () => {
                     <TableRow><TableCell colSpan={5} className="text-center py-12 text-muted-foreground text-xs italic">No cluster-wide keys found</TableCell></TableRow>
                   ) : clients.map(k => (
                     <TableRow key={k.key} className="border-border/40 hover:bg-muted/5 transition-colors">
-                      <TableCell className="font-bold text-xs pl-6">{k.label}</TableCell>
+                      <TableCell className="font-bold text-xs pl-6">
+                        <div className="flex flex-col">
+                          <span>{k.label}</span>
+                          <span className="text-[9px] text-muted-foreground font-mono">{k.user_id ? `u_${k.user_id.split('_').pop()}` : 'SYSTEM'}</span>
+                        </div>
+                      </TableCell>
                       <TableCell>
                          <div className="flex items-center gap-2 group">
                             <code className="text-[10px] bg-muted/50 px-1.5 py-0.5 rounded font-mono text-muted-foreground">
@@ -104,14 +132,26 @@ export const KeysPage: React.FC = () => {
                          </div>
                       </TableCell>
                       <TableCell className="text-center">
-                        <span className="text-[10px] font-mono font-bold text-muted-foreground">
-                           {k.user_id ? `u_${k.user_id.split('_').pop()}` : 'SYSTEM'}
-                        </span>
+                         {getStatusBadge(k.status || '', k.active)}
                       </TableCell>
                       <TableCell className="text-right pr-6">
-                         <Badge className={k.active ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[9px] font-black' : 'bg-red-500/10 text-red-400'}>
-                           {k.active ? 'ACTIVE' : 'REVOKED'}
-                         </Badge>
+                        <div className="flex justify-end gap-1">
+                          {k.status === 'pending' && (
+                            <>
+                              <Button size="icon" variant="ghost" className="h-7 w-7 text-emerald-400" onClick={() => setStatus('client', k.key, 'active')}>
+                                <Check size={14} />
+                              </Button>
+                              <Button size="icon" variant="ghost" className="h-7 w-7 text-red-400" onClick={() => setStatus('client', k.key, 'rejected')}>
+                                <X size={14} />
+                              </Button>
+                            </>
+                          )}
+                          {k.status !== 'pending' && (
+                             <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive">
+                                <Trash2 size={14} />
+                             </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -135,8 +175,8 @@ export const KeysPage: React.FC = () => {
                     <TableHead className="text-[10px] font-black uppercase py-4 pl-6">Node / Label</TableHead>
                     <TableHead className="text-[10px] font-black uppercase">Identity Token</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-center">Credits Earned</TableHead>
-                    <TableHead className="text-[10px] font-black uppercase text-center">Linked User</TableHead>
-                    <TableHead className="text-[10px] font-black uppercase text-right pr-6">Status</TableHead>
+                    <TableHead className="text-[10px] font-black uppercase text-center">Status</TableHead>
+                    <TableHead className="text-[10px] font-black uppercase text-right pr-6">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -147,7 +187,10 @@ export const KeysPage: React.FC = () => {
                       <TableCell className="font-bold text-xs pl-6">
                         <div className="flex items-center gap-2">
                           <Server size={14} className="text-amber-400" />
-                          {k.label}
+                          <div className="flex flex-col">
+                            <span>{k.label}</span>
+                            <span className="text-[9px] text-muted-foreground font-mono">{k.user_id ? `u_${k.user_id.split('_').pop()}` : 'SYSTEM'}</span>
+                          </div>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -164,14 +207,26 @@ export const KeysPage: React.FC = () => {
                          {k.credits_earned.toLocaleString(undefined, { minimumFractionDigits: 1 })} φ
                       </TableCell>
                       <TableCell className="text-center">
-                        <span className="text-[10px] font-mono font-bold text-muted-foreground">
-                           {k.user_id ? `u_${k.user_id.split('_').pop()}` : 'SYSTEM'}
-                        </span>
+                        {getStatusBadge(k.status || '', k.active)}
                       </TableCell>
                       <TableCell className="text-right pr-6">
-                         <Badge className={k.active ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[9px] font-black' : 'bg-red-500/10 text-red-400'}>
-                           {k.active ? 'VERIFIED' : 'DISABLED'}
-                         </Badge>
+                        <div className="flex justify-end gap-1">
+                          {k.status === 'pending' && (
+                            <>
+                              <Button size="icon" variant="ghost" className="h-7 w-7 text-emerald-400" onClick={() => setStatus('agent', k.key, 'active')}>
+                                <Check size={14} />
+                              </Button>
+                              <Button size="icon" variant="ghost" className="h-7 w-7 text-red-400" onClick={() => setStatus('agent', k.key, 'rejected')}>
+                                <X size={14} />
+                              </Button>
+                            </>
+                          )}
+                          {k.status !== 'pending' && (
+                             <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive">
+                                <Trash2 size={14} />
+                             </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -194,10 +249,9 @@ const CreateClientKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
     try {
       await sdk.createClientKey({ 
         label, 
-        quota_limit: parseInt(quota), 
-        active: true 
+        quota_limit: parseInt(quota)
       });
-      toast.success('Client key created');
+      toast.success('Key generated');
       setOpen(false);
       onSuccess();
     } catch (err: any) { toast.error(err.message); }
@@ -244,8 +298,8 @@ const CreateAgentKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await sdk.createAgentKey({ label, node_id: nodeId, active: true });
-      toast.success('Agent identity created');
+      await sdk.createAgentKey({ label, node_id: nodeId });
+      toast.success('Identity generated');
       setOpen(false);
       onSuccess();
     } catch (err: any) { toast.error(err.message); }

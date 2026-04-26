@@ -22,6 +22,7 @@ type Config struct {
 	AuthToken              string             `json:"auth_token"`   // Token expected from clients
 	RemoteToken            string             `json:"remote_token"` // Token to send to agents/balancer
 	EnableModelApproval    bool               `json:"enable_model_approval"`
+	EnableKeyApproval      bool               `json:"enable_key_approval"`
 	ModelRewardFactors     map[string]float64 `json:"model_reward_factors"`     // Agent multipliers
 	ModelCostFactors       map[string]float64 `json:"model_cost_factors"`       // Client multipliers
 	GlobalRewardMultiplier float64            `json:"global_reward_multiplier"` // Global agent bonus
@@ -97,6 +98,7 @@ func DefaultConfig() *Config {
 		HedgingPercentile:      0.95,
 		MaxQueueDepth:          100,
 		EnableModelApproval:    true,
+		EnableKeyApproval:      false,
 		GlobalRewardMultiplier: 1.1,
 		GlobalCostMultiplier:   1.0,
 		ModelRewardFactors:     make(map[string]float64),

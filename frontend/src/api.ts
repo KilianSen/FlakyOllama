@@ -81,6 +81,7 @@ export interface ClientKey {
   credits: number;
   active: boolean;
   user_id?: string;
+  status?: string;
 }
 
 export interface AgentKey {
@@ -91,6 +92,7 @@ export interface AgentKey {
   reputation: number;
   active: boolean;
   user_id?: string;
+  status?: string;
 }
 
 export interface LogEntry {
@@ -108,6 +110,15 @@ export interface ModelRequest {
   node_id: string;
   status: string;
   requested_at: string;
+}
+
+export interface QueuedRequest {
+  id: string;
+  model: string;
+  priority: number;
+  client_ip: string;
+  context_hash: string;
+  queued_at: string;
 }
 
 export interface Catalog {
@@ -355,6 +366,23 @@ export class FlakyOllamaSDK {
           method: 'POST',
           body: JSON.stringify({ model, node_id: nodeId, is_banned: banned, is_pinned: pinned })
       });
+  }
+
+  // Key Management
+  async setKeyStatus(type: 'client' | 'agent', key: string, status: string): Promise<{ status: string }> {
+    return this.request('/api/v1/keys/status', {
+      method: 'POST',
+      body: JSON.stringify({ type, key, status }),
+    });
+  }
+
+  // Queue Management (Admin)
+  async getQueue(): Promise<QueuedRequest[]> {
+    return this.request<QueuedRequest[]>('/api/v1/queue');
+  }
+
+  async cancelQueuedRequest(id: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/queue/${id}`, { method: 'DELETE' });
   }
 
   // Public / Self-service

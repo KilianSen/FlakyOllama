@@ -4,17 +4,21 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"container/heap"
 	"context"
+	"fmt"
 	"sync"
+	"time"
 )
 
 // QueuedRequest represents a request waiting in the queue.
 type QueuedRequest struct {
+	ID       string
 	Request  models.InferenceRequest
 	Priority int // Higher value means higher priority
 	Sequence int64
 	ClientIP    string
 	ContextHash string
 	Ctx         context.Context
+	QueuedAt    time.Time
 	Response chan QueuedResponse
 	Index    int // The index of the item in the heap.
 }
@@ -84,12 +88,14 @@ func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP
 	resCh := make(chan QueuedResponse, 1)
 	rq.sequence++
 	item := &QueuedRequest{
+		ID:          fmt.Sprintf("req_%d_%d", time.Now().Unix(), rq.sequence),
 		Request:     req,
 		Priority:    priority,
 		Sequence:    rq.sequence,
 		ClientIP:    clientIP,
 		ContextHash: contextHash,
 		Ctx:         ctx,
+		QueuedAt:    time.Now(),
 		Response:    resCh,
 	}
 	heap.Push(&rq.pq, item)
@@ -115,6 +121,38 @@ func (rq *RequestQueue) Pop() *QueuedRequest {
 		return item
 	}
 	return nil
+}
+
+func (rq *RequestQueue) GetSnapshot() []models.QueuedRequestInfo {
+	rq.mu.Lock()
+	defer rq.mu.Unlock()
+
+	var snapshot []models.QueuedRequestInfo
+	for _, item := range rq.pq {
+		snapshot = append(snapshot, models.QueuedRequestInfo{
+			ID:          item.ID,
+			Model:       item.Request.Model,
+			Priority:    item.Priority,
+			ClientIP:    item.ClientIP,
+			ContextHash: item.ContextHash,
+			QueuedAt:    item.QueuedAt,
+		})
+	}
+	return snapshot
+}
+
+func (rq *RequestQueue) CancelRequest(id string) bool {
+	rq.mu.Lock()
+	defer rq.mu.Unlock()
+
+	for i, item := range rq.pq {
+		if item.ID == id {
+			heap.Remove(&rq.pq, i)
+			item.Response <- QueuedResponse{Err: fmt.Errorf("request cancelled by administrator")}
+			return true
+		}
+	}
+	return false
 }
 
 func (rq *RequestQueue) Wait() <-chan struct{} {

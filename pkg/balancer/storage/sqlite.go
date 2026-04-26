@@ -3,6 +3,7 @@ package storage
 import (
 	"FlakyOllama/pkg/shared/models"
 	"database/sql"
+	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -94,14 +95,17 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			quota_used INTEGER DEFAULT 0,
 			credits REAL DEFAULT 0,
 			active BOOLEAN DEFAULT 1,
-			user_id TEXT
+			user_id TEXT,
+			status TEXT DEFAULT 'active'
 		);`,
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
 			sub TEXT UNIQUE,
 			email TEXT,
 			name TEXT,
-			is_admin BOOLEAN DEFAULT 0
+			is_admin BOOLEAN DEFAULT 0,
+			quota_limit INTEGER DEFAULT -1,
+			quota_used INTEGER DEFAULT 0
 		);`,
 		`CREATE TABLE IF NOT EXISTS agent_keys (
 			key TEXT PRIMARY KEY,
@@ -110,7 +114,8 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			credits_earned REAL DEFAULT 0,
 			reputation REAL DEFAULT 1.0,
 			active BOOLEAN DEFAULT 1,
-			user_id TEXT
+			user_id TEXT,
+			status TEXT DEFAULT 'active'
 		);`,
 		`CREATE TABLE IF NOT EXISTS user_model_policies (
 			user_id TEXT,
@@ -326,20 +331,24 @@ func (s *SQLiteStorage) GetPerformanceAnalytics() (map[string]struct {
 
 // Client Key Management
 func (s *SQLiteStorage) CreateClientKey(k models.ClientKey) error {
-	_, err := s.db.Exec(`INSERT INTO client_keys (key, label, quota_limit, credits, user_id) VALUES (?, ?, ?, ?, ?)`,
-		k.Key, k.Label, k.QuotaLimit, k.Credits, k.UserID)
+	_, err := s.db.Exec(`INSERT INTO client_keys (key, label, quota_limit, credits, user_id, status) VALUES (?, ?, ?, ?, ?, ?)`,
+		k.Key, k.Label, k.QuotaLimit, k.Credits, k.UserID, k.Status)
 	return err
 }
 
 func (s *SQLiteStorage) GetClientKey(key string) (models.ClientKey, error) {
 	var k models.ClientKey
-	err := s.db.QueryRow(`SELECT key, label, quota_limit, quota_used, credits, active FROM client_keys WHERE key = ?`, key).
-		Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active)
+	var userID sql.NullString
+	err := s.db.QueryRow(`SELECT key, label, quota_limit, quota_used, credits, active, user_id, status FROM client_keys WHERE key = ?`, key).
+		Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &userID, &k.Status)
+	if userID.Valid {
+		k.UserID = userID.String
+	}
 	return k, err
 }
 
 func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
-	rows, err := s.db.Query(`SELECT key, label, quota_limit, quota_used, credits, active, user_id FROM client_keys`)
+	rows, err := s.db.Query(`SELECT key, label, quota_limit, quota_used, credits, active, user_id, status FROM client_keys`)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +357,7 @@ func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
 	for rows.Next() {
 		var k models.ClientKey
 		var userID sql.NullString
-		if err := rows.Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &userID); err != nil {
+		if err := rows.Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &userID, &k.Status); err != nil {
 			return nil, err
 		}
 		if userID.Valid {
@@ -361,42 +370,98 @@ func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
 
 // User Management
 func (s *SQLiteStorage) CreateUser(u models.User) error {
-	_, err := s.db.Exec(`INSERT INTO users (id, sub, email, name, is_admin) VALUES (?, ?, ?, ?, ?)`,
-		u.ID, u.Sub, u.Email, u.Name, u.IsAdmin)
+	_, err := s.db.Exec(`INSERT INTO users (id, sub, email, name, is_admin, quota_limit, quota_used) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Sub, u.Email, u.Name, u.IsAdmin, u.QuotaLimit, u.QuotaUsed)
 	return err
 }
 
 func (s *SQLiteStorage) GetUserBySub(sub string) (models.User, error) {
 	var u models.User
-	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin FROM users WHERE sub = ?`, sub).
-		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin)
+	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used FROM users WHERE sub = ?`, sub).
+		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed)
 	return u, err
 }
 
 func (s *SQLiteStorage) GetUserByID(id string) (models.User, error) {
 	var u models.User
-	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin)
+	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed)
 	return u, err
 }
 
 func (s *SQLiteStorage) UpdateUser(u models.User) error {
-	_, err := s.db.Exec(`UPDATE users SET email = ?, name = ?, is_admin = ? WHERE id = ?`,
-		u.Email, u.Name, u.IsAdmin, u.ID)
+	_, err := s.db.Exec(`UPDATE users SET email = ?, name = ?, is_admin = ?, quota_limit = ?, quota_used = ? WHERE id = ?`,
+		u.Email, u.Name, u.IsAdmin, u.QuotaLimit, u.QuotaUsed, u.ID)
 	return err
 }
 
-func (s *SQLiteStorage) GetClientKeyByUserID(userID string) (models.ClientKey, error) {
-	var k models.ClientKey
-	err := s.db.QueryRow(`SELECT key, label, quota_limit, quota_used, credits, active, user_id FROM client_keys WHERE user_id = ?`, userID).
-		Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &k.UserID)
-	return k, err
+func (s *SQLiteStorage) ListUsers() ([]models.User, error) {
+	rows, err := s.db.Query(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used FROM users`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, nil
+}
+
+func (s *SQLiteStorage) GetClientKeysByUserID(userID string) ([]models.ClientKey, error) {
+	rows, err := s.db.Query(`SELECT key, label, quota_limit, quota_used, credits, active, user_id, status FROM client_keys WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []models.ClientKey
+	for rows.Next() {
+		var k models.ClientKey
+		var uid sql.NullString
+		if err := rows.Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &uid, &k.Status); err != nil {
+			return nil, err
+		}
+		if uid.Valid {
+			k.UserID = uid.String
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+func (s *SQLiteStorage) RecordUsage(clientKey string, tokens int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// 1. Update Client Key
+	var userID sql.NullString
+	err = tx.QueryRow(`UPDATE client_keys SET quota_used = quota_used + ? WHERE key = ? RETURNING user_id`, tokens, clientKey).Scan(&userID)
+	if err != nil {
+		return err
+	}
+
+	// 2. Update User Global Quota if linked
+	if userID.Valid && userID.String != "" {
+		_, err = tx.Exec(`UPDATE users SET quota_used = quota_used + ? WHERE id = ?`, tokens, userID.String)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 // Agent Key Management
 func (s *SQLiteStorage) CreateAgentKey(k models.AgentKey) error {
-	_, err := s.db.Exec(`INSERT INTO agent_keys (key, label, node_id, user_id) VALUES (?, ?, ?, ?)`,
-		k.Key, k.Label, k.NodeID, k.UserID)
+	_, err := s.db.Exec(`INSERT INTO agent_keys (key, label, node_id, user_id, status) VALUES (?, ?, ?, ?, ?)`,
+		k.Key, k.Label, k.NodeID, k.UserID, k.Status)
 	return err
 }
 
@@ -418,8 +483,8 @@ func (s *SQLiteStorage) RecordReputation(key string, change float64) error {
 func (s *SQLiteStorage) GetAgentKey(key string) (models.AgentKey, error) {
 	var k models.AgentKey
 	var userID sql.NullString
-	err := s.db.QueryRow(`SELECT key, label, node_id, credits_earned, reputation, active, user_id FROM agent_keys WHERE key = ?`, key).
-		Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID)
+	err := s.db.QueryRow(`SELECT key, label, node_id, credits_earned, reputation, active, user_id, status FROM agent_keys WHERE key = ?`, key).
+		Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID, &k.Status)
 	if userID.Valid {
 		k.UserID = userID.String
 	}
@@ -427,7 +492,7 @@ func (s *SQLiteStorage) GetAgentKey(key string) (models.AgentKey, error) {
 }
 
 func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
-	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id FROM agent_keys`)
+	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id, status FROM agent_keys`)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +501,7 @@ func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
 	for rows.Next() {
 		var k models.AgentKey
 		var userID sql.NullString
-		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID); err != nil {
+		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID, &k.Status); err != nil {
 			return nil, err
 		}
 		if userID.Valid {
@@ -447,25 +512,8 @@ func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
 	return keys, nil
 }
 
-func (s *SQLiteStorage) ListUsers() ([]models.User, error) {
-	rows, err := s.db.Query(`SELECT id, sub, email, name, is_admin FROM users`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var users []models.User
-	for rows.Next() {
-		var u models.User
-		if err := rows.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin); err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	return users, nil
-}
-
 func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, error) {
-	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id FROM agent_keys WHERE user_id = ?`, userID)
+	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id, status FROM agent_keys WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +521,7 @@ func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, 
 	var keys []models.AgentKey
 	for rows.Next() {
 		var k models.AgentKey
-		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &k.UserID); err != nil {
+		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &k.UserID, &k.Status); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
@@ -482,8 +530,18 @@ func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, 
 }
 
 func (s *SQLiteStorage) UpdateClientKey(k models.ClientKey) error {
-	_, err := s.db.Exec(`UPDATE client_keys SET label = ?, quota_limit = ?, quota_used = ?, credits = ?, active = ? WHERE key = ?`,
-		k.Label, k.QuotaLimit, k.QuotaUsed, k.Credits, k.Active, k.Key)
+	_, err := s.db.Exec(`UPDATE client_keys SET label = ?, quota_limit = ?, quota_used = ?, credits = ?, active = ?, status = ? WHERE key = ?`,
+		k.Label, k.QuotaLimit, k.QuotaUsed, k.Credits, k.Active, k.Status, k.Key)
+	return err
+}
+
+func (s *SQLiteStorage) SetKeyStatus(keyType, key string, status models.KeyStatus, active bool) error {
+	table := "client_keys"
+	if keyType == "agent" {
+		table = "agent_keys"
+	}
+	query := fmt.Sprintf("UPDATE %s SET status = ?, active = ? WHERE key = ?", table)
+	_, err := s.db.Exec(query, status, active, key)
 	return err
 }
 

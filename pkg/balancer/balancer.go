@@ -252,6 +252,7 @@ func (b *Balancer) NewMux() *chi.Mux {
 			r.Post("/policies", b.HandleV1ModelPolicySet)
 
 			r.Route("/keys", func(r chi.Router) {
+				r.Post("/status", b.HandleV1KeySetStatus)
 				r.Route("/clients", func(r chi.Router) {
 					r.Get("/", b.HandleV1ClientKeysList)
 					r.Post("/", b.HandleV1ClientKeyCreate)
@@ -265,6 +266,11 @@ func (b *Balancer) NewMux() *chi.Mux {
 			r.Route("/users", func(r chi.Router) {
 				r.Get("/", b.HandleV1UsersList)
 				r.Post("/{id}/quota", b.HandleV1UserUpdateQuota)
+			})
+
+			r.Route("/queue", func(r chi.Router) {
+				r.Get("/", b.HandleV1QueueList)
+				r.Delete("/{id}", b.HandleV1QueueCancel)
 			})
 
 			r.Get("/jobs/{id}", b.HandleV1JobStatus)

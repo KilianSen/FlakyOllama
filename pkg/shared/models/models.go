@@ -8,91 +8,35 @@ type NodeState int
 const (
 	StateHealthy  NodeState = iota
 	StateDegraded           // Recent errors, scoring penalty applied
-	StateBroken             // Too many errors, excluded from routing
+	StateBroken             // Node unresponsive or critical error
 )
 
-func (s NodeState) String() string {
-	switch s {
-	case StateHealthy:
-		return "Healthy"
-	case StateDegraded:
-		return "Degraded"
-	case StateBroken:
-		return "Broken"
-	default:
-		return "Unknown"
-	}
-}
-
-// NodeStatus represents the current state of an Agent node.
 type NodeStatus struct {
-	ID             string      `json:"id"`
-	AgentKey       string      `json:"agent_key,omitempty"`
-	Address        string      `json:"address"`
-	Tier           string      `json:"tier"` // "dedicated" or "shared"
-	HasGPU         bool        `json:"has_gpu"`
-	CPUUsage       float64     `json:"cpu_usage"` // Percentage
-	CPUCores       int         `json:"cpu_cores"`
-	MemoryUsage    float64     `json:"memory_usage"` // Percentage
-	MemoryTotal    uint64      `json:"memory_total"` // Bytes
-	VRAMTotal      uint64      `json:"vram_total"`   // Bytes
-	VRAMUsed       uint64      `json:"vram_used"`    // Bytes
-	GPUModel       string      `json:"gpu_model"`
-	GPUTemperature float64     `json:"gpu_temp"`      // Celsius
-	ActiveModels   []string    `json:"active_models"` // List of currently loaded models
-	LocalModels    []ModelInfo `json:"local_models"`  // Models available on disk
-	LastSeen       time.Time   `json:"last_seen"`
-	State          NodeState   `json:"state"`
-	Errors         int         `json:"errors"`  // Consecutive errors
-	Message        string      `json:"message"` // Status message
-	Reputation     float64     `json:"reputation"`
-	CooloffUntil   time.Time   `json:"cooloff_until"`
-	Draining       bool        `json:"draining"`
-	InputTokens    int         `json:"input_tokens"`
-	OutputTokens   int         `json:"output_tokens"`
-	TokenReward    float64     `json:"token_reward"`
-}
-
-// ModelRequirement defines the hardware needs for a model.
-type ModelRequirement struct {
-	MinVRAM uint64 `json:"min_vram"` // Bytes
-}
-
-// InferenceRequest is a simplified request for an LLM task.
-type InferenceRequest struct {
-	Model        string                 `json:"model"`
-	Prompt       string                 `json:"prompt"`
-	Stream       bool                   `json:"stream"`
-	Priority     int                    `json:"priority"`
-	AllowHedging bool                   `json:"allow_hedging"`
-	Options      map[string]interface{} `json:"options"`
-}
-
-// ChatRequest is a request for a chat completion.
-type ChatRequest struct {
-	Model        string                 `json:"model"`
-	Messages     []ChatMessage          `json:"messages"`
-	Stream       bool                   `json:"stream"`
-	Priority     int                    `json:"priority"`
-	AllowHedging bool                   `json:"allow_hedging"`
-	Options      map[string]interface{} `json:"options"`
-}
-
-// ChatMessage represents a single message in a chat history.
-type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// InferenceResponse is the result of an inference task.
-type InferenceResponse struct {
-	Response string `json:"response"`
-	Error    string `json:"error,omitempty"`
-}
-
-// TagsResponse represents the response from /api/tags
-type TagsResponse struct {
-	Models []ModelInfo `json:"models"`
+	ID             string             `json:"id"`
+	AgentKey       string             `json:"agent_key"` // The token used to register
+	Address        string             `json:"address"`
+	State          NodeState          `json:"state"`
+	Tier           string             `json:"tier"` // "dedicated" or "shared"
+	CPUUsage       float64            `json:"cpu_usage"` // Percentage
+	CPUCores       int                `json:"cpu_cores"`
+	MemoryUsage    float64            `json:"memory_usage"` // Percentage
+	MemoryTotal    uint64             `json:"memory_total"` // Bytes
+	VRAMTotal      uint64             `json:"vram_total"`   // Bytes
+	VRAMUsed       uint64             `json:"vram_used"`    // Bytes
+	GPUModel       string             `json:"gpu_model"`
+	GPUTemperature float64            `json:"gpu_temp"`      // Celsius
+	ActiveModels   []string           `json:"active_models"` // List of currently loaded models
+	LocalModels    []ModelInfo        `json:"local_models"`  // Models present on disk
+	InputTokens    int64              `json:"input_tokens"`
+	OutputTokens   int64              `json:"output_tokens"`
+	TokenReward    float64            `json:"token_reward"`
+	Reputation     float64            `json:"reputation"` // Score 0.1 - 5.0
+	Errors         int                `json:"errors"`
+	Message        string             `json:"message"`
+	Draining       bool               `json:"draining"`
+	HasGPU         bool               `json:"has_gpu"`
+	LastSeen       time.Time          `json:"last_seen"`
+	CooloffUntil   time.Time          `json:"cooloff_until"`
 }
 
 type ModelInfo struct {
@@ -112,51 +56,57 @@ type ModelDetails struct {
 	QuantizationLevel string   `json:"quantization_level"`
 }
 
-// RegisterRequest is sent by an Agent to the Balancer.
-type RegisterRequest struct {
-	ID       string `json:"id"`
-	Address  string `json:"address"`
-	Tier     string `json:"tier"`
-	HasGPU   bool   `json:"has_gpu"`
-	GPUModel string `json:"gpu_model"`
+type InferenceRequest struct {
+	Model    string                 `json:"model"`
+	Prompt   string                 `json:"prompt"`
+	Options  map[string]interface{} `json:"options"`
+	Stream   bool                   `json:"stream"`
+	Priority int                    `json:"priority"`
 }
 
-// ClusterStatus represents the complete state of the cluster for the dashboard.
-type ClusterStatus struct {
-	Nodes           map[string]*NodeStatus `json:"nodes"`
-	PendingRequests map[string]int         `json:"pending_requests"`
-	InProgressPulls map[string]time.Time   `json:"in_progress_pulls"`
-	NodeWorkloads   map[string]int         `json:"node_workloads"`
-	QueueDepth      int                    `json:"queue_depth"`
-	ActiveWorkloads int                    `json:"active_workloads"`
-	AllModels       []string               `json:"all_models"`
+type InferenceResponse struct {
+	Model      string    `json:"model"`
+	CreatedAt  time.Time `json:"created_at"`
+	Response   string    `json:"response"`
+	Done       bool      `json:"done"`
+	TotalDur   int64     `json:"total_duration"`
+	LoadDur    int64     `json:"load_duration"`
+	SampleCount int      `json:"sample_count"`
+	SampleDur  int64     `json:"sample_duration"`
+	PromptCount int      `json:"prompt_eval_count"`
+	PromptDur  int64     `json:"prompt_eval_duration"`
+	EvalCount  int       `json:"eval_count"`
+	EvalDur    int64     `json:"eval_duration"`
+}
 
-	// Aggregate metrics
-	TotalVRAM      uint64  `json:"total_vram"`      // Total VRAM in bytes
-	UsedVRAM       uint64  `json:"used_vram"`       // Total used VRAM in bytes
-	TotalCPUCores  int     `json:"total_cpu_cores"` // Total CPU cores
-	AvgCPUUsage    float64 `json:"avg_cpu_usage"`   // Average CPU usage percentage
-	AvgMemoryUsage float64 `json:"avg_mem_usage"`   // Average Memory usage percentage
-	UptimeSeconds  int64   `json:"uptime_seconds"`
+type ChatRequest struct {
+	Model    string                 `json:"model"`
+	Messages []ChatMessage          `json:"messages"`
+	Options  map[string]interface{} `json:"options"`
+	Stream   bool                   `json:"stream"`
+	Priority int                    `json:"priority"`
+}
 
-	TotalInputTokens  int     `json:"total_input_tokens"`
-	TotalOutputTokens int     `json:"total_output_tokens"`
-	TotalReward       float64 `json:"total_reward"`
-	TotalCost         float64 `json:"total_cost"`
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 
-	ModelRewardFactors map[string]float64 `json:"model_reward_factors"`
-	ModelCostFactors   map[string]float64 `json:"model_cost_factors"`
+type ChatResponse struct {
+	Model      string      `json:"model"`
+	CreatedAt  time.Time   `json:"created_at"`
+	Message    ChatMessage `json:"message"`
+	Done       bool        `json:"done"`
+	TotalDur   int64       `json:"total_duration"`
+}
 
-	VirtualModels map[string]VirtualModelConfig `json:"virtual_models"`
-	OIDCEnabled   bool                         `json:"oidc_enabled"`
-
-	Performance map[string]struct {
-		AvgTTFT     float64 `json:"avg_ttft_ms"`
-		AvgDuration float64 `json:"avg_duration_ms"`
-		Requests    int     `json:"requests"`
-	} `json:"performance"`
-
-	ModelPolicies map[string]map[string]struct{ Banned, Pinned bool } `json:"model_policies"` // model -> node_id -> policy
+// RegisterRequest is sent by an Agent to the Balancer.
+type RegisterRequest struct {
+	ID      string `json:"id"`
+	Address string `json:"address"`
+	Tier    string `json:"tier"`
+	HasGPU  bool   `json:"has_gpu"`
+	GPUModel string `json:"gpu_model"`
 }
 
 type LogLevel string
@@ -202,22 +152,33 @@ type ModelRequest struct {
 	ApprovedAt  *time.Time         `json:"approved_at,omitempty"`
 }
 
+type KeyStatus string
+
+const (
+	KeyStatusPending  KeyStatus = "pending"
+	KeyStatusActive   KeyStatus = "active"
+	KeyStatusRejected KeyStatus = "rejected"
+)
+
 type ClientKey struct {
-	Key        string  `json:"key"`
-	Label      string  `json:"label"`
-	QuotaLimit int64   `json:"quota_limit"` // Max tokens/credits allowed (-1 for unlimited)
-	QuotaUsed  int64   `json:"quota_used"`
-	Credits    float64 `json:"credits"` // Balance if using a credit system
-	Active     bool    `json:"active"`
-	UserID     string  `json:"user_id,omitempty"` // ID of the user owning this key
+	Key        string    `json:"key"`
+	Label      string    `json:"label"`
+	QuotaLimit int64     `json:"quota_limit"` // Max tokens/credits allowed (-1 for unlimited)
+	QuotaUsed  int64     `json:"quota_used"`
+	Credits    float64   `json:"credits"` // Balance if using a credit system
+	Active     bool      `json:"active"`
+	UserID     string    `json:"user_id,omitempty"` // ID of the user owning this key
+	Status     KeyStatus `json:"status"`
 }
 
 type User struct {
-	ID      string `json:"id"`
-	Sub     string `json:"sub"` // OIDC Subject
-	Email   string `json:"email"`
-	Name    string `json:"name"`
-	IsAdmin bool   `json:"is_admin"`
+	ID         string `json:"id"`
+	Sub        string `json:"sub"` // OIDC Subject
+	Email      string `json:"email"`
+	Name       string `json:"name"`
+	IsAdmin    bool   `json:"is_admin"`
+	QuotaLimit int64  `json:"quota_limit"`
+	QuotaUsed  int64  `json:"quota_used"`
 }
 
 type UserModelPolicy struct {
@@ -228,14 +189,24 @@ type UserModelPolicy struct {
 	Disabled     bool    `json:"disabled"`      // If true, user cannot use this model
 }
 
+type QueuedRequestInfo struct {
+	ID          string    `json:"id"`
+	Model       string    `json:"model"`
+	Priority    int       `json:"priority"`
+	ClientIP    string    `json:"client_ip"`
+	ContextHash string    `json:"context_hash"`
+	QueuedAt    time.Time `json:"queued_at"`
+}
+
 type AgentKey struct {
-	Key           string  `json:"key"`
-	Label         string  `json:"label"`
-	NodeID        string  `json:"node_id"` // Node associated with this key
-	CreditsEarned float64 `json:"credits_earned"`
-	Reputation    float64 `json:"reputation"`
-	Active        bool    `json:"active"`
-	UserID        string  `json:"user_id,omitempty"` // ID of the user owning this key
+	Key           string    `json:"key"`
+	Label         string    `json:"label"`
+	NodeID        string    `json:"node_id"` // Node associated with this key
+	CreditsEarned float64   `json:"credits_earned"`
+	Reputation    float64   `json:"reputation"`
+	Active        bool      `json:"active"`
+	UserID        string    `json:"user_id,omitempty"` // ID of the user owning this key
+	Status        KeyStatus `json:"status"`
 }
 
 // VirtualModelConfig defines how a virtual model resolves to real models.

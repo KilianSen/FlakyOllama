@@ -61,6 +61,9 @@ func main() {
 	if os.Getenv("OIDC_ENABLED") == "true" {
 		cfg.OIDC.Enabled = true
 	}
+	if os.Getenv("OIDC_ENABLE_KEY_APPROVAL") == "true" {
+		cfg.EnableKeyApproval = true
+	}
 	if v := os.Getenv("OIDC_ISSUER"); v != "" {
 		cfg.OIDC.Issuer = v
 	}

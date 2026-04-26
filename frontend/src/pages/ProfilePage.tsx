@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { 
   Key, User as UserIcon, Shield, Copy, Check, Info, 
-  Zap, Database, Activity, RefreshCw, Server, Plus
+  Zap, Database, Activity, RefreshCw, Server, Plus, X
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -10,6 +10,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import sdk, { type ProfileResponse } from '@/api';
 
 const ProfilePage = () => {
@@ -17,6 +20,11 @@ const ProfilePage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isApplying, setIsApplying] = useState(false);
+  
+  // New Key Dialog
+  const [isNewKeyOpen, setIsNewKeyOpen] = useState(false);
+  const [newKeyLabel, setNewKeyLabel] = useState('');
+  const [newKeyQuota, setNewKeyQuota] = useState('1000000');
 
   const load = () => {
     setIsLoading(true);
@@ -33,6 +41,22 @@ const ProfilePage = () => {
     setCopiedKey(text);
     toast.success(`${type} copied to clipboard`);
     setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const handleCreateClientKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await sdk.createClientKey({ 
+        label: newKeyLabel, 
+        quota_limit: parseInt(newKeyQuota) 
+      });
+      toast.success('API Key created');
+      setIsNewKeyOpen(false);
+      setNewKeyLabel('');
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
   };
 
   const requestAgentKey = async () => {
@@ -58,9 +82,9 @@ const ProfilePage = () => {
 
   if (!profile) return null;
 
-  const { user, client_key: key, agent_keys: agents } = profile;
-  const quotaPercent = key.quota_limit > 0 ? (key.quota_used / key.quota_limit) * 100 : 0;
-  const isOverQuota = key.quota_limit > 0 && key.quota_used >= key.quota_limit;
+  const { user, client_keys: keys, agent_keys: agents } = profile;
+  const globalQuotaPercent = user.quota_limit > 0 ? (user.quota_used / user.quota_limit) * 100 : 0;
+  const isOverGlobalQuota = user.quota_limit > 0 && user.quota_used >= user.quota_limit;
 
   return (
     <div className="p-8 max-w-5xl mx-auto space-y-8 pb-20">
@@ -70,105 +94,141 @@ const ProfilePage = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* User Info */}
-        <Card className="md:col-span-1 border-border/40 shadow-xl shadow-black/20 bg-card/50 backdrop-blur-md">
-          <CardHeader className="pb-4">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-                <UserIcon size={32} className="text-primary" />
-              </div>
-              <div className="min-w-0">
-                <CardTitle className="text-xl font-black truncate">{user.name}</CardTitle>
-                <CardDescription className="font-bold truncate">{user.email}</CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-muted/30 border border-border/50">
-              <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Account Type</span>
-              <div className="flex items-center gap-2">
-                {user.is_admin ? (
-                  <Badge className="bg-primary/20 text-primary border-primary/30 font-black uppercase text-[10px] tracking-widest px-2 py-0.5">
-                    <Shield size={10} className="mr-1" /> Administrator
-                  </Badge>
-                ) : (
-                  <Badge variant="secondary" className="font-black uppercase text-[10px] tracking-widest px-2 py-0.5">
-                    Regular User
-                  </Badge>
-                )}
-              </div>
-            </div>
-            
-            <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-muted/30 border border-border/50">
-              <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Internal ID</span>
-              <span className="text-xs font-mono font-bold text-muted-foreground truncate">{user.id}</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* API Access */}
-        <Card className="md:col-span-2 border-border/40 shadow-xl shadow-black/20 bg-card/50 backdrop-blur-md overflow-hidden relative">
-          <div className="absolute top-0 right-0 p-8 opacity-[0.03] pointer-events-none">
-            <Key size={120} className="rotate-12" />
-          </div>
-          
-          <CardHeader>
-            <CardTitle className="text-xl font-black uppercase tracking-tight flex items-center gap-2">
-              <Key size={18} className="text-primary" /> API Access
-            </CardTitle>
-            <CardDescription className="font-bold">Use this key to authenticate with the FlakyOllama API for inference.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-3">
-              <label className="text-xs font-black uppercase text-muted-foreground tracking-widest">Personal API Key</label>
-              <div className="flex gap-2">
-                <div className="flex-1 px-4 py-3 rounded-xl bg-black/40 border border-border/50 font-mono text-sm font-bold flex items-center justify-between group overflow-hidden">
-                  <span className="truncate">{key.key}</span>
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0" />
+        {/* User Info & Global Quota */}
+        <div className="md:col-span-1 space-y-6">
+          <Card className="border-border/40 shadow-xl shadow-black/20 bg-card/50 backdrop-blur-md">
+            <CardHeader className="pb-4">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                  <UserIcon size={32} className="text-primary" />
                 </div>
-                <Button 
-                  size="icon" 
-                  className="h-[46px] w-[46px] rounded-xl shrink-0 transition-all hover:scale-105"
-                  onClick={() => copyToClipboard(key.key, 'API Key')}
-                >
-                  {copiedKey === key.key ? <Check size={18} /> : <Copy size={18} />}
+                <div className="min-w-0">
+                  <CardTitle className="text-xl font-black truncate">{user.name}</CardTitle>
+                  <CardDescription className="font-bold truncate">{user.email}</CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-muted/30 border border-border/50">
+                <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Account Type</span>
+                <div className="flex items-center gap-2">
+                  {user.is_admin ? (
+                    <Badge className="bg-primary/20 text-primary border-primary/30 font-black uppercase text-[10px] tracking-widest px-2 py-0.5">
+                      <Shield size={10} className="mr-1" /> Administrator
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="font-black uppercase text-[10px] tracking-widest px-2 py-0.5">
+                      Regular User
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-muted/30 border border-border/50">
+                <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Global Compute Credits</span>
+                <div className="flex items-center gap-1.5 text-emerald-400">
+                   <Zap size={14} />
+                   <span className="text-sm font-black">{(user.quota_used / 100).toFixed(2)} φ earned</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/40 bg-primary/5">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex justify-between items-end">
+                <label className="text-[10px] font-black uppercase text-primary tracking-widest">Account Quota</label>
+                <span className={`text-[10px] font-black ${isOverGlobalQuota ? 'text-destructive' : 'text-primary'}`}>
+                  {Math.round(globalQuotaPercent)}%
+                </span>
+              </div>
+              <Progress value={user.quota_limit === -1 ? 0 : globalQuotaPercent} className="h-1.5" />
+              <div className="flex justify-between text-[9px] font-bold text-muted-foreground uppercase">
+                 <span>{user.quota_used.toLocaleString()} used</span>
+                 <span>{user.quota_limit === -1 ? 'Unlimited' : user.quota_limit.toLocaleString()} total</span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* API Keys List */}
+        <div className="md:col-span-2 space-y-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Key size={18} className="text-primary" />
+              <h3 className="text-lg font-black uppercase tracking-tight">API Access Keys</h3>
+            </div>
+            <Dialog open={isNewKeyOpen} onOpenChange={setIsNewKeyOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline" className="h-8 text-[10px] font-black uppercase gap-2">
+                  <Plus size={14} /> New Key
                 </Button>
-              </div>
-            </div>
+              </DialogTrigger>
+              <DialogContent className="bg-card border-border/50">
+                <form onSubmit={handleCreateClientKey}>
+                  <DialogHeader>
+                    <DialogTitle className="font-black uppercase tracking-tight">Create API Key</DialogTitle>
+                    <DialogDescription className="text-xs font-bold text-muted-foreground">Issue a new token for inference with an optional sub-quota.</DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-6">
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Key Label</Label>
+                      <Input placeholder="Personal Project A" value={newKeyLabel} onChange={e => setNewKeyLabel(e.target.value)} required />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Sub-Quota Limit</Label>
+                      <Input type="number" value={newKeyQuota} onChange={e => setNewKeyQuota(e.target.value)} />
+                      <p className="text-[9px] text-muted-foreground italic">Limits this specific key's usage. contributes to global quota.</p>
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button type="submit" className="w-full font-black uppercase text-xs tracking-widest">Generate Token</Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
 
-            <Separator className="bg-border/50" />
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-3">
-                <div className="flex justify-between items-end">
-                  <label className="text-xs font-black uppercase text-muted-foreground tracking-widest">Quota Usage</label>
-                  <span className={`text-[10px] font-black ${isOverQuota ? 'text-destructive' : 'text-primary'}`}>
-                    {key.quota_used.toLocaleString()} / {key.quota_limit === -1 ? '∞' : key.quota_limit.toLocaleString()}
-                  </span>
-                </div>
-                <Progress value={key.quota_limit === -1 ? 0 : quotaPercent} className={`h-2 ${isOverQuota ? 'bg-destructive/10' : ''}`} />
-                <p className="text-[10px] text-muted-foreground font-bold italic">Tokens consumed across all models.</p>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex justify-between items-end">
-                  <label className="text-xs font-black uppercase text-muted-foreground tracking-widest">Compute Credits</label>
-                  <span className="text-[10px] font-black text-emerald-400">
-                    {key.credits.toFixed(2)} CREDITS
-                  </span>
-                </div>
-                <div className="h-2 rounded-full bg-emerald-500/20 overflow-hidden">
-                   <div className="h-full bg-emerald-500 w-[70%]" /> {/* Mock fill */}
-                </div>
-                <p className="text-[10px] text-muted-foreground font-bold italic">Available for high-priority routing.</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+          <div className="grid gap-3">
+            {keys.map((k) => {
+              const keyPercent = k.quota_limit > 0 ? (k.quota_used / k.quota_limit) * 100 : 0;
+              return (
+                <Card key={k.key} className="bg-card/30 border-border/40 hover:border-primary/30 transition-colors group">
+                  <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-4">
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black uppercase tracking-tight truncate">{k.label}</span>
+                        {!k.active && <Badge variant="destructive" className="text-[8px] h-4">INACTIVE</Badge>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <code className="text-[10px] font-mono text-muted-foreground bg-black/20 px-1.5 py-0.5 rounded truncate max-w-[200px]">
+                          {k.key}
+                        </code>
+                        <Button 
+                          size="icon" variant="ghost" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => copyToClipboard(k.key, 'API Key')}
+                        >
+                          {copiedKey === k.key ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                        </Button>
+                      </div>
+                    </div>
+                    
+                    <div className="w-full sm:w-32 space-y-1">
+                       <div className="flex justify-between text-[8px] font-black uppercase text-muted-foreground">
+                          <span>Usage</span>
+                          <span>{k.quota_limit === -1 ? '∞' : `${Math.round(keyPercent)}%`}</span>
+                       </div>
+                       <Progress value={k.quota_limit === -1 ? 0 : keyPercent} className="h-1" />
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {/* Agent Identities */}
-      <div className="space-y-6">
+      <div className="space-y-6 pt-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Zap className="text-amber-400" size={24} />
@@ -230,31 +290,6 @@ const ProfilePage = () => {
             </Card>
           ))}
         </div>
-        <p className="text-[11px] text-muted-foreground font-bold italic bg-amber-500/5 p-4 rounded-xl border border-amber-500/10">
-          <Info size={12} className="inline mr-2 text-amber-400" />
-          Use an Agent Identity token to connect your local hardware to the cluster. Credits earned by your agents are pooled into your account balance.
-        </p>
-      </div>
-
-      {/* Quick Access Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {[
-          { icon: Zap, label: 'Fastest Node', value: 'node-aphenia', color: 'text-primary' },
-          { icon: Database, label: 'Default Model', value: 'llama3.2:1b', color: 'text-amber-400' },
-          { icon: Activity, label: 'API Status', value: 'Operational', color: 'text-emerald-400' },
-        ].map((item, i) => (
-          <Card key={i} className="border-border/40 bg-card/30 backdrop-blur-sm">
-            <CardContent className="p-4 flex items-center gap-4">
-              <div className={`p-2 rounded-lg bg-background/50 border border-border/50 ${item.color}`}>
-                <item.icon size={16} />
-              </div>
-              <div>
-                <p className="text-[9px] font-black uppercase text-muted-foreground tracking-widest">{item.label}</p>
-                <p className="text-xs font-bold">{item.value}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
       </div>
     </div>
   );

@@ -19,6 +19,7 @@ const (
 type KeyManager interface {
 	GetClientKey(key string) (models.ClientKey, error)
 	GetAgentKey(key string) (models.AgentKey, error)
+	GetUserByID(id string) (models.User, error)
 }
 
 // Middleware checks for a Bearer token in the Authorization header or query param.
@@ -78,14 +79,25 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 
 		// 2. Check against KeyManager (database)
 		if km != nil {
-			// Check if it's a Client Key
 			ck, err := km.GetClientKey(receivedToken)
 			if err == nil && ck.Active {
-				// Quota check
+				// 1. Check Key-specific Sub-quota
 				if ck.QuotaLimit != -1 && ck.QuotaUsed >= ck.QuotaLimit {
-					http.Error(w, "Quota exceeded", http.StatusForbidden)
+					http.Error(w, "API Key quota exceeded", http.StatusForbidden)
 					return
 				}
+
+				// 2. Check User-global Quota
+				if ck.UserID != "" {
+					u, err := km.GetUserByID(ck.UserID)
+					if err == nil {
+						if u.QuotaLimit != -1 && u.QuotaUsed >= u.QuotaLimit {
+							http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
+							return
+						}
+					}
+				}
+
 				ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
 				ctx = context.WithValue(ctx, ContextKeyClientData, ck)
 				next(w, r.WithContext(ctx))
