@@ -39,7 +39,7 @@ type Balancer struct {
 	// Client affinity: IP -> NodeID
 	affinityMu      sync.RWMutex
 	ClientAffinity  map[string]string
-	ContextAffinity map[string]string // context_hash -> NodeID
+	ContextAffinity map[string]string
 
 	// Channel for async metric processing
 	MetricCh chan metricEntry
@@ -84,37 +84,23 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		Config:  cfg,
 		State:   state.NewClusterStateActor(),
 		Storage: s,
-		Jobs:    jobs.NewJobManager(),
+		Jobs:    jobs.NewManager(),
 		Queue:   NewRequestQueue(),
 		httpClient: &http.Client{
-			Timeout: 10 * time.Minute, // Long timeout for inference
+			Timeout: 10 * time.Minute,
 		},
 		StartTime:       time.Now(),
 		PerfCache:       make(map[string]storage.PerformanceMetric),
 		ClientAffinity:  make(map[string]string),
 		ContextAffinity: make(map[string]string),
 		MetricCh:        make(chan metricEntry, 1000),
-		TokenCh:        make(chan tokenUsageEntry, 1000),
+		TokenCh:         make(chan tokenUsageEntry, 1000),
 		LogCh:          make(chan models.LogEntry, 1000),
 		logChs:         make(map[chan string]bool),
 		stopCh:         make(chan struct{}),
 	}
 
-	// Start reputation normalization loop (drifts toward 1.0 every hour)
-	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
-		for {
-			select {
-			case <-ticker.C:
-				b.Storage.NormalizeReputation(0.05)
-			case <-b.stopCh:
-				return
-			}
-		}
-	}()
-
 	b.State.Start()
-
 	return b, nil
 }
 
@@ -126,7 +112,6 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 		} else {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
-
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
@@ -135,7 +120,6 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 		} else {
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		}
-
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -146,12 +130,10 @@ func (b *Balancer) CORS(next http.Handler) http.Handler {
 
 func (b *Balancer) Serve() error {
 	logging.Global.Infof("Balancer listening on %s (TLS: %v)", b.Address, b.Config.TLS.Enabled)
-
 	b.httpServer = &http.Server{
 		Addr:    b.Address,
 		Handler: b.NewMux(),
 	}
-
 	if b.Config.TLS.Enabled {
 		return b.httpServer.ListenAndServeTLS(b.Config.TLS.CertFile, b.Config.TLS.KeyFile)
 	}
@@ -172,7 +154,6 @@ func (b *Balancer) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	promhttp.Handler().ServeHTTP(w, r)
 }
 
-// NewMux returns a mux with the balancer's handlers registered.
 func (b *Balancer) NewMux() *chi.Mux {
 	token := b.Config.AuthToken
 	remoteToken := b.Config.RemoteToken
@@ -196,11 +177,6 @@ func (b *Balancer) NewMux() *chi.Mux {
 	// Base
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/metrics", b.HandleMetrics)
-
-	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		logging.Global.Warnf("404 Not Found: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
-		http.NotFound(w, r)
-	})
 
 	// Legacy Ollama Layer
 	r.Group(func(r chi.Router) {
@@ -235,8 +211,6 @@ func (b *Balancer) NewMux() *chi.Mux {
 	// Management Layer (Legacy compatibility)
 	r.Post("/register", auth.Middleware(remoteToken, b.Storage, b.HandleV1Register))
 	r.Post("/api/log/collect", auth.Middleware(remoteToken, b.Storage, b.HandleV1LogCollect))
-	r.Get("/api/status", auth.Middleware(token, b.Storage, b.HandleV1ClusterStatus))
-	r.Get("/api/logs", auth.Middleware(token, b.Storage, b.HandleV1Logs))
 
 	// Management API (V1 Structured)
 	r.Route("/api/v1", func(r chi.Router) {
@@ -244,9 +218,11 @@ func (b *Balancer) NewMux() *chi.Mux {
 			return auth.Middleware(token, b.Storage, next.ServeHTTP)
 		})
 
+		// Publicly available to all authenticated users
 		r.Get("/catalog", b.HandleV1Catalog)
 		r.Get("/me", b.HandleV1Me)
 		r.Get("/status", b.HandleV1ClusterStatus)
+		r.Get("/nodes", b.HandleV1Nodes)
 
 		// Gated Admin Routes
 		r.Group(func(r chi.Router) {
@@ -256,9 +232,9 @@ func (b *Balancer) NewMux() *chi.Mux {
 			r.Get("/logs/history", b.HandleV1LogHistory)
 
 			r.Route("/nodes", func(r chi.Router) {
-				r.Get("/", b.HandleV1Nodes)
 				r.Post("/{id}/drain", b.HandleV1NodeDrain)
 				r.Post("/{id}/undrain", b.HandleV1NodeUndrain)
+				r.Delete("/{id}", b.HandleV1NodeDelete)
 			})
 
 			r.Route("/models", func(r chi.Router) {
@@ -306,7 +282,6 @@ func (b *Balancer) NewMux() *chi.Mux {
 
 func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. Check if authenticated via OIDC and is Admin
 		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
 			if user, ok := val.(models.User); ok {
 				if user.IsAdmin {
@@ -314,12 +289,9 @@ func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 					return
 				}
 				logging.Global.Warnf("AdminOnly: Access denied for user %s (Not an Admin)", user.Email)
-			} else {
-				logging.Global.Warnf("AdminOnly: Context user has wrong type: %T", val)
 			}
 		}
 
-		// 2. Check if authenticated via Master Token
 		if tkn, ok := r.Context().Value(auth.ContextKeyToken).(string); ok {
 			if tkn != "" && tkn == b.Config.AuthToken {
 				next.ServeHTTP(w, r)
@@ -327,7 +299,6 @@ func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 			}
 		}
 
-		logging.Global.Warnf("AdminOnly: Forbidden access to %s from %s", r.URL.Path, r.RemoteAddr)
 		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
 	})
 }
@@ -336,12 +307,10 @@ func (b *Balancer) Ship(entry models.LogEntry) {
 	select {
 	case b.LogCh <- entry:
 	default:
-		// Drop log if channel full to avoid deadlocks
 	}
 }
 
 func (b *Balancer) getRequestPriority(r *http.Request) int {
-	// 1. Check for OIDC User
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
 		if user, ok := val.(models.User); ok {
 			if user.IsAdmin {
@@ -353,14 +322,11 @@ func (b *Balancer) getRequestPriority(r *http.Request) int {
 			}
 		}
 	}
-
-	// 2. Check for Token-based Client Data
 	if val := r.Context().Value(auth.ContextKeyClientData); val != nil {
 		if ck, ok := val.(models.ClientKey); ok {
 			return int(ck.Credits / 10)
 		}
 	}
-
 	return 0
 }
 

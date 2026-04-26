@@ -693,8 +693,16 @@ func (b *Balancer) HandleV1ClientKeyCreate(w http.ResponseWriter, r *http.Reques
 		b.jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Auto-assign UserID if from OIDC session
+	if user, ok := r.Context().Value(auth.ContextKeyUser).(models.User); ok {
+		req.UserID = user.ID
+	} else if user, ok := r.Context().Value(auth.ContextKeyUser).(*models.User); ok {
+		req.UserID = user.ID
+	}
+
 	if req.Key == "" {
-		req.Key = generateJobID()
+		req.Key = "sk-" + b.computeHash(fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000000)))[:32]
 	}
 	if err := b.Storage.CreateClientKey(req); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
@@ -719,8 +727,16 @@ func (b *Balancer) HandleV1AgentKeyCreate(w http.ResponseWriter, r *http.Request
 		b.jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Auto-assign UserID if from OIDC session
+	if user, ok := r.Context().Value(auth.ContextKeyUser).(models.User); ok {
+		req.UserID = user.ID
+	} else if user, ok := r.Context().Value(auth.ContextKeyUser).(*models.User); ok {
+		req.UserID = user.ID
+	}
+
 	if req.Key == "" {
-		req.Key = generateJobID()
+		req.Key = "ak-" + b.computeHash(fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000000)))[:32]
 	}
 	if err := b.Storage.CreateAgentKey(req); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
