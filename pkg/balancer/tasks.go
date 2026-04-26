@@ -4,6 +4,8 @@ import (
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -265,6 +267,80 @@ func (b *Balancer) ProcessBackgroundRequests() {
 		b.Storage.UpdateModelRequestStatus(r.ID, "completed")
 		b.Jobs.UpdateJob(r.ID, JobCompleted, 100, "Request processed")
 	}
+}
+
+func (b *Balancer) StartTelemetryPoller() {
+	go func() {
+		ticker := time.NewTicker(time.Duration(b.Config.PollIntervalMs) * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				b.pollAllAgents()
+			case <-b.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (b *Balancer) pollAllAgents() {
+	var agents []string
+	b.State.View(func(s ClusterState) {
+		for addr := range s.Agents {
+			agents = append(agents, addr)
+		}
+	})
+
+	for _, addr := range agents {
+		go b.pollAgent(addr)
+	}
+}
+
+func (b *Balancer) pollAgent(addr string) {
+	scheme := "http"
+	if b.Config.TLS.Enabled {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/telemetry", scheme, addr)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	if b.Config.RemoteToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		b.recordError(addr, "telemetry_failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b.recordError(addr, fmt.Sprintf("telemetry_status_%d", resp.StatusCode))
+		return
+	}
+
+	var status models.NodeStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		logging.Global.Debugf("Failed to decode telemetry from %s: %v", addr, err)
+		return
+	}
+
+	b.State.Do(func(s *ClusterState) {
+		if existing, ok := s.Agents[addr]; ok {
+			// Update dynamic fields but preserve identity and persistent state
+			status.ID = existing.ID
+			status.Address = existing.Address
+			status.LastSeen = time.Now()
+			status.State = models.StateHealthy // It responded to telemetry
+			status.Errors = 0                  // Reset errors on successful poll
+
+			s.Agents[addr] = &status
+		}
+	})
 }
 
 func (b *Balancer) CleanupStaleAgents() {

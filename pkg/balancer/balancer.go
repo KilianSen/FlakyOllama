@@ -112,6 +112,7 @@ func (b *Balancer) Init() {
 	b.StartPerfCacheRefresher()
 	b.StartLogBroadcaster()
 	b.StartBackgroundTasks()
+	b.StartTelemetryPoller()
 }
 
 func (b *Balancer) SetupRoutes() http.Handler {
