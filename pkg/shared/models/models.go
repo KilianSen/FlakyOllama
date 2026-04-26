@@ -233,10 +233,11 @@ type ClusterStatus struct {
 	TotalReward       float64                `json:"total_reward"`
 	TotalCost         float64                `json:"total_cost"`
 	Performance       map[string]struct {
-		AvgTTFT     float64 `json:"avg_ttft"`
-		AvgDuration float64 `json:"avg_duration"`
+		AvgTTFT     float64 `json:"avg_ttft_ms"`
+		AvgDuration float64 `json:"avg_duration_ms"`
 		Requests    int     `json:"requests"`
 	} `json:"performance"`
+
 	ModelRewardFactors     map[string]float64 `json:"model_reward_factors"`
 	ModelCostFactors       map[string]float64 `json:"model_cost_factors"`
 	GlobalRewardMultiplier float64            `json:"global_reward_multiplier"`

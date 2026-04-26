@@ -364,11 +364,11 @@ export const OverviewPage: React.FC = () => {
                 <CardContent className="p-4 space-y-3">
                    <div className="flex justify-between items-center">
                       <span className="text-[9px] font-bold text-muted-foreground uppercase">Avg TTFT</span>
-                      <span className="text-xs font-black text-amber-400">{perf.avg_ttft_ms.toFixed(0)}ms</span>
+                      <span className="text-xs font-black text-amber-400">{(perf.avg_ttft_ms || 0).toFixed(0)}ms</span>
                    </div>
                    <div className="flex justify-between items-center">
                       <span className="text-[9px] font-bold text-muted-foreground uppercase">Total Duration</span>
-                      <span className="text-xs font-black text-sky-400">{(perf.avg_duration_ms / 1000).toFixed(2)}s</span>
+                      <span className="text-xs font-black text-sky-400">{((perf.avg_duration_ms || 0) / 1000).toFixed(2)}s</span>
                    </div>
                    <div className="pt-2 flex justify-between items-center border-t border-border/30">
                       <span className="text-[8px] font-black text-muted-foreground/50 uppercase">{perf.requests} requests</span>

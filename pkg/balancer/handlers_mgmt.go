@@ -90,14 +90,14 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 	// Performance analytics
 	analytics, _ := b.Storage.GetPerformanceAnalytics()
 	status.Performance = make(map[string]struct {
-		AvgTTFT     float64 `json:"avg_ttft"`
-		AvgDuration float64 `json:"avg_duration"`
+		AvgTTFT     float64 `json:"avg_ttft_ms"`
+		AvgDuration float64 `json:"avg_duration_ms"`
 		Requests    int     `json:"requests"`
 	})
 	for m, a := range analytics {
 		status.Performance[m] = struct {
-			AvgTTFT     float64 `json:"avg_ttft"`
-			AvgDuration float64 `json:"avg_duration"`
+			AvgTTFT     float64 `json:"avg_ttft_ms"`
+			AvgDuration float64 `json:"avg_duration_ms"`
 			Requests    int     `json:"requests"`
 		}{
 			AvgTTFT:     a.AvgTTFT,
