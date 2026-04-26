@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 )
 
 func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
@@ -13,6 +14,9 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Strip prefixes for OpenAI compatibility too
+	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	priority := b.getRequestPriority(r)
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
@@ -39,6 +43,8 @@ func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	body, _ := json.Marshal(req)
 	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/v1/embeddings", body, r.RemoteAddr, false, 10, "")

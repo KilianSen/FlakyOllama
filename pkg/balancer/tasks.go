@@ -156,11 +156,17 @@ func (b *Balancer) StartBackgroundTasks() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
+		maintenanceTicker := time.NewTicker(1 * time.Hour)
+		defer maintenanceTicker.Stop()
+
 		for {
 			select {
 			case <-ticker.C:
 				b.ProcessQueue()
 				b.ProcessBackgroundRequests()
+				b.CleanupStaleAgents()
+			case <-maintenanceTicker.C:
+				b.RunMaintenance()
 			case <-b.stopCh:
 				return
 			}
@@ -193,6 +199,7 @@ func (b *Balancer) ProcessQueue() {
 			break
 		}
 
+		// Use the context from the queued request to pass user info to SelectAgent if needed
 		addr, err := b.SelectAgent(req.Request.Model, req.UserID)
 		if err != nil {
 			// CRITICAL FIX: Use Requeue to preserve original Response channel
@@ -257,5 +264,38 @@ func (b *Balancer) ProcessBackgroundRequests() {
 
 		b.Storage.UpdateModelRequestStatus(r.ID, "completed")
 		b.Jobs.UpdateJob(r.ID, JobCompleted, 100, "Request processed")
+	}
+}
+
+func (b *Balancer) CleanupStaleAgents() {
+	// Stale threshold is 5 minutes
+	threshold := time.Now().Add(-5 * time.Minute)
+	b.State.Do(func(s *ClusterState) {
+		for addr, a := range s.Agents {
+			if a.LastSeen.Before(threshold) {
+				logging.Global.Infof("Cleaning up stale node: %s (%s) last seen %v", a.ID, addr, a.LastSeen)
+				delete(s.Agents, addr)
+				delete(s.NodeWorkloads, addr)
+			}
+		}
+	})
+}
+
+func (b *Balancer) RunMaintenance() {
+	logging.Global.Info("Running database maintenance...")
+
+	// 1. Prune metrics older than 7 days
+	if err := b.Storage.PruneMetrics(7); err != nil {
+		logging.Global.Warnf("Maintenance: Failed to prune metrics: %v", err)
+	}
+
+	// 2. Prune logs older than 1000 entries (default for now)
+	if err := b.Storage.PruneLogs(1000); err != nil {
+		logging.Global.Warnf("Maintenance: Failed to prune logs: %v", err)
+	}
+
+	// 3. Normalize reputations periodically to prevent permanent score drift
+	if err := b.Storage.NormalizeReputation(0.01); err != nil {
+		logging.Global.Warnf("Maintenance: Failed to normalize reputation: %v", err)
 	}
 }

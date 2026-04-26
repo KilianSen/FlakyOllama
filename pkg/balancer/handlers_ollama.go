@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,9 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Strip prefixes
+	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	// 0. Track load
 	b.State.Do(func(s *ClusterState) {
@@ -41,7 +45,6 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	b.configMu.RUnlock()
 
 	if found && vConfig.Type == "pipeline" {
-		// Not implemented in this context yet
 		http.Error(w, "Pipeline models not supported in generate endpoint", http.StatusBadRequest)
 		return
 	}
@@ -86,6 +89,9 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Strip prefixes
+	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	b.State.Do(func(s *ClusterState) {
 		s.PendingRequests[req.Model]++
@@ -166,6 +172,17 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 	status.LastSeen = time.Now()
 
 	b.State.Do(func(s *ClusterState) {
+		// CRITICAL: Check if this node already exists at a different address and clean it up
+		for oldAddr, existing := range s.Agents {
+			if existing.ID == nodeID && oldAddr != status.Address {
+				logging.Global.Infof("Node %s changed address: %s -> %s. Cleaning up old record.", nodeID, oldAddr, status.Address)
+				delete(s.Agents, oldAddr)
+				// Migrate workload if any? (Usually not possible across IP change)
+				s.NodeWorkloads[status.Address] = s.NodeWorkloads[oldAddr]
+				delete(s.NodeWorkloads, oldAddr)
+				break
+			}
+		}
 		s.Agents[status.Address] = &status
 	})
 
@@ -204,6 +221,8 @@ func (b *Balancer) HandleOllamaEmbeddings(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	body, _ := json.Marshal(req)
 	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/api/embeddings", body, r.RemoteAddr, false, 10, "")

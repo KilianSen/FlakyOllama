@@ -4,12 +4,16 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 )
 
 func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 	var bestAgent string
 	var bestScore float64 = -1
+
+	// Strip common prefixes for compatibility
+	modelName = strings.TrimPrefix(modelName, "a.")
 
 	// 1. Check User-Specific Policy
 	if userID != "" {
@@ -21,7 +25,7 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 
 	snap := b.State.GetSnapshot()
 
-	// 2. Get nodes that have the model locally
+	// 2. Initial Filter
 	candidates := make([]string, 0)
 
 	b.cacheMu.RLock()
@@ -41,24 +45,37 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 			continue
 		}
 
-		hasModel := false
-		for _, m := range a.LocalModels {
-			if m.Name == modelName {
-				hasModel = true
-				break
-			}
+		// Satiation check: Skip nodes with too many active workloads relative to cores
+		maxWorkloads := a.CPUCores * 2
+		if a.HasGPU {
+			maxWorkloads = a.CPUCores * 4
+		}
+		if snap.NodeWorkloads[addr] >= maxWorkloads {
+			continue
 		}
 
-		if hasModel {
-			candidates = append(candidates, addr)
+		candidates = append(candidates, addr)
+	}
+
+	if len(candidates) == 0 {
+		// If everything is saturated, fallback to the least loaded healthy nodes
+		for addr, a := range snap.Agents {
+			if a.State == models.StateHealthy && !a.Draining {
+				if pol, ok := clusterPolicies[a.ID]; ok && pol.Banned {
+					continue
+				}
+				candidates = append(candidates, addr)
+			}
 		}
+	}
+
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no available or healthy nodes for model %s", modelName)
 	}
 
 	// 3. Forced Pinning check
 	for _, a := range snap.Agents {
 		if pol, ok := clusterPolicies[a.ID]; ok && pol.Pinned {
-			// If pinned, we ONLY consider these nodes
-			// Filter candidates to only pinned ones
 			pinnedCandidates := make([]string, 0)
 			for _, c := range candidates {
 				if snap.Agents[c].ID == a.ID {
@@ -72,28 +89,46 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 		}
 	}
 
-	if len(candidates) == 0 {
-		// Fallback: any node that is healthy
-		for addr, a := range snap.Agents {
-			if a.State == models.StateHealthy && !a.Draining {
-				// Still respect bans even in fallback
-				if pol, ok := clusterPolicies[a.ID]; ok && pol.Banned {
-					continue
-				}
-				candidates = append(candidates, addr)
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no available nodes for model %s", modelName)
-	}
-
-	// 4. Simple score-based selection
+	// 4. Enhanced Scoring
 	for _, addr := range candidates {
 		a := snap.Agents[addr]
-		score := 1.0 / (float64(snap.NodeWorkloads[addr]) + 1.0)
-		score *= a.Reputation
+
+		// Base score from reputation
+		score := a.Reputation * 100.0
+
+		// Penalize workload
+		workload := float64(snap.NodeWorkloads[addr])
+		score -= (workload * b.Config.Weights.WorkloadPenalty * 50.0)
+
+		// Bonus for locally available model
+		hasModel := false
+		for _, m := range a.LocalModels {
+			if m.Name == modelName {
+				hasModel = true
+				break
+			}
+		}
+		if hasModel {
+			score += b.Config.Weights.LocalModelBonus * 25.0
+		}
+
+		// Hardware penalties (CPU / Memory saturation)
+		if a.CPUUsage > 80 {
+			score -= (a.CPUUsage - 80) * 2.0
+		}
+		if a.MemoryUsage > 90 {
+			score -= (a.MemoryUsage - 90) * 5.0
+		}
+
+		// VRAM check (if node has GPU)
+		if a.HasGPU && a.VRAMTotal > 0 {
+			vramUsedPercent := (float64(a.VRAMUsed) / float64(a.VRAMTotal)) * 100.0
+			if vramUsedPercent > 85 {
+				score -= (vramUsedPercent - 85) * 4.0
+			}
+		} else if a.HasGPU {
+			score -= 10.0
+		}
 
 		if score > bestScore {
 			bestScore = score

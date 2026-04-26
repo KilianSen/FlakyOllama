@@ -97,6 +97,15 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 }
 
 func (b *Balancer) Init() {
+	// Security Audit
+	if b.Config.JWTSecret == "flakyollama-secret-change-me-immediately" {
+		logging.Global.Warn("****************************************************************")
+		logging.Global.Warn("SECURITY WARNING: Using default JWT_SECRET!")
+		logging.Global.Warn("OIDC session cookies can be easily forged by attackers.")
+		logging.Global.Warn("Please set a unique JWT_SECRET in your environment immediately.")
+		logging.Global.Warn("****************************************************************")
+	}
+
 	b.StartMetricProcessor()
 	b.StartPerfCacheRefresher()
 	b.StartLogBroadcaster()
