@@ -11,16 +11,17 @@ import (
 
 // QueuedRequest represents a request waiting in the queue.
 type QueuedRequest struct {
-	ID       string
-	Request  models.InferenceRequest
-	Priority int // Higher value means higher priority
-	Sequence int64
+	ID          string
+	Request     models.InferenceRequest
+	Priority    int // Higher value means higher priority
+	Sequence    int64
 	ClientIP    string
 	ContextHash string
+	UserID      string
 	Ctx         context.Context
 	QueuedAt    time.Time
-	Response chan QueuedResponse
-	Index    int // The index of the item in the heap.
+	Response    chan QueuedResponse
+	Index       int // The index of the item in the heap.
 }
 
 type QueuedResponse struct {
@@ -81,7 +82,7 @@ func NewRequestQueue() *RequestQueue {
 	return rq
 }
 
-func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP string, contextHash string, ctx context.Context) chan QueuedResponse {
+func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP, contextHash, userID string, ctx context.Context) chan QueuedResponse {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
@@ -94,6 +95,7 @@ func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP
 		Sequence:    rq.sequence,
 		ClientIP:    clientIP,
 		ContextHash: contextHash,
+		UserID:      userID,
 		Ctx:         ctx,
 		QueuedAt:    time.Now(),
 		Response:    resCh,

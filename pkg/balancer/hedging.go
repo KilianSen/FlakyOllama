@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
@@ -8,14 +9,28 @@ import (
 	"time"
 )
 
+type hedgeResult struct {
+	resp      *http.Response
+	p90       time.Duration
+	agentAddr string
+	err       error
+}
+
 func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body []byte, clientIP string, allowHedging bool, priority int, contextHash string) (*http.Response, time.Duration, string, error) {
 	p90, _ := b.Storage.GetP90Latency(model)
 	if p90 == 0 {
 		p90 = 2 * time.Second
 	}
 
+	var userID string
+	if val := ctx.Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok {
+			userID = u.ID
+		}
+	}
+
 	// 1. Enter Priority Queue
-	resCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority, clientIP, contextHash, ctx)
+	resCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority, clientIP, contextHash, userID, ctx)
 
 	var agentAddr string
 	select {
@@ -44,7 +59,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 
 	// 3. Hedging Logic (simplified for now - just one retry if first failed)
 	logging.Global.Debugf("Initial request to %s failed, attempting hedge", agentAddr)
-	newResCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority+1, clientIP, contextHash, ctx)
+	newResCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority+1, clientIP, contextHash, userID, ctx)
 	select {
 	case res := <-newResCh:
 		if res.Err != nil {

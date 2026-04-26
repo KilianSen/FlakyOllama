@@ -7,6 +7,7 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -87,14 +88,35 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 		NodeWorkloads:          snap.NodeWorkloads,
 	}
 
-	// Performance analytics
-	analytics, _ := b.Storage.GetPerformanceAnalytics()
+	// Mask Node IPs for non-admins
+	isAdmin := false
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok && u.IsAdmin {
+			isAdmin = true
+		}
+	}
+	if !isAdmin {
+		maskedNodes := make(map[string]*models.NodeStatus)
+		for addr, n := range status.Nodes {
+			nodeCopy := *n
+			host, port, _ := net.SplitHostPort(addr)
+			if host == "" {
+				host = addr
+			}
+			maskedNodes["node-"+b.computeHash(host)[:6]+":"+port] = &nodeCopy
+			nodeCopy.Address = "HIDDEN"
+		}
+		status.Nodes = maskedNodes
+	}
+
+	// Performance analytics (from cache)
+	b.cacheMu.RLock()
 	status.Performance = make(map[string]struct {
 		AvgTTFT     float64 `json:"avg_ttft_ms"`
 		AvgDuration float64 `json:"avg_duration_ms"`
 		Requests    int     `json:"requests"`
 	})
-	for m, a := range analytics {
+	for m, a := range b.perfCache {
 		status.Performance[m] = struct {
 			AvgTTFT     float64 `json:"avg_ttft_ms"`
 			AvgDuration float64 `json:"avg_duration_ms"`
@@ -105,6 +127,7 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 			Requests:    a.Requests,
 		}
 	}
+	b.cacheMu.RUnlock()
 
 	// Totals
 	stats, _ := b.Storage.GetTotalTokenStats()
@@ -121,8 +144,23 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 func (b *Balancer) HandleV1Nodes(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 	nodes := make([]*models.NodeStatus, 0, len(snap.Agents))
+
+	isAdmin := false
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok && u.IsAdmin {
+			isAdmin = true
+		}
+	}
+
 	for _, n := range snap.Agents {
-		nodes = append(nodes, n)
+		if !isAdmin {
+			nodeCopy := *n
+			nodeCopy.Address = "HIDDEN"
+			// Mask ID slightly to prevent direct mapping if ID is IP-based
+			nodes = append(nodes, &nodeCopy)
+		} else {
+			nodes = append(nodes, n)
+		}
 	}
 	b.jsonResponse(w, http.StatusOK, nodes)
 }

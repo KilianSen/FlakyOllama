@@ -58,6 +58,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			message TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs (timestamp);`,
+		`CREATE INDEX IF NOT EXISTS idx_logs_node ON logs (node_id);`,
 		`CREATE TABLE IF NOT EXISTS model_requests (
 			id TEXT PRIMARY KEY,
 			type TEXT,
@@ -85,9 +86,11 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			cost REAL DEFAULT 0,
 			ttft_ms INTEGER DEFAULT 0,
 			duration_ms INTEGER DEFAULT 0,
-			client_key TEXT
+			client_key TEXT,
+			user_id TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage (timestamp);`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage (user_id);`,
 		`CREATE TABLE IF NOT EXISTS client_keys (
 			key TEXT PRIMARY KEY,
 			label TEXT,
@@ -98,6 +101,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			user_id TEXT,
 			status TEXT DEFAULT 'active'
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_client_keys_user ON client_keys (user_id);`,
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
 			sub TEXT UNIQUE,
@@ -117,6 +121,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			user_id TEXT,
 			status TEXT DEFAULT 'active'
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_keys_user ON agent_keys (user_id);`,
 		`CREATE TABLE IF NOT EXISTS user_model_policies (
 			user_id TEXT,
 			model TEXT,
@@ -232,16 +237,7 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 	defer tx.Rollback()
 
 	for _, e := range entries {
-		// 1. Record the usage
-		_, err = tx.Exec(`
-			INSERT INTO token_usage (timestamp, node_id, model, input_tokens, output_tokens, reward, cost, ttft_ms, duration_ms, client_key)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			time.Now(), e.NodeID, e.Model, e.Input, e.Output, e.Reward, e.Cost, e.TTFT, e.Duration, e.ClientKey)
-		if err != nil {
-			return err
-		}
-
-		// 2. Update Quotas
+		// 2. Update Quotas FIRST to get correct targetUserID
 		targetUserID := e.UserID
 		if e.ClientKey != "" {
 			var dbUserID sql.NullString
@@ -260,6 +256,15 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 			if err != nil {
 				return err
 			}
+		}
+
+		// 1. Record the usage (now with resolved user_id)
+		_, err = tx.Exec(`
+			INSERT INTO token_usage (timestamp, node_id, model, input_tokens, output_tokens, reward, cost, ttft_ms, duration_ms, client_key, user_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			time.Now(), e.NodeID, e.Model, e.Input, e.Output, e.Reward, e.Cost, e.TTFT, e.Duration, e.ClientKey, targetUserID)
+		if err != nil {
+			return err
 		}
 
 		// 3. Update Agent Key Reward

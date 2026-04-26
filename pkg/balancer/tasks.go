@@ -105,12 +105,14 @@ func (b *Balancer) flushTokenBatch(batch []tokenUsageEntry) {
 
 func (b *Balancer) StartPerfCacheRefresher() {
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
+		// Initial refresh
+		b.refreshCaches()
 		for {
 			select {
 			case <-ticker.C:
-				b.refreshPerfCache()
+				b.refreshCaches()
 			case <-b.stopCh:
 				return
 			}
@@ -118,8 +120,35 @@ func (b *Balancer) StartPerfCacheRefresher() {
 	}()
 }
 
-func (b *Balancer) refreshPerfCache() {
-	// Not implemented yet
+func (b *Balancer) refreshCaches() {
+	// 1. Refresh Performance Analytics
+	analytics, err := b.Storage.GetPerformanceAnalytics()
+	if err == nil {
+		b.cacheMu.Lock()
+		b.perfCache = make(map[string]struct {
+			AvgTTFT, AvgDuration float64
+			Requests             int
+		})
+		for m, a := range analytics {
+			b.perfCache[m] = struct {
+				AvgTTFT, AvgDuration float64
+				Requests             int
+			}{
+				AvgTTFT:     a.AvgTTFT,
+				AvgDuration: a.AvgDuration,
+				Requests:    a.Requests,
+			}
+		}
+		b.cacheMu.Unlock()
+	}
+
+	// 2. Refresh Cluster Policies
+	policies, err := b.Storage.GetModelPolicies()
+	if err == nil {
+		b.cacheMu.Lock()
+		b.policyCache = policies
+		b.cacheMu.Unlock()
+	}
 }
 
 func (b *Balancer) StartBackgroundTasks() {
@@ -164,10 +193,10 @@ func (b *Balancer) ProcessQueue() {
 			break
 		}
 
-		addr, err := b.SelectAgent(req.Request.Model)
+		addr, err := b.SelectAgent(req.Request.Model, req.UserID)
 		if err != nil {
 			// If we can't schedule it yet, push it back
-			b.Queue.Push(req.Request, req.Priority, req.ClientIP, req.ContextHash, req.Ctx)
+			b.Queue.Push(req.Request, req.Priority, req.ClientIP, req.ContextHash, req.UserID, req.Ctx)
 			continue
 		}
 

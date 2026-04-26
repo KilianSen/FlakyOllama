@@ -45,6 +45,14 @@ type Balancer struct {
 	Queue    *RequestQueue
 	Jobs     *JobManager
 
+	// Caches
+	perfCache map[string]struct {
+		AvgTTFT, AvgDuration float64
+		Requests             int
+	}
+	policyCache map[string]map[string]struct{ Banned, Pinned bool } // [model][nodeID]
+	cacheMu     sync.RWMutex
+
 	server     *http.Server
 	httpClient *http.Client
 	MetricCh   chan metricEntry
@@ -77,6 +85,11 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		LogCh:    make(chan models.LogEntry, 1000),
 		stopCh:   make(chan struct{}),
 		logChs:   make(map[chan string]bool),
+		perfCache: make(map[string]struct {
+			AvgTTFT, AvgDuration float64
+			Requests             int
+		}),
+		policyCache: make(map[string]map[string]struct{ Banned, Pinned bool }),
 	}
 
 	b.Init()
@@ -87,6 +100,7 @@ func (b *Balancer) Init() {
 	b.StartMetricProcessor()
 	b.StartPerfCacheRefresher()
 	b.StartLogBroadcaster()
+	b.StartBackgroundTasks()
 }
 
 func (b *Balancer) SetupRoutes() http.Handler {
