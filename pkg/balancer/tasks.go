@@ -461,3 +461,108 @@ func (b *Balancer) pollAgents() {
 		}(addr, agent)
 	}
 }
+
+func (b *Balancer) ProcessBackgroundTasks() {
+	ticker := time.NewTicker(10 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				b.processModelRequests()
+			case <-b.stopCh:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+func (b *Balancer) processModelRequests() {
+	reqs, err := b.Storage.ListModelRequests("approved")
+	if err != nil {
+		return
+	}
+
+	for _, r := range reqs {
+		if r.Type == models.RequestPull {
+			go b.executePull(r.ID, r.Model, r.NodeID, "")
+		} else if r.Type == models.RequestDelete {
+			go b.executeDelete(r.ID, r.Model)
+		}
+	}
+}
+
+func (b *Balancer) executePull(jobID, model, nodeID, destination string) {
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) { j.Status = jobs.StatusRunning })
+
+	// Create request
+	pullReq := struct {
+		Name string `json:"name"`
+	}{Name: model}
+	body, _ := json.Marshal(pullReq)
+
+	successCount := 0
+	snapshot := b.State.GetSnapshot()
+
+	var targets []string
+	if nodeID != "" {
+		for addr, a := range snapshot.Agents {
+			if a.ID == nodeID {
+				targets = append(targets, addr)
+				break
+			}
+		}
+	} else {
+		for addr := range snapshot.Agents {
+			targets = append(targets, addr)
+		}
+	}
+
+	for _, addr := range targets {
+		resp, err := b.sendToAgent(addr, "/models/pull", body)
+		if err == nil && resp.StatusCode < 400 {
+			successCount++
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
+		if successCount > 0 {
+			j.Status = jobs.StatusCompleted
+		} else {
+			j.Status = jobs.StatusFailed
+			j.Message = "Failed to trigger pull on any target node"
+		}
+	})
+}
+
+func (b *Balancer) executeDelete(jobID, model string) {
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) { j.Status = jobs.StatusRunning })
+
+	delReq := struct {
+		Name string `json:"name"`
+	}{Name: model}
+	body, _ := json.Marshal(delReq)
+
+	successCount := 0
+	snapshot := b.State.GetSnapshot()
+	for addr := range snapshot.Agents {
+		resp, err := b.sendToAgent(addr, "/models/delete", body)
+		if err == nil && resp.StatusCode < 400 {
+			successCount++
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	b.Jobs.UpdateJob(jobID, func(j *jobs.Job) {
+		if successCount > 0 {
+			j.Status = jobs.StatusCompleted
+		} else {
+			j.Status = jobs.StatusFailed
+		}
+	})
+}

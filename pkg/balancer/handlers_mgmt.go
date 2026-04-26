@@ -1,9 +1,7 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/balancer/jobs"
 	"FlakyOllama/pkg/balancer/state"
-	"FlakyOllama/pkg/balancer/storage"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
@@ -13,11 +11,9 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -45,7 +41,7 @@ func generateJobID() string {
 
 func (b *Balancer) HandleV1Status(w http.ResponseWriter, r *http.Request) {
 	snapshot := b.State.GetSnapshot()
-	
+
 	// Enrich with queue depth and other metrics
 	resp := struct {
 		state.StateSnapshot
@@ -60,7 +56,7 @@ func (b *Balancer) HandleV1Status(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request) {
 	snapshot := b.State.GetSnapshot()
-	
+
 	var totalVRAM, usedVRAM uint64
 	var totalCPU float64
 	var nodeCount int
@@ -78,16 +74,16 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 
 	// Create high-level status summary
 	type statusSummary struct {
-		ActiveWorkloads int                        `json:"active_workloads"`
-		AvgCPUUsage     float64                    `json:"avg_cpu_usage"`
-		AvgMemUsage     float64                    `json:"avg_mem_usage"`
-		TotalVRAM       uint64                     `json:"total_vram"`
-		UsedVRAM        uint64                     `json:"used_vram"`
-		UptimeSeconds   float64                    `json:"uptime_seconds"`
-		QueueDepth      int                        `json:"queue_depth"`
-		PendingRequests map[string]int             `json:"pending_requests"`
-		AllModels       []string                   `json:"all_models"`
-		Nodes           map[string]models.NodeStatus `json:"nodes"`
+		ActiveWorkloads int                                                 `json:"active_workloads"`
+		AvgCPUUsage     float64                                             `json:"avg_cpu_usage"`
+		AvgMemUsage     float64                                             `json:"avg_mem_usage"`
+		TotalVRAM       uint64                                              `json:"total_vram"`
+		UsedVRAM        uint64                                              `json:"used_vram"`
+		UptimeSeconds   float64                                             `json:"uptime_seconds"`
+		QueueDepth      int                                                 `json:"queue_depth"`
+		PendingRequests map[string]int                                      `json:"pending_requests"`
+		AllModels       []string                                            `json:"all_models"`
+		Nodes           map[string]models.NodeStatus                        `json:"nodes"`
 		ModelPolicies   map[string]map[string]struct{ Banned, Pinned bool } `json:"model_policies"`
 	}
 
@@ -114,7 +110,7 @@ func (b *Balancer) HandleV1Nodes(w http.ResponseWriter, r *http.Request) {
 	for _, n := range snapshot.Agents {
 		nodeList = append(nodeList, n)
 	}
-	
+
 	sort.Slice(nodeList, func(i, j int) bool {
 		return nodeList[i].ID < nodeList[j].ID
 	})
@@ -157,8 +153,31 @@ func (b *Balancer) HandleV1Logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// live log streaming logic...
-	// (Keeping the streaming logic if needed)
+	ch := make(chan string, 100)
+	b.logMu.Lock()
+	b.logChs[ch] = true
+	b.logMu.Unlock()
+
+	defer func() {
+		b.logMu.Lock()
+		delete(b.logChs, ch)
+		b.logMu.Unlock()
+		close(ch)
+	}()
+
+	flusher, _ := w.(http.Flusher)
+
+	for {
+		select {
+		case msg := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (b *Balancer) HandleV1LogHistory(w http.ResponseWriter, r *http.Request) {
@@ -206,10 +225,10 @@ func (b *Balancer) HandleV1ModelRequestDecline(w http.ResponseWriter, r *http.Re
 
 func (b *Balancer) HandleV1ModelPolicySet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Model   string `json:"model"`
-		NodeID  string `json:"node_id"`
-		IsBanned bool  `json:"is_banned"`
-		IsPinned bool  `json:"is_pinned"`
+		Model    string `json:"model"`
+		NodeID   string `json:"node_id"`
+		IsBanned bool   `json:"is_banned"`
+		IsPinned bool   `json:"is_pinned"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		b.jsonError(w, http.StatusBadRequest, err.Error())
@@ -439,9 +458,9 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := struct {
-		User       models.User       `json:"user"`
+		User       models.User        `json:"user"`
 		ClientKeys []models.ClientKey `json:"client_keys"`
-		AgentKeys  []models.AgentKey `json:"agent_keys"`
+		AgentKeys  []models.AgentKey  `json:"agent_keys"`
 	}{
 		User:       user,
 		ClientKeys: clientKeys,
@@ -467,7 +486,9 @@ func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		cks, _ := b.Storage.GetClientKeysByUserID(u.ID)
 		var k models.ClientKey
-		if len(cks) > 0 { k = cks[0] }
+		if len(cks) > 0 {
+			k = cks[0]
+		}
 		resp = append(resp, userWithKey{User: u, Key: k})
 	}
 
@@ -568,7 +589,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
 	body, _ := json.Marshal(req)
-	resp, agentID, _, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, false, 0, "")
+	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/inference", body, r.RemoteAddr, false, 0, "")
 
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
@@ -578,10 +599,9 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 
 	// Capture usage
 	clientKey, _ := auth.GetTokenFromContext(r.Context())
+	go b.captureUsage(agentAddr, req.Model, 100, 100, 0, 0, clientKey, surge)
+
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	go b.captureUsage(agentID, req.Model, bodyBytes, clientKey, 0, 0, surge)
-
-
 	var result models.InferenceResponse
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, "failed to decode response")
@@ -589,7 +609,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	}
 
 	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"agent_id": agentID,
+		"agent_id": agentAddr,
 		"response": result.Response,
 	})
 }

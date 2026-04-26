@@ -12,8 +12,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -29,9 +27,9 @@ type Balancer struct {
 	configMu sync.RWMutex
 	Config   *config.Config
 	State    *state.ClusterStateActor
-	Storage *storage.SQLiteStorage
-	Jobs    *jobs.JobManager
-	Queue   *RequestQueue
+	Storage  *storage.SQLiteStorage
+	Jobs     *jobs.JobManager
+	Queue    *RequestQueue
 
 	httpClient *http.Client
 	StartTime  time.Time
@@ -382,7 +380,7 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 
 	b.State.Do(func(s *state.ClusterState) {
 		existing, exists := s.Agents[addr]
-		
+
 		status := &models.NodeStatus{
 			ID:       req.ID,
 			AgentKey: token,
@@ -443,7 +441,7 @@ func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
 
 	jobID := generateJobID()
 	job := b.Jobs.CreateJob(jobID, "model_pull")
-	
+
 	// Create request
 	request := models.ModelRequest{
 		ID:          jobID,
@@ -485,7 +483,9 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleV1ModelUnload(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	var req struct{ NodeID string `json:"node_id"` }
+	var req struct {
+		NodeID string `json:"node_id"`
+	}
 	json.NewDecoder(r.Body).Decode(&req)
 
 	// Placeholder for actual unload logic

@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/rand"
 	"strings"
+	"time"
 )
 
 // ResolveVirtualModel handles the initial resolution of a virtual model name to a real model.
@@ -50,7 +51,7 @@ func (b *Balancer) selectByMetric(targets []string, strategy string) string {
 	defer b.perfMu.RUnlock()
 
 	bestTarget := targets[0]
-	
+
 	switch strategy {
 	case "fastest":
 		minLatency := 9999.0
@@ -103,14 +104,15 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 	b.configMu.RUnlock()
 
 	clientToken, _ := auth.GetTokenFromContext(ctx)
-	
+
 	currentMessages := req.Messages
 	maxGlobalRetries := 3
-	
+
 	for i := 0; i < maxGlobalRetries; i++ {
+		start := time.Now()
 		// Use the first target as the primary worker
 		workerModel := config.Targets[0]
-		
+
 		// Track load for backing model
 		b.State.Do(func(s *state.ClusterState) {
 			s.PendingRequests[workerModel]++
@@ -124,10 +126,10 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 			Options:  req.Options,
 			Priority: req.Priority,
 		}
-		
+
 		body, _ := json.Marshal(workerReq)
 		resp, agentID, _, err := b.DoHedgedRequest(ctx, workerModel, "/chat", body, clientIP, true, req.Priority, "")
-		
+
 		// Decrement load
 		b.State.Do(func(s *state.ClusterState) {
 			s.PendingRequests[workerModel]--
@@ -136,43 +138,47 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 		if err != nil {
 			return "", err
 		}
-		
+
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-
-		// Capture usage for this step
-		go b.captureUsage(agentID, workerModel, bodyBytes, clientToken, 0, 0, surge)
+		duration := time.Since(start)
 
 		var ollamaResp struct {
-			Message models.ChatMessage `json:"message"`
+			Message         models.ChatMessage `json:"message"`
+			PromptEvalCount int                `json:"prompt_eval_count"`
+			EvalCount       int                `json:"eval_count"`
 		}
 		if err := json.Unmarshal(bodyBytes, &ollamaResp); err != nil {
 			return "", fmt.Errorf("failed to decode worker response: %v", err)
 		}
-		
+
+		// Capture usage for this step
+		go b.captureUsage(agentID, workerModel, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, 0, duration, clientToken, surge)
+
 		workerOutput := ollamaResp.Message.Content
-		
+
 		// 2. Check (if judge model is configured)
 		if config.JudgeModel != "" {
 			logging.Global.Infof("Pipeline: Judge %s evaluating output from %s (attempt %d)", config.JudgeModel, workerModel, i+1)
-			
+
 			b.State.Do(func(s *state.ClusterState) {
 				s.PendingRequests[config.JudgeModel]++
 			})
 
-			judgePrompt := fmt.Sprintf("Evaluate the following response for correctness and quality.\nUser Prompt: %s\n\nModel Response: %s\n\nIf the response is good, reply with 'PASS'. If it needs correction, reply with 'FAIL: [REASON]'.", 
+			judgePrompt := fmt.Sprintf("Evaluate the following response for correctness and quality.\nUser Prompt: %s\n\nModel Response: %s\n\nIf the response is good, reply with 'PASS'. If it needs correction, reply with 'FAIL: [REASON]'.",
 				req.Messages[len(req.Messages)-1].Content, workerOutput)
-				
+
 			judgeReq := models.ChatRequest{
 				Model: config.JudgeModel,
 				Messages: []models.ChatMessage{
 					{Role: "user", Content: judgePrompt},
 				},
 			}
-			
+
+			jStart := time.Now()
 			jBody, _ := json.Marshal(judgeReq)
 			jResp, jAgentID, _, jErr := b.DoHedgedRequest(ctx, config.JudgeModel, "/chat", jBody, clientIP, true, 0, "")
-			
+
 			b.State.Do(func(s *state.ClusterState) {
 				s.PendingRequests[config.JudgeModel]--
 			})
@@ -180,15 +186,18 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 			if jErr == nil {
 				jBodyBytes, _ := io.ReadAll(jResp.Body)
 				jResp.Body.Close()
-				
-				// Capture usage for judge
-				go b.captureUsage(jAgentID, config.JudgeModel, jBodyBytes, clientToken, 0, 0, surge)
+				jDuration := time.Since(jStart)
 
 				var jOllamaResp struct {
-					Message models.ChatMessage `json:"message"`
+					Message         models.ChatMessage `json:"message"`
+					PromptEvalCount int                `json:"prompt_eval_count"`
+					EvalCount       int                `json:"eval_count"`
 				}
 				json.Unmarshal(jBodyBytes, &jOllamaResp)
-				
+
+				// Capture usage for judge
+				go b.captureUsage(jAgentID, config.JudgeModel, jOllamaResp.PromptEvalCount, jOllamaResp.EvalCount, 0, jDuration, clientToken, surge)
+
 				judgeVerdict := strings.ToUpper(jOllamaResp.Message.Content)
 				if strings.Contains(judgeVerdict, "FAIL") {
 					logging.Global.Warnf("Pipeline: Judge failed output: %s", judgeVerdict)
@@ -206,9 +215,9 @@ func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, 
 				}
 			}
 		}
-		
+
 		return workerOutput, nil
 	}
-	
+
 	return "", fmt.Errorf("pipeline failed after max retries")
 }
