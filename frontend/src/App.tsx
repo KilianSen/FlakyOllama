@@ -23,7 +23,7 @@ const baseNavItems = [
   { to: '/portal', label: 'Marketplace', icon: Zap },
   { to: '/fleet', label: 'Fleet', icon: Server, admin: true },
   { to: '/registry', label: 'Registry', icon: Database, admin: true },
-  { to: '/users', label: 'Users', icon: UserIcon, admin: true },
+  { to: '/users', label: 'Users', icon: UserCog, admin: true },
   { to: '/keys', label: 'Access', icon: Key, admin: true },
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
