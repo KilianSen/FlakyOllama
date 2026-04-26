@@ -28,31 +28,31 @@ func (s NodeState) String() string {
 }
 
 type NodeStatus struct {
-	ID             string             `json:"id"`
-	AgentKey       string             `json:"agent_key"` // The token used to register
-	Address        string             `json:"address"`
-	State          NodeState          `json:"state"`
-	Tier           string             `json:"tier"` // "dedicated" or "shared"
-	CPUUsage       float64            `json:"cpu_usage"` // Percentage
-	CPUCores       int                `json:"cpu_cores"`
-	MemoryUsage    float64            `json:"memory_usage"` // Percentage
-	MemoryTotal    uint64             `json:"memory_total"` // Bytes
-	VRAMTotal      uint64             `json:"vram_total"`   // Bytes
-	VRAMUsed       uint64             `json:"vram_used"`    // Bytes
-	GPUModel       string             `json:"gpu_model"`
-	GPUTemperature float64            `json:"gpu_temp"`      // Celsius
-	ActiveModels   []string           `json:"active_models"` // List of currently loaded models
-	LocalModels    []ModelInfo        `json:"local_models"`  // Models present on disk
-	InputTokens    int64              `json:"input_tokens"`
-	OutputTokens   int64              `json:"output_tokens"`
-	TokenReward    float64            `json:"token_reward"`
-	Reputation     float64            `json:"reputation"` // Score 0.1 - 5.0
-	Errors         int                `json:"errors"`
-	Message        string             `json:"message"`
-	Draining       bool               `json:"draining"`
-	HasGPU         bool               `json:"has_gpu"`
-	LastSeen       time.Time          `json:"last_seen"`
-	CooloffUntil   time.Time          `json:"cooloff_until"`
+	ID             string      `json:"id"`
+	AgentKey       string      `json:"agent_key"` // The token used to register
+	Address        string      `json:"address"`
+	State          NodeState   `json:"state"`
+	Tier           string      `json:"tier"`      // "dedicated" or "shared"
+	CPUUsage       float64     `json:"cpu_usage"` // Percentage
+	CPUCores       int         `json:"cpu_cores"`
+	MemoryUsage    float64     `json:"memory_usage"` // Percentage
+	MemoryTotal    uint64      `json:"memory_total"` // Bytes
+	VRAMTotal      uint64      `json:"vram_total"`   // Bytes
+	VRAMUsed       uint64      `json:"vram_used"`    // Bytes
+	GPUModel       string      `json:"gpu_model"`
+	GPUTemperature float64     `json:"gpu_temp"`      // Celsius
+	ActiveModels   []string    `json:"active_models"` // List of currently loaded models
+	LocalModels    []ModelInfo `json:"local_models"`  // Models present on disk
+	InputTokens    int64       `json:"input_tokens"`
+	OutputTokens   int64       `json:"output_tokens"`
+	TokenReward    float64     `json:"token_reward"`
+	Reputation     float64     `json:"reputation"` // Score 0.1 - 5.0
+	Errors         int         `json:"errors"`
+	Message        string      `json:"message"`
+	Draining       bool        `json:"draining"`
+	HasGPU         bool        `json:"has_gpu"`
+	LastSeen       time.Time   `json:"last_seen"`
+	CooloffUntil   time.Time   `json:"cooloff_until"`
 }
 
 type ModelInfo struct {
@@ -82,18 +82,18 @@ type InferenceRequest struct {
 }
 
 type InferenceResponse struct {
-	Model      string    `json:"model"`
-	CreatedAt  time.Time `json:"created_at"`
-	Response   string    `json:"response"`
-	Done       bool      `json:"done"`
-	TotalDur   int64     `json:"total_duration"`
-	LoadDur    int64     `json:"load_duration"`
-	SampleCount int      `json:"sample_count"`
-	SampleDur  int64     `json:"sample_duration"`
-	PromptCount int      `json:"prompt_eval_count"`
-	PromptDur  int64     `json:"prompt_eval_duration"`
-	EvalCount  int       `json:"eval_count"`
-	EvalDur    int64     `json:"eval_duration"`
+	Model       string    `json:"model"`
+	CreatedAt   time.Time `json:"created_at"`
+	Response    string    `json:"response"`
+	Done        bool      `json:"done"`
+	TotalDur    int64     `json:"total_duration"`
+	LoadDur     int64     `json:"load_duration"`
+	SampleCount int       `json:"sample_count"`
+	SampleDur   int64     `json:"sample_duration"`
+	PromptCount int       `json:"prompt_eval_count"`
+	PromptDur   int64     `json:"prompt_eval_duration"`
+	EvalCount   int       `json:"eval_count"`
+	EvalDur     int64     `json:"eval_duration"`
 }
 
 type ChatRequest struct {
@@ -111,11 +111,11 @@ type ChatMessage struct {
 }
 
 type ChatResponse struct {
-	Model      string      `json:"model"`
-	CreatedAt  time.Time   `json:"created_at"`
-	Message    ChatMessage `json:"message"`
-	Done       bool        `json:"done"`
-	TotalDur   int64       `json:"total_duration"`
+	Model     string      `json:"model"`
+	CreatedAt time.Time   `json:"created_at"`
+	Message   ChatMessage `json:"message"`
+	Done      bool        `json:"done"`
+	TotalDur  int64       `json:"total_duration"`
 }
 
 type TagsResponse struct {
@@ -124,10 +124,10 @@ type TagsResponse struct {
 
 // RegisterRequest is sent by an Agent to the Balancer.
 type RegisterRequest struct {
-	ID      string `json:"id"`
-	Address string `json:"address"`
-	Tier    string `json:"tier"`
-	HasGPU  bool   `json:"has_gpu"`
+	ID       string `json:"id"`
+	Address  string `json:"address"`
+	Tier     string `json:"tier"`
+	HasGPU   bool   `json:"has_gpu"`
 	GPUModel string `json:"gpu_model"`
 }
 
@@ -161,7 +161,7 @@ type ModelRequestStatus string
 const (
 	StatusPending  ModelRequestStatus = "pending"
 	StatusApproved ModelRequestStatus = "approved"
-	StatusDeclined ModelRequestStatus = "declined"
+	StatusRejected ModelRequestStatus = "rejected"
 )
 
 type ModelRequest struct {
@@ -203,12 +203,57 @@ type User struct {
 	QuotaUsed  int64  `json:"quota_used"`
 }
 
+type UserWithKey struct {
+	User User      `json:"user"`
+	Key  ClientKey `json:"key"`
+}
+
+type ProfileResponse struct {
+	User       User        `json:"user"`
+	ClientKeys []ClientKey `json:"client_keys"`
+	AgentKeys  []AgentKey  `json:"agent_keys"`
+}
+
 type UserModelPolicy struct {
 	UserID       string  `json:"user_id"`
 	Model        string  `json:"model"`
 	RewardFactor float64 `json:"reward_factor"` // Multiplier for agent earnings
 	CostFactor   float64 `json:"cost_factor"`   // Multiplier for client costs
 	Disabled     bool    `json:"disabled"`      // If true, user cannot use this model
+}
+
+type ClusterStatus struct {
+	Nodes             map[string]*NodeStatus `json:"nodes"`
+	ActiveWorkloads   int                    `json:"active_workloads"`
+	AvgCPUUsage       float64                `json:"avg_cpu_usage"`
+	AvgMemUsage       float64                `json:"avg_mem_usage"`
+	PendingRequests   map[string]int         `json:"pending_requests"`
+	TotalInputTokens  int64                  `json:"total_input_tokens"`
+	TotalOutputTokens int64                  `json:"total_output_tokens"`
+	TotalReward       float64                `json:"total_reward"`
+	TotalCost         float64                `json:"total_cost"`
+	Performance       map[string]struct {
+		AvgTTFT     float64 `json:"avg_ttft"`
+		AvgDuration float64 `json:"avg_duration"`
+		Requests    int     `json:"requests"`
+	} `json:"performance"`
+	ModelRewardFactors     map[string]float64 `json:"model_reward_factors"`
+	ModelCostFactors       map[string]float64 `json:"model_cost_factors"`
+	GlobalRewardMultiplier float64            `json:"global_reward_multiplier"`
+	GlobalCostMultiplier   float64            `json:"global_cost_multiplier"`
+	OIDCEnabled            bool               `json:"oidc_enabled"`
+	QueueDepth             int                `json:"queue_depth"`
+	NodeWorkloads          map[string]int     `json:"node_workloads"`
+}
+
+type Catalog struct {
+	GlobalRewardMultiplier float64 `json:"global_reward_multiplier"`
+	GlobalCostMultiplier   float64 `json:"global_cost_multiplier"`
+	Models                 []struct {
+		Name         string  `json:"name"`
+		RewardFactor float64 `json:"reward_factor"`
+		CostFactor   float64 `json:"cost_factor"`
+	} `json:"models"`
 }
 
 type QueuedRequestInfo struct {

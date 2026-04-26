@@ -1,15 +1,13 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/balancer/state"
+	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
-	"sort"
-	"strings"
 	"time"
 )
 
@@ -20,58 +18,39 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 0. Track load for the requested model (even if virtual)
-	b.State.Do(func(s *state.ClusterState) {
+	// 0. Track load
+	b.State.Do(func(s *ClusterState) {
 		s.PendingRequests[req.Model]++
 	})
 	defer func() {
-		b.State.Do(func(s *state.ClusterState) {
+		b.State.Do(func(s *ClusterState) {
 			s.PendingRequests[req.Model]--
 		})
 	}()
 
-	// 1. Resolve Virtual Model
-	resolvedModel, vConfig, isVirtual := b.ResolveVirtualModel(req.Model)
+	// 1. Check Virtual Models
+	var resolvedModel string
+	var vConfig models.VirtualModelConfig
+	found := false
 
-	// 2. Handle Pipeline (Non-streaming only)
-	if isVirtual && vConfig.Type == "pipeline" {
-		if req.Stream {
-			http.Error(w, "Streaming not yet supported for recursive pipelines", http.StatusBadRequest)
-			return
-		}
-		
-		// Map InferenceRequest to ChatRequest for pipeline engine
-		chatReq := models.ChatRequest{
-			Model:    resolvedModel,
-			Messages: []models.ChatMessage{{Role: "user", Content: req.Prompt}},
-			Options:  req.Options,
-			Priority: req.Priority,
-		}
-		
-		output, err := b.ExecutePipeline(r.Context(), chatReq, vConfig, r.RemoteAddr)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		
-		resp := map[string]interface{}{
-			"model":    req.Model,
-			"response": output,
-			"done":     true,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+	b.configMu.RLock()
+	if cfg, ok := b.Config.VirtualModels[req.Model]; ok {
+		vConfig = cfg
+		found = true
+	}
+	b.configMu.RUnlock()
+
+	if found && vConfig.Type == "pipeline" {
+		// Not implemented in this context yet
+		http.Error(w, "Pipeline models not supported in generate endpoint", http.StatusBadRequest)
 		return
 	}
+	resolvedModel = req.Model
 
-	// Update request with resolved model
 	req.Model = resolvedModel
 
-	logging.Global.Infof("Incoming GenerateRequest for model %s (stream: %v)", req.Model, req.Stream)
-
-	// Load Shedding
-	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
-		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+	if b.Queue.QueueDepth() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated", http.StatusTooManyRequests)
 		return
 	}
 
@@ -108,51 +87,17 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 0. Track load
-	b.State.Do(func(s *state.ClusterState) {
+	b.State.Do(func(s *ClusterState) {
 		s.PendingRequests[req.Model]++
 	})
 	defer func() {
-		b.State.Do(func(s *state.ClusterState) {
+		b.State.Do(func(s *ClusterState) {
 			s.PendingRequests[req.Model]--
 		})
 	}()
 
-	// 1. Resolve Virtual Model
-	resolvedModel, vConfig, isVirtual := b.ResolveVirtualModel(req.Model)
-
-	// 2. Handle Pipeline
-	if isVirtual && vConfig.Type == "pipeline" {
-		if req.Stream {
-			http.Error(w, "Streaming not yet supported for recursive pipelines", http.StatusBadRequest)
-			return
-		}
-		
-		output, err := b.ExecutePipeline(r.Context(), req, vConfig, r.RemoteAddr)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		
-		resp := map[string]interface{}{
-			"model": req.Model,
-			"message": models.ChatMessage{
-				Role:    "assistant",
-				Content: output,
-			},
-			"done": true,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	req.Model = resolvedModel
-
-	logging.Global.Infof("Incoming ChatRequest for model %s (stream: %v)", req.Model, req.Stream)
-
-	if b.Queue.pq.Len() >= b.Config.MaxQueueDepth {
-		http.Error(w, "Cluster saturated, too many requests queued", http.StatusTooManyRequests)
+	if b.Queue.QueueDepth() >= b.Config.MaxQueueDepth {
+		http.Error(w, "Cluster saturated", http.StatusTooManyRequests)
 		return
 	}
 
@@ -167,8 +112,8 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 	contextHash := ""
 	if len(req.Messages) > 0 {
-		hData, _ := json.Marshal(req.Messages)
-		contextHash = b.computeHash(string(hData))
+		lastMsg := req.Messages[len(req.Messages)-1]
+		contextHash = b.computeHash(lastMsg.Content)
 	}
 
 	body, _ := json.Marshal(req)
@@ -183,26 +128,72 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	b.finalizeProxy(w, resp, agentAddr, req.Model, r, surge)
 }
 
-func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
+func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
+	var status models.NodeStatus
+	if err := json.NewDecoder(r.Body).Decode(&status); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Token Verification
+	if status.AgentKey == "" {
+		http.Error(w, "Agent key required", http.StatusUnauthorized)
+		return
+	}
+
+	ak, err := b.Storage.GetAgentKey(status.AgentKey)
+	if err != nil || !ak.Active {
+		logging.Global.Warnf("Registration attempt with invalid/inactive key: %s from %s", status.AgentKey, status.Address)
+		http.Error(w, "Invalid agent key", http.StatusForbidden)
+		return
+	}
+
+	// Update State
+	status.ID = ak.NodeID
+	status.LastSeen = time.Now()
+
+	b.State.Do(func(s *ClusterState) {
+		s.Agents[status.Address] = &status
+	})
+
+	logging.Global.Infof("Node %s registered from %s (%d models, GPU: %v)", status.ID, status.Address, len(status.LocalModels), status.HasGPU)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"node_id": status.ID, "status": "registered"})
+}
+
+func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
+	snap := b.State.GetSnapshot()
+	uniqueModels := make(map[string]bool)
+	for _, node := range snap.Agents {
+		for _, m := range node.LocalModels {
+			uniqueModels[m.Name] = true
+		}
+	}
+
+	var tags models.TagsResponse
+	for m := range uniqueModels {
+		tags.Models = append(tags.Models, models.ModelInfo{
+			Name:  m,
+			Model: m,
+		})
+	}
+
+	b.jsonResponse(w, http.StatusOK, tags)
+}
+
+func (b *Balancer) HandleOllamaEmbeddings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Model string `json:"model"`
+		Model  string `json:"model"`
+		Prompt string `json:"prompt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Clean model name
-	if strings.HasPrefix(req.Model, "a.") {
-		req.Model = strings.TrimPrefix(req.Model, "a.")
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	targetNode := r.Header.Get("X-Node-Id")
 	body, _ := json.Marshal(req)
-	resp, _, _, err := b.DoHedgedRequest(ctx, req.Model, "/show", body, r.RemoteAddr, false, 0, targetNode)
+	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/api/embeddings", body, r.RemoteAddr, false, 10, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -216,187 +207,16 @@ func (b *Balancer) HandleShow(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-func (b *Balancer) HandleTags(w http.ResponseWriter, _ *http.Request) {
-	snapshot := b.State.GetSnapshot()
-
-	modelMap := make(map[string]models.ModelInfo)
-	for _, agent := range snapshot.Agents {
-		// Include active models (running)
-		for _, mName := range agent.ActiveModels {
-			if _, ok := modelMap[mName]; !ok {
-				modelMap[mName] = models.ModelInfo{
-					Name:       mName,
-					Model:      mName,
-					ModifiedAt: time.Now(),
-				}
-			}
-		}
-		// Include local models (on disk)
-		for _, mInfo := range agent.LocalModels {
-			// Ensure Name is populated if it came from an older agent or is missing
-			if mInfo.Name == "" {
-				mInfo.Name = mInfo.Model
-			}
-			modelMap[mInfo.Model] = mInfo
+func (b *Balancer) getRequestPriority(r *http.Request) int {
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if user, ok := val.(models.User); ok && user.IsAdmin {
+			return 100
 		}
 	}
-
-	var modelList []models.ModelInfo
-	for _, m := range modelMap {
-		modelList = append(modelList, m)
-	}
-
-	// Add Virtual Models
-	for name := range b.Config.VirtualModels {
-		modelList = append(modelList, models.ModelInfo{
-			Name:       name,
-			Model:      name,
-			ModifiedAt: time.Now(),
-			Details: &models.ModelDetails{
-				Format: "virtual",
-				Family: "pipeline",
-			},
-		})
-	}
-
-	sort.Slice(modelList, func(i, j int) bool {
-		return modelList[i].Name < modelList[j].Name
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models.TagsResponse{Models: modelList})
-}
-
-func (b *Balancer) HandleEmbed(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Model string      `json:"model"`
-		Input interface{} `json:"input"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// 0. Track load
-	b.State.Do(func(s *state.ClusterState) {
-		s.PendingRequests[req.Model]++
-	})
-	defer func() {
-		b.State.Do(func(s *state.ClusterState) {
-			s.PendingRequests[req.Model]--
-		})
-	}()
-
-	// 1. Resolve Virtual Model
-	resolvedModel, _, _ := b.ResolveVirtualModel(req.Model)
-
-	body, _ := json.Marshal(req)
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	targetNode := r.Header.Get("X-Node-Id")
-	resp, _, _, err := b.DoHedgedRequest(ctx, resolvedModel, "/embeddings", body, r.RemoteAddr, false, 0, targetNode)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer resp.Body.Close()
-
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-}
-
-func (b *Balancer) HandleVersion(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"version": "0.1.0-flaky"})
-}
-
-func (b *Balancer) HandlePS(w http.ResponseWriter, _ *http.Request) {
-	snapshot := b.State.GetSnapshot()
-
-	type psModel struct {
-		Name   string `json:"name"`
-		Size   int64  `json:"size"`
-		Digest string `json:"digest"`
-	}
-	var psModels []psModel
-	seen := make(map[string]bool)
-
-	for _, agent := range snapshot.Agents {
-		for _, mName := range agent.ActiveModels {
-			if !seen[mName] {
-				psModels = append(psModels, psModel{Name: mName})
-				seen[mName] = true
-			}
+	if val := r.Context().Value(auth.ContextKeyClientData); val != nil {
+		if ck, ok := val.(models.ClientKey); ok && ck.Credits > 1000 {
+			return 50
 		}
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"models": psModels})
-}
-
-func (b *Balancer) HandlePull(w http.ResponseWriter, r *http.Request) {
-	// Standard Ollama /api/pull - proxy to HandleV1ModelPull (cluster-wide)
-	b.HandleV1ModelPull(w, r)
-}
-
-func (b *Balancer) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	// Standard Ollama /api/delete - proxy to HandleV1ModelDelete (cluster-wide)
-	b.HandleV1ModelDelete(w, r)
-}
-
-func (b *Balancer) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name      string `json:"name"`
-		Modelfile string `json:"modelfile"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	body, _ := json.Marshal(req)
-	logging.Global.Infof("Creating model %s cluster-wide", req.Name)
-	b.Broadcast("/models/create", body)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Creation triggered for " + req.Name})
-}
-
-func (b *Balancer) HandleCopy(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Source      string `json:"source"`
-		Destination string `json:"destination"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	body, _ := json.Marshal(req)
-	logging.Global.Infof("Copying model %s to %s cluster-wide", req.Source, req.Destination)
-	b.Broadcast("/models/copy", body)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Copy triggered for " + req.Source})
-}
-
-func (b *Balancer) HandlePush(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	body, _ := json.Marshal(req)
-	logging.Global.Infof("Pushing model %s cluster-wide", req.Name)
-	b.Broadcast("/models/push", body)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Push triggered for " + req.Name})
+	return 10
 }

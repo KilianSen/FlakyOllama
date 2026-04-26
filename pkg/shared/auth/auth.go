@@ -39,9 +39,13 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 		}
 
 		// 0. Check if we have a user from SessionMiddleware (OIDC)
-		// We check this FIRST so that browser sessions take precedence over default tokens
 		if val := r.Context().Value(ContextKeyUser); val != nil {
-			if _, ok := val.(models.User); ok {
+			if u, ok := val.(models.User); ok {
+				// Check User-global Quota
+				if u.QuotaLimit != -1 && u.QuotaUsed >= u.QuotaLimit {
+					http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
+					return
+				}
 				next(w, r)
 				return
 			}

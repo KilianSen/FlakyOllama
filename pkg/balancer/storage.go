@@ -1,4 +1,4 @@
-package storage
+package balancer
 
 import (
 	"FlakyOllama/pkg/shared/models"
@@ -160,7 +160,7 @@ func (s *SQLiteStorage) GetModelRequest(id string) (models.ModelRequest, error) 
 	return req, nil
 }
 
-func (s *SQLiteStorage) ListModelRequests(status string) ([]models.ModelRequest, error) {
+func (s *SQLiteStorage) ListModelRequests(status models.ModelRequestStatus) ([]models.ModelRequest, error) {
 	query := `SELECT id, type, model, node_id, status, requested_at, approved_at FROM model_requests`
 	var rows *sql.Rows
 	var err error
@@ -212,18 +212,18 @@ func (s *SQLiteStorage) SetModelPolicy(model, nodeID string, banned, pinned bool
 
 func (s *SQLiteStorage) RecordTokenUsage(nodeID, model string, input, output int, reward, cost float64, ttft, duration int64, clientKey string) error {
 	return s.RecordTokenUsageBatch([]struct {
-		NodeID, Model, ClientKey string
-		Input, Output            int
-		Reward, Cost             float64
-		TTFT, Duration           int64
-	}{{nodeID, model, clientKey, input, output, reward, cost, ttft, duration}})
+		NodeID, Model, ClientKey, UserID string
+		Input, Output                    int
+		Reward, Cost                     float64
+		TTFT, Duration                   int64
+	}{{nodeID, model, clientKey, "", input, output, reward, cost, ttft, duration}})
 }
 
 func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
-	NodeID, Model, ClientKey string
-	Input, Output            int
-	Reward, Cost             float64
-	TTFT, Duration           int64
+	NodeID, Model, ClientKey, UserID string
+	Input, Output                    int
+	Reward, Cost                     float64
+	TTFT, Duration                   int64
 }) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -241,20 +241,24 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 			return err
 		}
 
-		// 2. Update Client Key Quota (if key provided)
+		// 2. Update Quotas
+		targetUserID := e.UserID
 		if e.ClientKey != "" {
-			var userID sql.NullString
+			var dbUserID sql.NullString
 			err = tx.QueryRow(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ? RETURNING user_id`,
-				int64(e.Input+e.Output), e.Cost, e.ClientKey).Scan(&userID)
+				int64(e.Input+e.Output), e.Cost, e.ClientKey).Scan(&dbUserID)
 			if err != nil {
 				return err
 			}
+			if dbUserID.Valid && dbUserID.String != "" {
+				targetUserID = dbUserID.String
+			}
+		}
 
-			if userID.Valid && userID.String != "" {
-				_, err = tx.Exec(`UPDATE users SET quota_used = quota_used + ? WHERE id = ?`, int64(e.Input+e.Output), userID.String)
-				if err != nil {
-					return err
-				}
+		if targetUserID != "" {
+			_, err = tx.Exec(`UPDATE users SET quota_used = quota_used + ? WHERE id = ?`, int64(e.Input+e.Output), targetUserID)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -349,10 +353,13 @@ func (s *SQLiteStorage) GetClientKey(key string) (models.ClientKey, error) {
 	var userID sql.NullString
 	err := s.db.QueryRow(`SELECT key, label, quota_limit, quota_used, credits, active, user_id, status FROM client_keys WHERE key = ?`, key).
 		Scan(&k.Key, &k.Label, &k.QuotaLimit, &k.QuotaUsed, &k.Credits, &k.Active, &userID, &k.Status)
+	if err != nil {
+		return k, err
+	}
 	if userID.Valid {
 		k.UserID = userID.String
 	}
-	return k, err
+	return k, nil
 }
 
 func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
@@ -495,10 +502,13 @@ func (s *SQLiteStorage) GetAgentKey(key string) (models.AgentKey, error) {
 	var userID sql.NullString
 	err := s.db.QueryRow(`SELECT key, label, node_id, credits_earned, reputation, active, user_id, status FROM agent_keys WHERE key = ?`, key).
 		Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID, &k.Status)
+	if err != nil {
+		return k, err
+	}
 	if userID.Valid {
 		k.UserID = userID.String
 	}
-	return k, err
+	return k, nil
 }
 
 func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {

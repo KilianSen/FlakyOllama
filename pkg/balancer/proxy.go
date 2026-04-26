@@ -1,7 +1,6 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/balancer/state"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/metrics"
@@ -27,7 +26,7 @@ type workloadBody struct {
 func (w *workloadBody) Close() error {
 	err := w.ReadCloser.Close()
 	w.once.Do(func() {
-		w.b.State.Do(func(s *state.ClusterState) {
+		w.b.State.Do(func(s *ClusterState) {
 			s.NodeWorkloads[w.addr]--
 		})
 	})
@@ -68,17 +67,57 @@ func (t *ttftTrackingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+type TailReader struct {
+	buffer []byte
+	size   int
+	head   int
+}
+
+func NewTailReader(limit int) *TailReader {
+	return &TailReader{
+		buffer: make([]byte, limit),
+		size:   0,
+		head:   0,
+	}
+}
+
+func (t *TailReader) Write(p []byte) (n int, err error) {
+	for _, b := range p {
+		t.buffer[t.head] = b
+		t.head = (t.head + 1) % len(t.buffer)
+		if t.size < len(t.buffer) {
+			t.size++
+		}
+	}
+	return len(p), nil
+}
+
+func (t *TailReader) Bytes() []byte {
+	res := make([]byte, t.size)
+	if t.size < len(t.buffer) {
+		copy(res, t.buffer[:t.size])
+	} else {
+		copy(res, t.buffer[t.head:])
+		copy(res[len(t.buffer)-t.head:], t.buffer[:t.head])
+	}
+	return res
+}
+
 func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64) {
 	start := time.Now()
-	// Get client key from context
-	clientKey, _ := auth.GetTokenFromContext(r.Context())
 
-	// Wrap with Stall Protection
+	clientKey, _ := auth.GetTokenFromContext(r.Context())
+	var userID string
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok {
+			userID = u.ID
+		}
+	}
+
 	stallTimeout := time.Duration(b.Config.StallTimeoutSec) * time.Second
 	reader := NewIdleTimeoutReader(resp.Body, stallTimeout)
 	defer reader.Close()
 
-	// Instrument for TTFT
 	var ttft time.Duration
 	var ttftMu sync.Mutex
 	ttftRecorded := false
@@ -100,9 +139,8 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	}
 	w.WriteHeader(resp.StatusCode)
 
-	// Use a pipe to capture the response for usage parsing if it's not a stream error
-	var usageBuf bytes.Buffer
-	multiWriter := io.MultiWriter(w, &usageBuf)
+	usageTail := NewTailReader(4096)
+	multiWriter := io.MultiWriter(w, usageTail)
 
 	var finalReader io.Reader = trackingReader
 	if resp.Header.Get("Content-Encoding") == "gzip" {
@@ -132,44 +170,15 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		return
 	}
 
-	// Extract usage from buffer
-	body := usageBuf.Bytes()
-	input, output := 0, 0
-	var usage struct {
-		PromptEvalCount int `json:"prompt_eval_count"`
-		EvalCount       int `json:"eval_count"`
-	}
-	if err := json.Unmarshal(body, &usage); err == nil && (usage.PromptEvalCount > 0 || usage.EvalCount > 0) {
-		input = usage.PromptEvalCount
-		output = usage.EvalCount
-	} else {
-		// Streaming case
-		lastOpenBrace := -1
-		for i := len(body) - 1; i >= 0; i-- {
-			if body[i] == '{' {
-				lastOpenBrace = i
-				var streamUsage struct {
-					PromptEvalCount int `json:"prompt_eval_count"`
-					EvalCount       int `json:"eval_count"`
-				}
-				if err := json.Unmarshal(body[lastOpenBrace:], &streamUsage); err == nil {
-					if streamUsage.PromptEvalCount > 0 || streamUsage.EvalCount > 0 {
-						input = streamUsage.PromptEvalCount
-						output = streamUsage.EvalCount
-						break
-					}
-				}
-				if len(body)-i > 2048 {
-					break
-				}
-			}
-		}
-	}
+	input, output := extractUsage(usageTail.Bytes())
 
 	agentID := agentAddr
-	b.State.Do(func(s *state.ClusterState) {
+	var providerKey string
+
+	b.State.Do(func(s *ClusterState) {
 		if a, ok := s.Agents[agentAddr]; ok {
 			agentID = a.ID
+			providerKey = a.AgentKey
 		}
 		s.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
 	})
@@ -178,7 +187,7 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		ttftMu.Lock()
 		actualTTFT := ttft
 		ttftMu.Unlock()
-		go b.captureUsage(agentID, modelName, input, output, actualTTFT, duration, clientKey, surge)
+		go b.captureUsage(providerKey, modelName, input, output, actualTTFT, duration, clientKey, userID, surge)
 	}
 
 	b.recordSuccess(agentAddr)
@@ -191,8 +200,53 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(duration.Seconds())
 }
 
+func extractUsage(body []byte) (input, output int) {
+	var full struct {
+		PromptEvalCount int `json:"prompt_eval_count"`
+		EvalCount       int `json:"eval_count"`
+		Usage           *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &full); err == nil {
+		if full.PromptEvalCount > 0 || full.EvalCount > 0 {
+			return full.PromptEvalCount, full.EvalCount
+		}
+		if full.Usage != nil {
+			return full.Usage.PromptTokens, full.Usage.CompletionTokens
+		}
+	}
+
+	for i := len(body) - 1; i >= 0; i-- {
+		if body[i] == '}' {
+			for j := i - 1; j >= 0 && i-j < 2048; j-- {
+				if body[j] == '{' {
+					var partial struct {
+						PromptEvalCount int `json:"prompt_eval_count"`
+						EvalCount       int `json:"eval_count"`
+						Usage           *struct {
+							PromptTokens     int `json:"prompt_tokens"`
+							CompletionTokens int `json:"completion_tokens"`
+						} `json:"usage"`
+					}
+					if err := json.Unmarshal(body[j:i+1], &partial); err == nil {
+						if partial.PromptEvalCount > 0 || partial.EvalCount > 0 {
+							return partial.PromptEvalCount, partial.EvalCount
+						}
+						if partial.Usage != nil {
+							return partial.Usage.PromptTokens, partial.Usage.CompletionTokens
+						}
+					}
+				}
+			}
+		}
+	}
+	return 0, 0
+}
+
 func (b *Balancer) recordError(addr string, reason string) {
-	b.State.Do(func(s *state.ClusterState) {
+	b.State.Do(func(s *ClusterState) {
 		if a, ok := s.Agents[addr]; ok {
 			a.Errors++
 			a.Message = "Error: " + reason
@@ -213,7 +267,7 @@ func (b *Balancer) recordError(addr string, reason string) {
 }
 
 func (b *Balancer) recordSuccess(addr string) {
-	b.State.Do(func(s *state.ClusterState) {
+	b.State.Do(func(s *ClusterState) {
 		if a, ok := s.Agents[addr]; ok {
 			if a.State != models.StateHealthy {
 				logging.Global.Infof("Node %s (%s) recovered to Healthy state", a.ID, addr)

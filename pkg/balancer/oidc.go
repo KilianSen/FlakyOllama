@@ -2,35 +2,50 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/shared/auth"
-	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
 )
 
-type Claims struct {
-	UserID  string `json:"user_id"`
-	IsAdmin bool   `json:"is_admin"`
-	jwt.RegisteredClaims
+func (b *Balancer) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. Check Session Cookie (OIDC)
+		cookie, err := r.Cookie("flaky_session")
+		if err == nil {
+			userSub := cookie.Value
+			user, err := b.Storage.GetUserBySub(userSub)
+			if err == nil {
+				// Quota Check for OIDC user
+				if user.QuotaLimit != -1 && user.QuotaUsed >= user.QuotaLimit {
+					http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
+					return
+				}
+				ctx := context.WithValue(r.Context(), auth.ContextKeyUser, user)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		// 2. Fall back to Token Middleware (API Keys)
+		auth.Middleware(b.Config.AuthToken, b.Storage, next).ServeHTTP(w, r)
+	}
 }
 
-func (b *Balancer) initOIDC() (*oidc.Provider, oauth2.Config, error) {
+func (b *Balancer) HandleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	if !b.Config.OIDC.Enabled {
-		return nil, oauth2.Config{}, nil
+		http.Error(w, "OIDC disabled", http.StatusForbidden)
+		return
 	}
 
-	provider, err := oidc.NewProvider(context.Background(), b.Config.OIDC.Issuer)
+	provider, err := oidc.NewProvider(r.Context(), b.Config.OIDC.Issuer)
 	if err != nil {
-		return nil, oauth2.Config{}, err
+		http.Error(w, "Failed to get provider: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	oauth2Config := oauth2.Config{
@@ -41,59 +56,42 @@ func (b *Balancer) initOIDC() (*oidc.Provider, oauth2.Config, error) {
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
 
-	return provider, oauth2Config, nil
-}
-
-func (b *Balancer) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	if !b.Config.OIDC.Enabled {
-		logging.Global.Warnf("OIDC: Login attempt while OIDC is disabled")
-		http.Error(w, "OIDC is disabled in cluster configuration", http.StatusForbidden)
-		return
-	}
-	logging.Global.Infof("OIDC: Login initiated from %s", r.RemoteAddr)
-	provider, oauth2Config, err := b.initOIDC()
-	if err != nil || provider == nil {
-		http.Error(w, "OIDC Provider Error", http.StatusInternalServerError)
-		return
-	}
-
-	state := randString(16)
-	setCookie(r, w, "oidc_state", state, 15*time.Minute)
+	state := b.generateState()
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oidc_state",
+		Value:    state,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false, // Set to true if using HTTPS
+		MaxAge:   300,
+	})
 
 	http.Redirect(w, r, oauth2Config.AuthCodeURL(state), http.StatusFound)
 }
 
-func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
-	logging.Global.Infof("OIDC: Callback received")
-	state, err := r.Cookie("oidc_state")
-	if err != nil {
-		logging.Global.Errorf("OIDC: State cookie missing")
-		http.Error(w, "Invalid state", http.StatusBadRequest)
-		return
-	}
-	if r.URL.Query().Get("state") != state.Value {
-		logging.Global.Errorf("OIDC: State mismatch. Expected %s, got %s", state.Value, r.URL.Query().Get("state"))
+func (b *Balancer) HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	stateCookie, err := r.Cookie("oidc_state")
+	if err != nil || r.URL.Query().Get("state") != stateCookie.Value {
 		http.Error(w, "Invalid state", http.StatusBadRequest)
 		return
 	}
 
-	provider, oauth2Config, err := b.initOIDC()
-	if err != nil {
-		logging.Global.Errorf("OIDC: Provider init failed: %v", err)
-		http.Error(w, "OIDC Provider Error: "+err.Error(), http.StatusInternalServerError)
-		return
+	provider, _ := oidc.NewProvider(r.Context(), b.Config.OIDC.Issuer)
+	oauth2Config := oauth2.Config{
+		ClientID:     b.Config.OIDC.ClientID,
+		ClientSecret: b.Config.OIDC.ClientSecret,
+		RedirectURL:  b.Config.OIDC.RedirectURL,
+		Endpoint:     provider.Endpoint(),
 	}
 
 	token, err := oauth2Config.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
-		logging.Global.Errorf("OIDC: Token exchange failed: %v", err)
-		http.Error(w, "Failed to exchange token", http.StatusInternalServerError)
+		http.Error(w, "Failed to exchange token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok {
-		logging.Global.Errorf("OIDC: No id_token in exchange response")
 		http.Error(w, "No id_token", http.StatusInternalServerError)
 		return
 	}
@@ -101,169 +99,47 @@ func (b *Balancer) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	verifier := provider.Verifier(&oidc.Config{ClientID: b.Config.OIDC.ClientID})
 	idToken, err := verifier.Verify(r.Context(), rawIDToken)
 	if err != nil {
-		logging.Global.Errorf("OIDC: ID Token verification failed: %v", err)
-		http.Error(w, "Failed to verify ID Token", http.StatusInternalServerError)
+		http.Error(w, "Failed to verify ID token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	var claims map[string]interface{}
+	var claims struct {
+		Email string `json:"email"`
+		Sub   string `json:"sub"`
+		Name  string `json:"name"`
+	}
 	if err := idToken.Claims(&claims); err != nil {
-		logging.Global.Errorf("OIDC: Failed to parse claims: %v", err)
-		http.Error(w, "Failed to parse claims", http.StatusInternalServerError)
+		http.Error(w, "Failed to parse claims: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	sub, ok := claims["sub"].(string)
-	if !ok || sub == "" {
-		logging.Global.Errorf("OIDC: Missing 'sub' claim")
-		http.Error(w, "Invalid token claims", http.StatusBadRequest)
-		return
-	}
-	email, _ := claims["email"].(string)
-	name, _ := claims["name"].(string)
-
-	isAdmin := false
-	if b.Config.OIDC.AdminClaim != "" {
-		if val, ok := claims[b.Config.OIDC.AdminClaim]; ok {
-			target := strings.ToLower(b.Config.OIDC.AdminValue)
-			switch v := val.(type) {
-			case string:
-				isAdmin = strings.ToLower(v) == target
-			case []interface{}:
-				for _, item := range v {
-					if s, ok := item.(string); ok && strings.ToLower(s) == target {
-						isAdmin = true
-						break
-					}
-				}
-			}
-		}
-	}
-	logging.Global.Infof("OIDC: User %s (admin: %v)", name, isAdmin)
-
-	// Find or create user
-	user, err := b.Storage.GetUserBySub(sub)
+	// Sync User
+	user, err := b.Storage.GetUserBySub(claims.Sub)
 	if err != nil {
-		// New user
 		user = models.User{
-			ID:         fmt.Sprintf("u_%d", time.Now().Unix()),
-			Sub:        sub,
-			Email:      email,
-			Name:       name,
-			IsAdmin:    isAdmin,
-			QuotaLimit: 10000000, // 10M default global
-			QuotaUsed:  0,
+			ID:         "u_" + b.computeHash(claims.Sub)[:12],
+			Sub:        claims.Sub,
+			Email:      claims.Email,
+			Name:       claims.Name,
+			QuotaLimit: 1000000, // Default 1M tokens
 		}
-		if err := b.Storage.CreateUser(user); err != nil {
-			logging.Global.Errorf("OIDC: Failed to create user in DB: %v", err)
-			http.Error(w, "Failed to register user", http.StatusInternalServerError)
-			return
-		}
-
-		// Create a personal client key for them
-		personalKey := models.ClientKey{
-			Key:        fmt.Sprintf("sk-%s", randString(32)),
-			Label:      fmt.Sprintf("Personal Key for %s", user.Name),
-			QuotaLimit: 1000000, // 1M tokens sub-quota default
-			QuotaUsed:  0,
-			Credits:    10.0,
-			Active:     true,
-			UserID:     user.ID,
-			Status:     models.KeyStatusActive,
-		}
-		if err := b.Storage.CreateClientKey(personalKey); err != nil {
-			logging.Global.Errorf("OIDC: Failed to create client key for user: %v", err)
-		}
-	} else {
-		user.Email = email
-		user.Name = name
-		user.IsAdmin = isAdmin
-		b.Storage.UpdateUser(user)
+		b.Storage.CreateUser(user)
 	}
-
-	// Create session JWT
-	expirationTime := time.Now().Add(24 * time.Hour)
-	jwtClaims := &Claims{
-		UserID:  user.ID,
-		IsAdmin: user.IsAdmin,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
-		},
-	}
-
-	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwtClaims)
-	tokenString, err := jwtToken.SignedString([]byte(b.Config.JWTSecret))
-	if err != nil {
-		logging.Global.Errorf("OIDC: Failed to sign JWT: %v", err)
-		http.Error(w, "Internal Error", http.StatusInternalServerError)
-		return
-	}
-
-	logging.Global.Infof("OIDC: Setting session_token cookie for user %s", user.ID)
-	setCookie(r, w, "session_token", tokenString, 24*time.Hour)
-	http.Redirect(w, r, "/", http.StatusFound)
-}
-
-func (b *Balancer) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	logging.Global.Infof("OIDC: Logging out")
-	setCookie(r, w, "session_token", "", -1)
-	http.Redirect(w, r, "/", http.StatusFound)
-}
-
-func (b *Balancer) SessionMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie("session_token")
-		if err != nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		tknStr := c.Value
-		claims := &Claims{}
-
-		tkn, err := jwt.ParseWithClaims(tknStr, claims, func(token *jwt.Token) (interface{}, error) {
-			return []byte(b.Config.JWTSecret), nil
-		})
-
-		if err != nil || !tkn.Valid {
-			setCookie(r, w, "session_token", "", -1)
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		user, err := b.Storage.GetUserByID(claims.UserID)
-		if err != nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		ctx := context.WithValue(r.Context(), auth.ContextKeyUser, user)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-func randString(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-func setCookie(r *http.Request, w http.ResponseWriter, name, value string, duration time.Duration) {
-	host := r.Header.Get("X-Forwarded-Host")
-	if host == "" {
-		host = r.Host
-	}
-
-	isLocal := strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1")
-	secure := (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https") && !isLocal
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Expires:  time.Now().Add(duration),
+		Name:     "flaky_session",
+		Value:    user.Sub,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		Secure:   false,
+		MaxAge:   86400 * 7,
 	})
+
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (b *Balancer) generateState() string {
+	b2 := make([]byte, 16)
+	rand.Read(b2)
+	return base64.URLEncoding.EncodeToString(b2)
 }

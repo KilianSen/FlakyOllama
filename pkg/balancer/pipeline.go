@@ -1,223 +1,47 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/balancer/state"
-	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"math/rand"
-	"strings"
-	"time"
 )
 
-// ResolveVirtualModel handles the initial resolution of a virtual model name to a real model.
-func (b *Balancer) ResolveVirtualModel(modelName string) (string, models.VirtualModelConfig, bool) {
-	config, ok := b.Config.VirtualModels[modelName]
-	if !ok {
-		return modelName, models.VirtualModelConfig{}, false
-	}
+func (b *Balancer) ExecutePipeline(ctx context.Context, initial models.ChatRequest, vConfig models.VirtualModelConfig, clientIP string) (string, error) {
+	currentOutput := ""
+	for i, step := range vConfig.Steps {
+		logging.Global.Infof("Executing pipeline step %d/%d: %s on %s", i+1, len(vConfig.Steps), step.Action, step.Model)
 
-	switch config.Type {
-	case "arena":
-		if len(config.Targets) > 0 {
-			target := config.Targets[rand.Intn(len(config.Targets))]
-			logging.Global.Infof("Virtual model %s (arena) resolved to %s", modelName, target)
-			return target, config, true
-		}
-	case "metric":
-		target := b.selectByMetric(config.Targets, config.Strategy)
-		logging.Global.Infof("Virtual model %s (metric:%s) resolved to %s", modelName, config.Strategy, target)
-		return target, config, true
-	case "pipeline":
-		// Pipelines are handled differently, but the first target is usually the default worker
-		if len(config.Targets) > 0 {
-			return config.Targets[0], config, true
-		}
-	}
-
-	return modelName, config, ok
-}
-
-func (b *Balancer) selectByMetric(targets []string, strategy string) string {
-	if len(targets) == 0 {
-		return ""
-	}
-
-	b.perfMu.RLock()
-	defer b.perfMu.RUnlock()
-
-	bestTarget := targets[0]
-
-	switch strategy {
-	case "fastest":
-		minLatency := 9999.0
-		for _, t := range targets {
-			// We look at the best performing node for this model
-			// This is a simplification; we could look at average across cluster
-			snapshot := b.State.GetSnapshot()
-			for _, a := range snapshot.Agents {
-				perf, ok := b.PerfCache[a.ID+":"+t]
-				if ok && perf.AvgLatency > 0 && perf.AvgLatency < minLatency {
-					minLatency = perf.AvgLatency
-					bestTarget = t
-				}
+		prompt := step.SystemPrompt + "\n\n" + currentOutput
+		if i == 0 {
+			// First step uses the actual user message
+			if len(initial.Messages) > 0 {
+				prompt = step.SystemPrompt + "\n\n" + initial.Messages[len(initial.Messages)-1].Content
 			}
 		}
-	case "cheapest":
-		minCost := 9999.0
-		for _, t := range targets {
-			cost := 1.0
-			if f, ok := b.Config.ModelCostFactors[t]; ok {
-				cost = f
-			}
-			if cost < minCost {
-				minCost = cost
-				bestTarget = t
-			}
-		}
-	case "most_reliable":
-		maxSuccess := -1.0
-		for _, t := range targets {
-			snapshot := b.State.GetSnapshot()
-			for _, a := range snapshot.Agents {
-				perf, ok := b.PerfCache[a.ID+":"+t]
-				if ok && perf.SuccessRate > maxSuccess {
-					maxSuccess = perf.SuccessRate
-					bestTarget = t
-				}
-			}
-		}
-	}
 
-	return bestTarget
-}
-
-// ExecutePipeline implements the recursive/multi-stage logic.
-func (b *Balancer) ExecutePipeline(ctx context.Context, req models.ChatRequest, config models.VirtualModelConfig, clientIP string) (string, error) {
-	// Snapshot config for surge
-	b.configMu.RLock()
-	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
-	b.configMu.RUnlock()
-
-	clientToken, _ := auth.GetTokenFromContext(ctx)
-
-	currentMessages := req.Messages
-	maxGlobalRetries := 3
-
-	for i := 0; i < maxGlobalRetries; i++ {
-		start := time.Now()
-		// Use the first target as the primary worker
-		workerModel := config.Targets[0]
-
-		// Track load for backing model
-		b.State.Do(func(s *state.ClusterState) {
-			s.PendingRequests[workerModel]++
-		})
-
-		// 1. Generate
-		workerReq := models.ChatRequest{
-			Model:    workerModel,
-			Messages: currentMessages,
-			Stream:   false, // We must buffer for pipelines to allow for checks
-			Options:  req.Options,
-			Priority: req.Priority,
+		req := models.ChatRequest{
+			Model: step.Model,
+			Messages: []models.ChatMessage{
+				{Role: "user", Content: prompt},
+			},
+			Stream: false,
 		}
 
-		body, _ := json.Marshal(workerReq)
-		resp, agentID, _, err := b.DoHedgedRequest(ctx, workerModel, "/chat", body, clientIP, true, req.Priority, "")
-
-		// Decrement load
-		b.State.Do(func(s *state.ClusterState) {
-			s.PendingRequests[workerModel]--
-		})
-
+		body, _ := json.Marshal(req)
+		resp, _, _, err := b.DoHedgedRequest(ctx, step.Model, "/chat", body, clientIP, false, 10, "")
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("pipeline step %d failed: %w", i, err)
 		}
+		defer resp.Body.Close()
 
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		duration := time.Since(start)
-
-		var ollamaResp struct {
-			Message         models.ChatMessage `json:"message"`
-			PromptEvalCount int                `json:"prompt_eval_count"`
-			EvalCount       int                `json:"eval_count"`
+		var res models.ChatResponse
+		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+			return "", fmt.Errorf("failed to decode pipeline step %d: %w", i, err)
 		}
-		if err := json.Unmarshal(bodyBytes, &ollamaResp); err != nil {
-			return "", fmt.Errorf("failed to decode worker response: %v", err)
-		}
-
-		// Capture usage for this step
-		go b.captureUsage(agentID, workerModel, ollamaResp.PromptEvalCount, ollamaResp.EvalCount, 0, duration, clientToken, surge)
-
-		workerOutput := ollamaResp.Message.Content
-
-		// 2. Check (if judge model is configured)
-		if config.JudgeModel != "" {
-			logging.Global.Infof("Pipeline: Judge %s evaluating output from %s (attempt %d)", config.JudgeModel, workerModel, i+1)
-
-			b.State.Do(func(s *state.ClusterState) {
-				s.PendingRequests[config.JudgeModel]++
-			})
-
-			judgePrompt := fmt.Sprintf("Evaluate the following response for correctness and quality.\nUser Prompt: %s\n\nModel Response: %s\n\nIf the response is good, reply with 'PASS'. If it needs correction, reply with 'FAIL: [REASON]'.",
-				req.Messages[len(req.Messages)-1].Content, workerOutput)
-
-			judgeReq := models.ChatRequest{
-				Model: config.JudgeModel,
-				Messages: []models.ChatMessage{
-					{Role: "user", Content: judgePrompt},
-				},
-			}
-
-			jStart := time.Now()
-			jBody, _ := json.Marshal(judgeReq)
-			jResp, jAgentID, _, jErr := b.DoHedgedRequest(ctx, config.JudgeModel, "/chat", jBody, clientIP, true, 0, "")
-
-			b.State.Do(func(s *state.ClusterState) {
-				s.PendingRequests[config.JudgeModel]--
-			})
-
-			if jErr == nil {
-				jBodyBytes, _ := io.ReadAll(jResp.Body)
-				jResp.Body.Close()
-				jDuration := time.Since(jStart)
-
-				var jOllamaResp struct {
-					Message         models.ChatMessage `json:"message"`
-					PromptEvalCount int                `json:"prompt_eval_count"`
-					EvalCount       int                `json:"eval_count"`
-				}
-				json.Unmarshal(jBodyBytes, &jOllamaResp)
-
-				// Capture usage for judge
-				go b.captureUsage(jAgentID, config.JudgeModel, jOllamaResp.PromptEvalCount, jOllamaResp.EvalCount, 0, jDuration, clientToken, surge)
-
-				judgeVerdict := strings.ToUpper(jOllamaResp.Message.Content)
-				if strings.Contains(judgeVerdict, "FAIL") {
-					logging.Global.Warnf("Pipeline: Judge failed output: %s", judgeVerdict)
-					// Recursive step: feed the failure back to the worker
-					currentMessages = append(currentMessages, models.ChatMessage{Role: "assistant", Content: workerOutput})
-					currentMessages = append(currentMessages, models.ChatMessage{Role: "user", Content: "Your previous answer was rejected by the grader: " + judgeVerdict + ". Please try again and fix the issues."})
-					continue
-				} else if strings.Contains(judgeVerdict, "PASS") {
-					logging.Global.Infof("Pipeline: Judge passed output")
-					return workerOutput, nil
-				} else {
-					// Ambiguous verdict, default to pass to avoid infinite loops if judge is uncooperative
-					logging.Global.Warnf("Pipeline: Ambiguous judge verdict: %s. Defaulting to PASS.", judgeVerdict)
-					return workerOutput, nil
-				}
-			}
-		}
-
-		return workerOutput, nil
+		currentOutput = res.Message.Content
 	}
 
-	return "", fmt.Errorf("pipeline failed after max retries")
+	return currentOutput, nil
 }

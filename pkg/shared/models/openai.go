@@ -27,6 +27,7 @@ type OpenAIChatResponse struct {
 	Created int64          `json:"created"`
 	Model   string         `json:"model"`
 	Choices []OpenAIChoice `json:"choices"`
+	Usage   *OpenAIUsage   `json:"usage,omitempty"`
 }
 
 type OpenAIChoice struct {
