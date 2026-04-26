@@ -24,22 +24,22 @@ import (
 // Agent handles local telemetry and proxies requests to Ollama.
 type Agent struct {
 	ID               string
-	AgentKey         string // Identity for rewards
-	Address          string
-	EffectiveAddress string
+	AgentKey         string // The secret token for registration
+	Address          string // Listening address (e.g. 0.0.0.0:8081)
+	EffectiveAddress string // Publicly reachable address
 	BalancerURL      string
 	Monitor          *monitoring.Monitor
 	Ollama           *ollama.Client
 	Config           *config.Config
-	LogCh            chan models.LogEntry
-	stopCh           chan struct{}
-	httpServer       *http.Server
-
-	// Caching to prevent telemetry storms
 
 	lastStatus     models.NodeStatus
 	lastStatusTime time.Time
 	statusMu       sync.Mutex
+
+	LogCh  chan models.LogEntry
+	stopCh chan struct{}
+
+	httpServer *http.Server
 }
 
 func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *Agent {
@@ -72,8 +72,6 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 func (a *Agent) Register() error {
 	address := a.Address
 	if strings.HasPrefix(address, "0.0.0.0:") || strings.HasPrefix(address, ":") {
-		// If listening on all interfaces, register with the hostname
-		// In Docker, the hostname is usually the container ID which is resolvable
 		hostname, err := os.Hostname()
 		if err == nil {
 			_, port, _ := net.SplitHostPort(address)
@@ -140,6 +138,10 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux.HandleFunc("/telemetry", auth.Middleware([]string{token}, nil, a.HandleTelemetry))
 	mux.HandleFunc("/inference", auth.Middleware([]string{token}, nil, a.HandleInference))
 	mux.HandleFunc("/chat", auth.Middleware([]string{token}, nil, a.HandleChat))
+
+	// OpenAI Compatibility Routes (forward to Ollama native /v1)
+	mux.HandleFunc("/v1/", auth.Middleware([]string{token}, nil, a.HandleV1Proxy))
+
 	mux.HandleFunc("/show", auth.Middleware([]string{token}, nil, a.HandleShow))
 	mux.HandleFunc("/embeddings", auth.Middleware([]string{token}, nil, a.HandleEmbeddings))
 	mux.HandleFunc("/version", auth.Middleware([]string{token}, nil, a.HandleVersion))
@@ -238,6 +240,36 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	a.lastStatusTime = time.Now()
 
 	json.NewEncoder(w).Encode(status)
+}
+
+func (a *Agent) HandleV1Proxy(w http.ResponseWriter, r *http.Request) {
+	// Transparently forward OpenAI requests to Ollama's native /v1 endpoint
+	// This ensures SSE and OpenAI formatting are preserved
+	url := a.Ollama.BaseURL + r.URL.Path
+	if r.URL.RawQuery != "" {
+		url += "?" + r.URL.RawQuery
+	}
+
+	req, _ := http.NewRequest(r.Method, url, r.Body)
+	for k, v := range r.Header {
+		if k != "Authorization" && k != "Host" {
+			req.Header[k] = v
+		}
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
@@ -413,14 +445,12 @@ func (a *Agent) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	stream, code, err := a.Ollama.Create(req.Name, req.Modelfile)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
 	}
 	defer stream.Close()
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, stream)
@@ -435,7 +465,6 @@ func (a *Agent) HandleCopy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	code, err := a.Ollama.Copy(req.Source, req.Destination)
 	if err != nil {
 		http.Error(w, err.Error(), code)
@@ -452,24 +481,15 @@ func (a *Agent) HandlePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	stream, code, err := a.Ollama.Push(req.Name)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
 	}
 	defer stream.Close()
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, stream)
-}
-
-func (a *Agent) Ship(entry models.LogEntry) {
-	select {
-	case a.LogCh <- entry:
-	default:
-	}
 }
 
 func (a *Agent) StartLogShipper() {
@@ -477,10 +497,8 @@ func (a *Agent) StartLogShipper() {
 	if a.Config.TLS.Enabled {
 		scheme = "https"
 	}
-	// Use BalancerURL directly, but ensure scheme is correct
 	url := a.BalancerURL
 	if strings.Contains(url, "://") {
-		// Replace existing scheme
 		parts := strings.Split(url, "://")
 		url = scheme + "://" + parts[1]
 	} else {
@@ -504,7 +522,6 @@ func (a *Agent) StartLogShipper() {
 			req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
 
-			// Auth: Prefer AgentKey, fallback to RemoteToken
 			token := a.AgentKey
 			if token == "" {
 				token = a.Config.RemoteToken
@@ -521,5 +538,13 @@ func (a *Agent) StartLogShipper() {
 		case <-a.stopCh:
 			return
 		}
+	}
+}
+
+// LogSink implementation
+func (a *Agent) Ship(entry models.LogEntry) {
+	select {
+	case a.LogCh <- entry:
+	default:
 	}
 }

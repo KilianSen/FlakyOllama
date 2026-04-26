@@ -11,7 +11,7 @@ import (
 func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	var req models.OpenAIChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
@@ -27,10 +27,10 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(req)
-	// AGENT MAPPING: /v1/chat/completions -> /chat
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/chat", body, r.RemoteAddr, true, priority, contextHash)
+	// AGENT MAPPING: Use the transparent /v1/ proxy
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/v1/chat/completions", body, r.RemoteAddr, true, priority, contextHash)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -41,17 +41,17 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request) {
 	var req models.OpenAIEmbeddingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	body, _ := json.Marshal(req)
-	// AGENT MAPPING: /v1/embeddings -> /api/embeddings (Ollama standard)
-	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/api/embeddings", body, r.RemoteAddr, false, 10, "")
+	// AGENT MAPPING: Use the transparent /v1/ proxy
+	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/v1/embeddings", body, r.RemoteAddr, false, 10, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	defer resp.Body.Close()
