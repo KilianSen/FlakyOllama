@@ -74,6 +74,10 @@ func (c *Client) GetLoadedModels() ([]string, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ps failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
 
 	var result struct {
 		Models []struct {
@@ -98,6 +102,10 @@ func (c *Client) ListLocalModels() ([]models.ModelInfo, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("tags failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
 
 	var result struct {
 		Models []models.ModelInfo `json:"models"`
@@ -152,6 +160,10 @@ func (c *Client) Unload(model string) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unload failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
 	return nil
 }
 
@@ -163,6 +175,10 @@ func (c *Client) Show(model string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("show failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
 
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
@@ -180,6 +196,11 @@ func (c *Client) Embeddings(model string, input interface{}) (io.ReadCloser, int
 	if err != nil {
 		return nil, 0, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("embeddings failed: %s", string(respBody))
+	}
 	return resp.Body, resp.StatusCode, nil
 }
 
@@ -193,6 +214,11 @@ func (c *Client) Create(name, modelfile string) (io.ReadCloser, int, error) {
 	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/create", "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("create failed: %s", string(respBody))
 	}
 	return resp.Body, resp.StatusCode, nil
 }
@@ -209,6 +235,10 @@ func (c *Client) Copy(source, destination string) (int, error) {
 		return 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, fmt.Errorf("copy failed: %s", string(respBody))
+	}
 	return resp.StatusCode, nil
 }
 
@@ -222,6 +252,11 @@ func (c *Client) Push(name string) (io.ReadCloser, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("push failed: %s", string(respBody))
+	}
 	return resp.Body, resp.StatusCode, nil
 }
 
@@ -232,6 +267,10 @@ func (c *Client) Version() (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("version failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
 	var result struct {
 		Version string `json:"version"`
 	}
