@@ -504,6 +504,32 @@ func (b *Balancer) UpdateNodeByID(id string, update func(*models.NodeStatus)) {
 	})
 }
 
-func (b *Balancer) captureUsage(agentID, model string, body []byte, clientKey string, input, output int, surge float64) {
-	// ... logic to record usage in TokenCh
+func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, duration time.Duration, clientKey string, surge float64) {
+	rewardFactor := 1.0
+	if f, ok := b.Config.ModelRewardFactors[model]; ok {
+		rewardFactor = f
+	}
+	costFactor := 1.0
+	if f, ok := b.Config.ModelCostFactors[model]; ok {
+		costFactor = f
+	}
+
+	reward := float64(input+output) * 0.001 * rewardFactor * b.Config.GlobalRewardMultiplier
+	cost := float64(input+output) * 0.001 * costFactor * b.Config.GlobalCostMultiplier * surge
+
+	select {
+	case b.TokenCh <- tokenUsageEntry{
+		nodeID:    agentID,
+		model:     model,
+		input:     input,
+		output:    output,
+		reward:    reward,
+		cost:      cost,
+		ttft:      ttft.Milliseconds(),
+		duration:  duration.Milliseconds(),
+		clientKey: clientKey,
+	}:
+	default:
+		logging.Global.Warnf("TokenCh full, dropping usage metric for %s", model)
+	}
 }

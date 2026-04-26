@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // NodeState represents the health state of a node.
 type NodeState int
@@ -10,6 +13,19 @@ const (
 	StateDegraded           // Recent errors, scoring penalty applied
 	StateBroken             // Node unresponsive or critical error
 )
+
+func (s NodeState) String() string {
+	switch s {
+	case StateHealthy:
+		return "Healthy"
+	case StateDegraded:
+		return "Degraded"
+	case StateBroken:
+		return "Broken"
+	default:
+		return fmt.Sprintf("Unknown(%d)", s)
+	}
+}
 
 type NodeStatus struct {
 	ID             string             `json:"id"`
@@ -57,11 +73,12 @@ type ModelDetails struct {
 }
 
 type InferenceRequest struct {
-	Model    string                 `json:"model"`
-	Prompt   string                 `json:"prompt"`
-	Options  map[string]interface{} `json:"options"`
-	Stream   bool                   `json:"stream"`
-	Priority int                    `json:"priority"`
+	Model        string                 `json:"model"`
+	Prompt       string                 `json:"prompt"`
+	Options      map[string]interface{} `json:"options"`
+	Stream       bool                   `json:"stream"`
+	Priority     int                    `json:"priority"`
+	AllowHedging bool                   `json:"allow_hedging"`
 }
 
 type InferenceResponse struct {
@@ -80,11 +97,12 @@ type InferenceResponse struct {
 }
 
 type ChatRequest struct {
-	Model    string                 `json:"model"`
-	Messages []ChatMessage          `json:"messages"`
-	Options  map[string]interface{} `json:"options"`
-	Stream   bool                   `json:"stream"`
-	Priority int                    `json:"priority"`
+	Model        string                 `json:"model"`
+	Messages     []ChatMessage          `json:"messages"`
+	Options      map[string]interface{} `json:"options"`
+	Stream       bool                   `json:"stream"`
+	Priority     int                    `json:"priority"`
+	AllowHedging bool                   `json:"allow_hedging"`
 }
 
 type ChatMessage struct {
@@ -98,6 +116,10 @@ type ChatResponse struct {
 	Message    ChatMessage `json:"message"`
 	Done       bool        `json:"done"`
 	TotalDur   int64       `json:"total_duration"`
+}
+
+type TagsResponse struct {
+	Models []ModelInfo `json:"models"`
 }
 
 // RegisterRequest is sent by an Agent to the Balancer.

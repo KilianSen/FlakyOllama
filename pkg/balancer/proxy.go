@@ -128,35 +128,9 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		return
 	}
 
-	// Try to parse usage from the captured response (Ollama format)
-	go b.captureUsage(agentAddr, modelName, usageBuf.Bytes(), clientKey, ttft.Milliseconds(), duration.Milliseconds(), surge)
-
-	b.recordSuccess(agentAddr)
-	select {
-	case b.MetricCh <- metricEntry{agentAddr, modelName, duration, true}:
-	default:
-	}
-
-	agentID := agentAddr
-	b.State.Do(func(s *state.ClusterState) {
-		if a, ok := s.Agents[agentAddr]; ok {
-			agentID = a.ID
-		}
-		s.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
-	})
-
-	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
-	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(duration.Seconds())
-}
-
-func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey string, ttft, duration int64, surge float64) {
-	if len(body) == 0 {
-		return
-	}
-
-	var input, output int
-
-	// Try to unmarshal the entire body first (non-streaming or very small stream)
+	// Extract usage from buffer
+	body := usageBuf.Bytes()
+	input, output := 0, 0
 	var usage struct {
 		PromptEvalCount int `json:"prompt_eval_count"`
 		EvalCount       int `json:"eval_count"`
@@ -165,7 +139,7 @@ func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey strin
 		input = usage.PromptEvalCount
 		output = usage.EvalCount
 	} else {
-		// Streaming case: the usage is in the last JSON object of the stream.
+		// Streaming case
 		lastOpenBrace := -1
 		for i := len(body) - 1; i >= 0; i-- {
 			if body[i] == '{' {
@@ -181,62 +155,31 @@ func (b *Balancer) captureUsage(addr, model string, body []byte, clientKey strin
 						break
 					}
 				}
-				if len(body)-i > 2048 {
-					break
-				}
+				if len(body)-i > 2048 { break }
 			}
 		}
 	}
+
+	agentID := agentAddr
+	b.State.Do(func(s *state.ClusterState) {
+		if a, ok := s.Agents[agentAddr]; ok {
+			agentID = a.ID
+		}
+		s.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
+	})
 
 	if input > 0 || output > 0 {
-		agentID := addr
-		rewardKey := ""
-		agentUserID := ""
-		b.State.Do(func(s *state.ClusterState) {
-			if a, ok := s.Agents[addr]; ok {
-				agentID = a.ID
-				rewardKey = a.AgentKey
-				// We need to look up the agent user ID if it's linked
-				if ak, err := b.Storage.GetAgentKey(a.AgentKey); err == nil {
-					agentUserID = ak.UserID
-				}
-			}
-		})
-
-		// Reward (Agent)
-		rFactor := 1.0
-		if f, ok := b.Config.ModelRewardFactors[model]; ok {
-			rFactor = f
-		}
-		if agentUserID != "" {
-			p, _ := b.Storage.GetUserModelPolicy(agentUserID, model)
-			rFactor *= p.RewardFactor
-		}
-		reward := float64(input+output) * rFactor * b.Config.GlobalRewardMultiplier * surge
-
-		// Cost (Client)
-		cFactor := 1.0
-		if f, ok := b.Config.ModelCostFactors[model]; ok {
-			cFactor = f
-		}
-		// Look up client user ID from clientKey (token)
-		if ck, err := b.Storage.GetClientKey(clientKey); err == nil && ck.UserID != "" {
-			p, _ := b.Storage.GetUserModelPolicy(ck.UserID, model)
-			cFactor *= p.CostFactor
-		}
-		cost := float64(input+output) * cFactor * b.Config.GlobalCostMultiplier * surge
-
-		// For reward recording, we prefer the specific AgentKey if provided
-		trackingID := agentID
-		if rewardKey != "" {
-			trackingID = rewardKey
-		}
-
-		select {
-		case b.TokenCh <- tokenUsageEntry{trackingID, model, input, output, reward, cost, ttft, duration, clientKey}:
-		default:
-		}
+		go b.captureUsage(agentID, modelName, input, output, ttft, duration, clientKey, surge)
 	}
+
+	b.recordSuccess(agentAddr)
+	select {
+	case b.MetricCh <- metricEntry{agentAddr, modelName, duration, true}:
+	default:
+	}
+
+	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
+	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(duration.Seconds())
 }
 
 func (b *Balancer) recordError(addr string, reason string) {
