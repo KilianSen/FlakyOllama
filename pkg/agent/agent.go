@@ -31,9 +31,9 @@ type Agent struct {
 	Monitor          *monitoring.Monitor
 	Ollama           *ollama.Client
 	Config           *config.Config
-	LogCh      chan models.LogEntry
-	stopCh     chan struct{}
-	httpServer *http.Server
+	LogCh            chan models.LogEntry
+	stopCh           chan struct{}
+	httpServer       *http.Server
 
 	// Caching to prevent telemetry storms
 
@@ -129,18 +129,18 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("/telemetry", auth.Middleware(token, nil, a.HandleTelemetry))
-	mux.HandleFunc("/inference", auth.Middleware(token, nil, a.HandleInference))
-	mux.HandleFunc("/chat", auth.Middleware(token, nil, a.HandleChat))
-	mux.HandleFunc("/show", auth.Middleware(token, nil, a.HandleShow))
-	mux.HandleFunc("/embeddings", auth.Middleware(token, nil, a.HandleEmbeddings))
-	mux.HandleFunc("/version", auth.Middleware(token, nil, a.HandleVersion))
-	mux.HandleFunc("/models/create", auth.Middleware(token, nil, a.HandleCreate))
-	mux.HandleFunc("/models/copy", auth.Middleware(token, nil, a.HandleCopy))
-	mux.HandleFunc("/models/push", auth.Middleware(token, nil, a.HandlePush))
-	mux.HandleFunc("/models/pull", auth.Middleware(token, nil, a.HandlePull))
-	mux.HandleFunc("/models/unload", auth.Middleware(token, nil, a.HandleUnload))
-	mux.HandleFunc("/models/delete", auth.Middleware(token, nil, a.HandleDelete))
+	mux.HandleFunc("/telemetry", auth.Middleware([]string{token}, nil, a.HandleTelemetry))
+	mux.HandleFunc("/inference", auth.Middleware([]string{token}, nil, a.HandleInference))
+	mux.HandleFunc("/chat", auth.Middleware([]string{token}, nil, a.HandleChat))
+	mux.HandleFunc("/show", auth.Middleware([]string{token}, nil, a.HandleShow))
+	mux.HandleFunc("/embeddings", auth.Middleware([]string{token}, nil, a.HandleEmbeddings))
+	mux.HandleFunc("/version", auth.Middleware([]string{token}, nil, a.HandleVersion))
+	mux.HandleFunc("/models/create", auth.Middleware([]string{token}, nil, a.HandleCreate))
+	mux.HandleFunc("/models/copy", auth.Middleware([]string{token}, nil, a.HandleCopy))
+	mux.HandleFunc("/models/push", auth.Middleware([]string{token}, nil, a.HandlePush))
+	mux.HandleFunc("/models/pull", auth.Middleware([]string{token}, nil, a.HandlePull))
+	mux.HandleFunc("/models/unload", auth.Middleware([]string{token}, nil, a.HandleUnload))
+	mux.HandleFunc("/models/delete", auth.Middleware([]string{token}, nil, a.HandleDelete))
 
 	return mux
 }

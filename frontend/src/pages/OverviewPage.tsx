@@ -43,8 +43,8 @@ export const OverviewPage: React.FC = () => {
 
   const vramData = useMemo(() => nodes.map(n => ({
     name: n.id.split('-').pop() ?? n.id,
-    used: parseFloat(((n.has_gpu ? n.vram_used : (n.memory_usage / 100 * n.memory_total)) / 1e9).toFixed(1)),
-    total: parseFloat(((n.has_gpu ? n.vram_total : n.memory_total) / 1e9).toFixed(1)),
+    used: parseFloat(((n.has_gpu ? (n.vram_used || 0) : ((n.memory_usage || 0) / 100 * (n.memory_total || 0))) / 1e9).toFixed(1)),
+    total: parseFloat(((n.has_gpu ? (n.vram_total || 0) : (n.memory_total || 0)) / 1e9).toFixed(1)),
     isGPU: n.has_gpu
   })).map(d => ({
     ...d,
@@ -53,8 +53,8 @@ export const OverviewPage: React.FC = () => {
 
   const cpuData = useMemo(() => nodes.map(n => ({
     name: n.id.split('-').pop() ?? n.id,
-    cpu: parseFloat(n.cpu_usage.toFixed(1)),
-    mem: parseFloat(n.memory_usage.toFixed(1)),
+    cpu: parseFloat((n.cpu_usage || 0).toFixed(1)),
+    mem: parseFloat((n.memory_usage || 0).toFixed(1)),
   })), [nodes]);
 
   const clusterTotalRAM = nodes.reduce((acc, n) => acc + (n.memory_total || 0), 0);
@@ -70,8 +70,8 @@ export const OverviewPage: React.FC = () => {
     },
     {
       title: 'Accelerator (VRAM)',
-      value: formatBytes(status.total_vram),
-      sub: `${formatBytes(status.used_vram)} in use`,
+      value: formatBytes(status.total_vram || 0),
+      sub: `${formatBytes(status.used_vram || 0)} in use`,
       icon: Zap,
       color: 'text-purple-400',
     },

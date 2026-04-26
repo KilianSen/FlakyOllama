@@ -55,7 +55,7 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 2. Fall back to Token Middleware (API Keys / Master Token)
-		auth.Middleware(b.Config.AuthToken, b.Storage, next.ServeHTTP).ServeHTTP(w, r)
+		auth.Middleware([]string{b.Config.AuthToken, b.Config.RemoteToken}, b.Storage, next.ServeHTTP).ServeHTTP(w, r)
 	})
 }
 

@@ -86,6 +86,15 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 		OIDCEnabled:            b.Config.OIDC.Enabled,
 		QueueDepth:             b.Queue.QueueDepth(),
 		NodeWorkloads:          snap.NodeWorkloads,
+		UptimeSeconds:          int64(time.Since(b.startTime).Seconds()),
+	}
+
+	// Calculate Aggregate VRAM
+	for _, n := range snap.Agents {
+		if n.State != models.StateBroken && !n.Draining {
+			status.TotalVRAM += n.VRAMTotal
+			status.UsedVRAM += n.VRAMUsed
+		}
 	}
 
 	// Mask Node IPs for non-admins
@@ -550,6 +559,29 @@ func (b *Balancer) HandleV1ConfigUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "config updated"})
+}
+
+func (b *Balancer) HandleV1LogCollect(w http.ResponseWriter, r *http.Request) {
+	var entry models.LogEntry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid log entry")
+		return
+	}
+
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+
+	// Record to DB
+	if err := b.Storage.RecordLog(entry.NodeID, string(entry.Level), entry.Component, entry.Message); err != nil {
+		logging.Global.Debugf("Failed to record log to DB: %v", err)
+	}
+
+	// Broadcast to live loggers
+	data, _ := json.Marshal(entry)
+	b.broadcastLog(string(data))
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (b *Balancer) jsonResponse(w http.ResponseWriter, code int, payload interface{}) {

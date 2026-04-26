@@ -24,16 +24,10 @@ type KeyManager interface {
 
 // Middleware checks for a Bearer token in the Authorization header or query param.
 // It prioritizes OIDC sessions from SessionMiddleware if present.
-func Middleware(token string, km KeyManager, next http.HandlerFunc) http.HandlerFunc {
-	token = strings.TrimSpace(token)
+func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Always allow OPTIONS to pass through (CORS)
 		if r.Method == "OPTIONS" {
-			next(w, r)
-			return
-		}
-
-		if token == "" && km == nil {
 			next(w, r)
 			return
 		}
@@ -71,19 +65,21 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 			return
 		}
 
-		// 1. Check against master token
-		if token != "" && receivedToken == token {
-			ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
-			// Master admin gets max priority and Admin status
-			masterKey := models.ClientKey{Key: token, Label: "Master Admin", Credits: 999999999, QuotaLimit: -1, Active: true}
-			ctx = context.WithValue(ctx, ContextKeyClientData, masterKey)
+		// 1. Check against master tokens
+		for _, token := range masterTokens {
+			if token != "" && receivedToken == token {
+				ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
+				// Master admin gets max priority and Admin status
+				masterKey := models.ClientKey{Key: token, Label: "Master Auth", Credits: 999999999, QuotaLimit: -1, Active: true}
+				ctx = context.WithValue(ctx, ContextKeyClientData, masterKey)
 
-			// Inject virtual admin user so AdminOnly middleware passes
-			virtualAdmin := models.User{ID: "system_admin", Email: "admin@system", IsAdmin: true, QuotaLimit: -1}
-			ctx = context.WithValue(ctx, ContextKeyUser, virtualAdmin)
+				// Inject virtual admin user so AdminOnly middleware passes
+				virtualAdmin := models.User{ID: "system_admin", Email: "admin@system", IsAdmin: true, QuotaLimit: -1}
+				ctx = context.WithValue(ctx, ContextKeyUser, virtualAdmin)
 
-			next(w, r.WithContext(ctx))
-			return
+				next(w, r.WithContext(ctx))
+				return
+			}
 		}
 
 		// 2. Check against KeyManager (database)
@@ -137,10 +133,6 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 		logging.Global.Warnf("Auth failure: Invalid token for %s %s", r.Method, r.URL.Path)
 		http.Error(w, "Invalid or missing token", http.StatusUnauthorized)
 	}
-}
-
-func WithKeyManager(km KeyManager, next http.HandlerFunc) http.HandlerFunc {
-	return Middleware("", km, next)
 }
 
 func GetTokenFromContext(ctx context.Context) (string, bool) {

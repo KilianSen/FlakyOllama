@@ -175,8 +175,8 @@ export const RegistryPage: React.FC = () => {
                              <TrendingUp size={10} />
                              {(n.reputation || 1.0).toFixed(1)}
                            </div>
-                           <Badge variant="outline" className={`text-[8px] font-bold h-3.5 px-1 border-border/30 ${n.vram_total > 0 && (n.vram_used/n.vram_total) > 0.8 ? 'text-red-400' : 'opacity-60'}`}>
-                             {n.vram_total > 0 ? `${((n.vram_used / n.vram_total) * 100).toFixed(0)}%` : 'CPU'}
+                           <Badge variant="outline" className={`text-[8px] font-bold h-3.5 px-1 border-border/30 ${n.vram_total > 0 && ((n.vram_used || 0) / n.vram_total) > 0.8 ? 'text-red-400' : 'opacity-60'}`}>
+                             {n.vram_total > 0 ? `${(((n.vram_used || 0) / n.vram_total) * 100).toFixed(0)}%` : 'CPU'}
                            </Badge>
                         </div>
                       </div>

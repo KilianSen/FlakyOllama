@@ -37,13 +37,14 @@ type tokenUsageEntry struct {
 }
 
 type Balancer struct {
-	addr     string
-	Config   *config.Config
-	configMu sync.RWMutex
-	Storage  *SQLiteStorage
-	State    *Actor
-	Queue    *RequestQueue
-	Jobs     *JobManager
+	addr      string
+	startTime time.Time
+	Config    *config.Config
+	configMu  sync.RWMutex
+	Storage   *SQLiteStorage
+	State     *Actor
+	Queue     *RequestQueue
+	Jobs      *JobManager
 
 	// Caches
 	perfCache map[string]struct {
@@ -71,12 +72,13 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 	}
 
 	b := &Balancer{
-		addr:    addr,
-		Config:  cfg,
-		Storage: s,
-		State:   NewActor(),
-		Queue:   NewRequestQueue(),
-		Jobs:    NewJobManager(),
+		addr:      addr,
+		startTime: time.Now(),
+		Config:    cfg,
+		Storage:   s,
+		State:     NewActor(),
+		Queue:     NewRequestQueue(),
+		Jobs:      NewJobManager(),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Minute, // Long timeout for large models
 		},
@@ -138,6 +140,7 @@ func (b *Balancer) SetupRoutes() http.Handler {
 		r.Post("/pull", b.HandleV1ModelPull)
 		r.Delete("/delete", b.HandleV1ModelDelete)
 		r.Post("/embeddings", b.HandleOllamaEmbeddings)
+		r.Post("/log/collect", b.HandleV1LogCollect)
 	})
 
 	// Management API

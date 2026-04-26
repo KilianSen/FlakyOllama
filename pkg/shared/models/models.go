@@ -232,6 +232,9 @@ type ClusterStatus struct {
 	TotalOutputTokens int64                  `json:"total_output_tokens"`
 	TotalReward       float64                `json:"total_reward"`
 	TotalCost         float64                `json:"total_cost"`
+	UptimeSeconds     int64                  `json:"uptime_seconds"`
+	TotalVRAM         uint64                 `json:"total_vram"`
+	UsedVRAM          uint64                 `json:"used_vram"`
 	Performance       map[string]struct {
 		AvgTTFT     float64 `json:"avg_ttft_ms"`
 		AvgDuration float64 `json:"avg_duration_ms"`

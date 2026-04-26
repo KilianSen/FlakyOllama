@@ -33,6 +33,7 @@ const baseNavItems = [
 ];
 
 function formatUptime(s: number) {
+  if (!s || isNaN(s)) return '0h 0m';
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return `${h}h ${m}m`;

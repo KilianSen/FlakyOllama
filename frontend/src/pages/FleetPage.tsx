@@ -109,9 +109,9 @@ export const FleetPage: React.FC = () => {
                   <TableCell>
                     <div className="w-28 space-y-1">
                       <div className="flex justify-between text-[9px] font-black text-muted-foreground">
-                        <span>{node.cpu_cores}c</span><span>{node.cpu_usage.toFixed(0)}%</span>
+                        <span>{node.cpu_cores || 0}c</span><span>{(node.cpu_usage || 0).toFixed(0)}%</span>
                       </div>
-                      <Progress value={node.cpu_usage} className="h-1" />
+                      <Progress value={node.cpu_usage || 0} className="h-1" />
                     </div>
                   </TableCell>
                   <TableCell>
@@ -119,16 +119,16 @@ export const FleetPage: React.FC = () => {
                       {node.has_gpu ? (
                         <>
                           <div className="flex justify-between text-[9px] font-black text-muted-foreground">
-                            <span>VRAM</span><span>{formatBytes(node.vram_used)}/{formatBytes(node.vram_total)}</span>
+                            <span>VRAM</span><span>{formatBytes(node.vram_used || 0)}/{formatBytes(node.vram_total || 0)}</span>
                           </div>
-                          <Progress value={node.vram_total > 0 ? (node.vram_used / node.vram_total) * 100 : 0} className="h-1" />
+                          <Progress value={node.vram_total > 0 ? ((node.vram_used || 0) / node.vram_total) * 100 : 0} className="h-1" />
                         </>
                       ) : (
                         <>
                           <div className="flex justify-between text-[9px] font-black text-muted-foreground">
-                            <span>MEM</span><span>{node.memory_usage.toFixed(0)}%</span>
+                            <span>MEM</span><span>{(node.memory_usage || 0).toFixed(0)}%</span>
                           </div>
-                          <Progress value={node.memory_usage} className="h-1" />
+                          <Progress value={node.memory_usage || 0} className="h-1" />
                         </>
                       )}
                     </div>
