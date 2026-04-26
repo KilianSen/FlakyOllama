@@ -109,7 +109,7 @@ export const PublicPortal: React.FC = () => {
                     Quota Consumption
                   </div>
                   <p className="text-sm font-black">
-                    {profile.client_keys[0]?.quota_used.toLocaleString()} Tokens
+                    {(profile.client_keys?.[0]?.quota_used || 0).toLocaleString()} Tokens
                   </p>
                 </div>
 
@@ -119,7 +119,7 @@ export const PublicPortal: React.FC = () => {
                     Current Balance
                   </div>
                   <p className="text-sm font-black text-emerald-400">
-                    {(profile.client_keys[0]?.credits || 0).toLocaleString()} φ
+                    {(profile.client_keys?.[0]?.credits || 0).toLocaleString()} φ
                   </p>
                 </div>
               </div>

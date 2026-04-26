@@ -175,7 +175,7 @@ func (s *SQLiteStorage) ListModelRequests(status string) ([]models.ModelRequest,
 	}
 	defer rows.Close()
 
-	var reqs []models.ModelRequest
+	reqs := make([]models.ModelRequest, 0)
 	for rows.Next() {
 		var req models.ModelRequest
 		var approvedAt sql.NullTime
@@ -353,7 +353,7 @@ func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var keys []models.ClientKey
+	keys := make([]models.ClientKey, 0)
 	for rows.Next() {
 		var k models.ClientKey
 		var userID sql.NullString
@@ -401,7 +401,7 @@ func (s *SQLiteStorage) ListUsers() ([]models.User, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var users []models.User
+	users := make([]models.User, 0)
 	for rows.Next() {
 		var u models.User
 		if err := rows.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed); err != nil {
@@ -418,7 +418,7 @@ func (s *SQLiteStorage) GetClientKeysByUserID(userID string) ([]models.ClientKey
 		return nil, err
 	}
 	defer rows.Close()
-	var keys []models.ClientKey
+	keys := make([]models.ClientKey, 0)
 	for rows.Next() {
 		var k models.ClientKey
 		var uid sql.NullString
@@ -468,7 +468,9 @@ func (s *SQLiteStorage) CreateAgentKey(k models.AgentKey) error {
 func (s *SQLiteStorage) NormalizeReputation(amount float64) error {
 	// Drift up toward 1.0
 	_, err := s.db.Exec(`UPDATE agent_keys SET reputation = MIN(1.0, reputation + ?) WHERE reputation < 1.0`, amount)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	// Drift down toward 1.0
 	_, err = s.db.Exec(`UPDATE agent_keys SET reputation = MAX(1.0, reputation - ?) WHERE reputation > 1.0`, amount)
 	return err
@@ -497,7 +499,7 @@ func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var keys []models.AgentKey
+	keys := make([]models.AgentKey, 0)
 	for rows.Next() {
 		var k models.AgentKey
 		var userID sql.NullString
@@ -518,7 +520,7 @@ func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, 
 		return nil, err
 	}
 	defer rows.Close()
-	var keys []models.AgentKey
+	keys := make([]models.AgentKey, 0)
 	for rows.Next() {
 		var k models.AgentKey
 		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &k.UserID, &k.Status); err != nil {
@@ -571,7 +573,7 @@ func (s *SQLiteStorage) ListUserModelPolicies(userID string) ([]models.UserModel
 		return nil, err
 	}
 	defer rows.Close()
-	var policies []models.UserModelPolicy
+	policies := make([]models.UserModelPolicy, 0)
 	for rows.Next() {
 		var p models.UserModelPolicy
 		if err := rows.Scan(&p.UserID, &p.Model, &p.RewardFactor, &p.CostFactor, &p.Disabled); err != nil {
@@ -623,13 +625,13 @@ func (s *SQLiteStorage) GetRecentLogs(limit int) ([]struct {
 	}
 	defer rows.Close()
 
-	var logs []struct {
+	logs := make([]struct {
 		Timestamp time.Time
 		NodeID    string
 		Level     string
 		Component string
 		Message   string
-	}
+	}, 0)
 	for rows.Next() {
 		var l struct {
 			Timestamp time.Time
@@ -672,7 +674,7 @@ func (s *SQLiteStorage) SearchLogs(limit int, nodeID, level, query string) ([]mo
 	}
 	defer rows.Close()
 
-	var logs []models.LogEntry
+	logs := make([]models.LogEntry, 0)
 	for rows.Next() {
 		var l models.LogEntry
 		if err := rows.Scan(&l.Timestamp, &l.NodeID, &l.Level, &l.Component, &l.Message); err != nil {

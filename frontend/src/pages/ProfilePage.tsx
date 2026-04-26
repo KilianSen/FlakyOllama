@@ -88,7 +88,9 @@ const ProfilePage = () => {
 
   if (!profile) return null;
 
-  const { user, client_keys: keys, agent_keys: agents } = profile;
+  const { user, client_keys: rawKeys, agent_keys: rawAgents } = profile;
+  const keys = rawKeys || [];
+  const agents = rawAgents || [];
   const globalQuotaPercent = user.quota_limit > 0 ? (user.quota_used / user.quota_limit) * 100 : 0;
   const isOverGlobalQuota = user.quota_limit > 0 && user.quota_used >= user.quota_limit;
 
