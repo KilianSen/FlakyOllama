@@ -3,7 +3,7 @@ import { useCluster } from './ClusterContext';
 import {
   LayoutDashboard, Server, Database, Terminal, ScrollText,
   Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare, Key,
-  User as UserIcon, LogOut, Shield,
+  User as UserIcon, LogOut, Shield, UserCog,
 } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
