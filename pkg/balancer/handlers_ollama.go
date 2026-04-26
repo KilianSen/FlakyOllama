@@ -141,15 +141,28 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ak, err := b.Storage.GetAgentKey(status.AgentKey)
-	if err != nil || !ak.Active {
-		logging.Global.Warnf("Registration attempt with invalid/inactive key: %s from %s", status.AgentKey, status.Address)
-		http.Error(w, "Invalid agent key", http.StatusForbidden)
-		return
+	// 1. Check Global System Key
+	isGlobal := b.Config.RemoteToken != "" && status.AgentKey == b.Config.RemoteToken
+	nodeID := ""
+
+	if isGlobal {
+		nodeID = status.ID
+		if nodeID == "" {
+			nodeID = "agent-" + b.computeHash(status.Address)[:8]
+		}
+	} else {
+		// 2. Fall back to Individual Agent Keys (Database)
+		ak, err := b.Storage.GetAgentKey(status.AgentKey)
+		if err != nil || !ak.Active {
+			logging.Global.Warnf("Registration attempt with invalid/inactive key: %s from %s", status.AgentKey, status.Address)
+			http.Error(w, "Invalid agent key", http.StatusForbidden)
+			return
+		}
+		nodeID = ak.NodeID
 	}
 
 	// Update State
-	status.ID = ak.NodeID
+	status.ID = nodeID
 	status.LastSeen = time.Now()
 
 	b.State.Do(func(s *ClusterState) {
