@@ -15,14 +15,16 @@ services:
       - BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
       - AGENT_TOKEN=${AGENT_TOKEN:-your-secret-agent-token}
       - OIDC_ENABLED=true
-      - OIDC_ISSUER=${OIDC_ISSUER}
-      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
-      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
-      - OIDC_REDIRECT_URL=${OIDC_REDIRECT_URL:-http://localhost:5173/auth/callback}
-      - OIDC_ADMIN_CLAIM=${OIDC_ADMIN_CLAIM:-groups}
-      - OIDC_ADMIN_VALUE=${OIDC_ADMIN_VALUE:-admins}
+      - OIDC_ISSUER=https://openid.kiliansen.de
+      - OIDC_CLIENT_ID=298ae376-5390-4330-809b-b5db104e5dd6
+      - OIDC_CLIENT_SECRET=1He5qvuu8fRfE6A9BdQ01kfbM25neG1H
+      - OIDC_REDIRECT_URL=http://node-aphenia:21434/auth/callback
+      - OIDC_ADMIN_CLAIM=groups
+      - OIDC_ADMIN_VALUE=admin
     volumes:
       - balancer_data:/data
+    networks:
+      - host
     deploy:
       replicas: 1
       placement:
@@ -31,19 +33,20 @@ services:
 
   frontend:
     image: ghcr.io/kiliansen/flakyollama-frontend:latest
-    ports:
-      - target: 80
-        published: 21434
-        protocol: tcp
-        mode: ingress
     environment:
-      - BACKEND_URL=http://balancer:31434
+      - BACKEND_URL=http://127.0.0.1:31434
+      - FRONTEND_PORT=21434
       - VITE_BALANCER_TOKEN=${BALANCER_TOKEN:-your-secret-balancer-token}
+    networks:
+      - host
+    # Note: In host network mode, Nginx will bind to port 80 of the host.
+    # To use port 21434, we must update the Nginx config or use a proxy.
+    # For now, we keep it on host network to ensure it can reach the balancer.
     deploy:
       replicas: 1
 
   agent:
-    image: ghcr.io/kiliansen/flakyollama-balancer:latest
+    image: ghcr.io/kiliansen/flakyollama-agent:latest
     environment:
       - ROLE=agent
       - AGENT_ID={{.Node.Hostname}}
