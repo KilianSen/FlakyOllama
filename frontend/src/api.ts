@@ -7,6 +7,10 @@ const getBaseUrl = () => {
 
 const getToken = () => localStorage.getItem('BALANCER_TOKEN') || import.meta.env.VITE_BALANCER_TOKEN || '';
 
+export const setToken = (t: string) => {
+  localStorage.setItem('BALANCER_TOKEN', t);
+};
+
 export interface NodeStatus {
   id: string;
   address: string;
@@ -129,7 +133,7 @@ export interface Catalog {
 
 export interface ProfileResponse {
   user: User;
-  client_key: ClientKey; 
+  client_keys: ClientKey[]; 
   agent_keys: AgentKey[];
 }
 
@@ -139,6 +143,8 @@ export interface User {
   email: string;
   name: string;
   is_admin: boolean;
+  quota_limit: number;
+  quota_used: number;
 }
 
 export interface UserWithKey {

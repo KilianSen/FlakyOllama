@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { 
-  Key, User as UserIcon, Shield, Copy, Check, Info, 
-  Zap, Database, Activity, RefreshCw, Server, Plus, X
+  Key, User as UserIcon, Shield, Copy, Check, 
+  Zap, RefreshCw, Server, Plus
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -9,11 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import sdk, { type ProfileResponse } from '@/api';
+import sdk, { type ProfileResponse, setToken, type ClientKey, type AgentKey } from '@/api';
 
 const ProfilePage = () => {
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
@@ -29,7 +28,14 @@ const ProfilePage = () => {
   const load = () => {
     setIsLoading(true);
     sdk.getMe()
-      .then(setProfile)
+      .then(res => {
+        setProfile(res);
+        // Auto-set the first active key for Playground/Chat if none is set
+        if (res.client_keys && res.client_keys.length > 0 && !localStorage.getItem('BALANCER_TOKEN')) {
+           const activeKey = res.client_keys.find(k => k.active && k.status === 'active');
+           if (activeKey) setToken(activeKey.key);
+        }
+      })
       .catch(err => toast.error('Failed to load profile: ' + err.message))
       .finally(() => setIsLoading(false));
   };
@@ -189,7 +195,7 @@ const ProfilePage = () => {
           </div>
 
           <div className="grid gap-3">
-            {keys.map((k) => {
+            {keys.map((k: ClientKey) => {
               const keyPercent = k.quota_limit > 0 ? (k.quota_used / k.quota_limit) * 100 : 0;
               return (
                 <Card key={k.key} className="bg-card/30 border-border/40 hover:border-primary/30 transition-colors group">
@@ -247,7 +253,7 @@ const ProfilePage = () => {
         </div>
         
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {agents.map((ak) => (
+          {agents.map((ak: AgentKey) => (
             <Card key={ak.key} className="border-border/40 bg-card/30 backdrop-blur-sm group overflow-hidden">
               <CardHeader className="p-4 pb-2">
                 <div className="flex items-center justify-between">
