@@ -8,8 +8,9 @@ import (
 )
 
 func (b *Balancer) StartLogBroadcaster() {
-	ticker := time.NewTicker(30 * time.Second)
 	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
 			case entry := <-b.LogCh:
@@ -32,7 +33,6 @@ func (b *Balancer) StartLogBroadcaster() {
 				})
 				b.broadcastLog(string(heartbeat))
 			case <-b.stopCh:
-				ticker.Stop()
 				return
 			}
 		}
@@ -104,14 +104,14 @@ func (b *Balancer) flushTokenBatch(batch []tokenUsageEntry) {
 }
 
 func (b *Balancer) StartPerfCacheRefresher() {
-	ticker := time.NewTicker(5 * time.Second)
 	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				b.refreshPerfCache()
 			case <-b.stopCh:
-				ticker.Stop()
 				return
 			}
 		}
@@ -156,7 +156,9 @@ func (b *Balancer) ProcessQueue() {
 		return
 	}
 
-	for b.Queue.QueueDepth() > 0 {
+	// Limit processing to prevent infinite loops if something keeps failing
+	depth := b.Queue.QueueDepth()
+	for i := 0; i < depth; i++ {
 		req := b.Queue.Pop()
 		if req == nil {
 			break
@@ -164,7 +166,8 @@ func (b *Balancer) ProcessQueue() {
 
 		addr, err := b.SelectAgent(req.Request.Model)
 		if err != nil {
-			req.Response <- QueuedResponse{Err: err}
+			// If we can't schedule it yet, push it back
+			b.Queue.Push(req.Request, req.Priority, req.ClientIP, req.ContextHash, req.Ctx)
 			continue
 		}
 
@@ -189,8 +192,6 @@ func (b *Balancer) ProcessBackgroundRequests() {
 
 		body, _ := json.Marshal(map[string]string{"name": r.Model})
 
-		// If nodeID is empty, broadcast to all or let routing pick?
-		// For now, if nodeID is specified, send to that node
 		if r.NodeID != "" {
 			var addr string
 			b.State.View(func(s ClusterState) {
@@ -202,7 +203,21 @@ func (b *Balancer) ProcessBackgroundRequests() {
 				}
 			})
 			if addr != "" {
-				go b.sendToAgent(addr, path, body)
+				// Manually increment workload for background task
+				b.State.Do(func(s *ClusterState) {
+					s.NodeWorkloads[addr]++
+				})
+				go func(a, p string, d []byte) {
+					resp, err := b.sendToAgent(a, p, d)
+					if err == nil {
+						resp.Body.Close()
+					} else {
+						// Decrement workload on failure since Close() won't be called
+						b.State.Do(func(s *ClusterState) {
+							s.NodeWorkloads[a]--
+						})
+					}
+				}(addr, path, body)
 			}
 		}
 

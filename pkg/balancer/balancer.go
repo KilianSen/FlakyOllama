@@ -98,9 +98,7 @@ func (b *Balancer) SetupRoutes() http.Handler {
 
 	// OpenAI Routes
 	r.Route("/v1", func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler {
-			return b.AuthMiddleware(next.ServeHTTP)
-		})
+		r.Use(b.AuthMiddleware)
 		r.Post("/chat/completions", b.HandleOpenAIChat)
 		r.Post("/completions", b.HandleGenerate)
 		r.Get("/models", b.HandleV1Models)
@@ -109,9 +107,7 @@ func (b *Balancer) SetupRoutes() http.Handler {
 
 	// Ollama Routes
 	r.Route("/api", func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler {
-			return b.AuthMiddleware(next.ServeHTTP)
-		})
+		r.Use(b.AuthMiddleware)
 		r.Post("/generate", b.HandleGenerate)
 		r.Post("/chat", b.HandleChat)
 		r.Post("/tags", b.HandleV1Tags)
@@ -123,11 +119,10 @@ func (b *Balancer) SetupRoutes() http.Handler {
 
 	// Management API
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler {
-			return b.AuthMiddleware(next.ServeHTTP)
-		})
+		r.Use(b.AuthMiddleware)
 
 		r.Get("/catalog", b.HandleV1Catalog)
+
 		r.Get("/me", b.HandleV1Me)
 		r.Get("/status", b.HandleV1ClusterStatus)
 		r.Get("/nodes", b.HandleV1Nodes)

@@ -50,7 +50,18 @@ func (b *Balancer) sendToAgentWithContext(ctx context.Context, addr, path string
 	if b.Config.RemoteToken != "" {
 		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
 	}
-	return b.httpClient.Do(req)
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap body to track workload completion
+	resp.Body = &workloadBody{
+		ReadCloser: resp.Body,
+		b:          b,
+		addr:       addr,
+	}
+	return resp, nil
 }
 
 type ttftTrackingReader struct {

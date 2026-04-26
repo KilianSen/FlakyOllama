@@ -74,9 +74,14 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 		// 1. Check against master token
 		if token != "" && receivedToken == token {
 			ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
-			// Master admin gets max priority
+			// Master admin gets max priority and Admin status
 			masterKey := models.ClientKey{Key: token, Label: "Master Admin", Credits: 999999999, QuotaLimit: -1, Active: true}
 			ctx = context.WithValue(ctx, ContextKeyClientData, masterKey)
+
+			// Inject virtual admin user so AdminOnly middleware passes
+			virtualAdmin := models.User{ID: "system_admin", Email: "admin@system", IsAdmin: true, QuotaLimit: -1}
+			ctx = context.WithValue(ctx, ContextKeyUser, virtualAdmin)
+
 			next(w, r.WithContext(ctx))
 			return
 		}
@@ -104,6 +109,15 @@ func Middleware(token string, km KeyManager, next http.HandlerFunc) http.Handler
 
 				ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
 				ctx = context.WithValue(ctx, ContextKeyClientData, ck)
+
+				// 3. Populate User context if linked
+				if ck.UserID != "" {
+					u, err := km.GetUserByID(ck.UserID)
+					if err == nil {
+						ctx = context.WithValue(ctx, ContextKeyUser, u)
+					}
+				}
+
 				next(w, r.WithContext(ctx))
 				return
 			}

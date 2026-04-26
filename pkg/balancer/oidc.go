@@ -12,8 +12,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func (b *Balancer) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Check Session Cookie (OIDC)
 		cookie, err := r.Cookie("flaky_session")
 		if err == nil {
@@ -31,9 +31,10 @@ func (b *Balancer) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		// 2. Fall back to Token Middleware (API Keys)
-		auth.Middleware(b.Config.AuthToken, b.Storage, next).ServeHTTP(w, r)
-	}
+		// 2. Fall back to Token Middleware (API Keys / Master Token)
+		// We use the shared auth logic but wrap it to match chi middleware signature
+		auth.Middleware(b.Config.AuthToken, b.Storage, next.ServeHTTP).ServeHTTP(w, r)
+	})
 }
 
 func (b *Balancer) HandleOIDCLogin(w http.ResponseWriter, r *http.Request) {

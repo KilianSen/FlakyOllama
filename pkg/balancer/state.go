@@ -61,6 +61,15 @@ func (a *Actor) GetSnapshot() ClusterState {
 
 	for k, v := range a.state.Agents {
 		nodeCopy := *v
+		// Deep copy slices
+		if v.ActiveModels != nil {
+			nodeCopy.ActiveModels = make([]string, len(v.ActiveModels))
+			copy(nodeCopy.ActiveModels, v.ActiveModels)
+		}
+		if v.LocalModels != nil {
+			nodeCopy.LocalModels = make([]models.ModelInfo, len(v.LocalModels))
+			copy(nodeCopy.LocalModels, v.LocalModels)
+		}
 		snap.Agents[k] = &nodeCopy
 	}
 	for k, v := range a.state.PendingRequests {
