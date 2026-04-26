@@ -99,11 +99,11 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 func (b *Balancer) Init() {
 	// Security Audit
 	if b.Config.JWTSecret == "flakyollama-secret-change-me-immediately" {
-		logging.Global.Warn("****************************************************************")
-		logging.Global.Warn("SECURITY WARNING: Using default JWT_SECRET!")
-		logging.Global.Warn("OIDC session cookies can be easily forged by attackers.")
-		logging.Global.Warn("Please set a unique JWT_SECRET in your environment immediately.")
-		logging.Global.Warn("****************************************************************")
+		logging.Global.Warnf("****************************************************************")
+		logging.Global.Warnf("SECURITY WARNING: Using default JWT_SECRET!")
+		logging.Global.Warnf("OIDC session cookies can be easily forged by attackers.")
+		logging.Global.Warnf("Please set a unique JWT_SECRET in your environment immediately.")
+		logging.Global.Warnf("****************************************************************")
 	}
 
 	b.StartMetricProcessor()
@@ -252,6 +252,14 @@ func (b *Balancer) Ship(entry models.LogEntry) {
 	case b.LogCh <- entry:
 	default:
 	}
+}
+
+func (b *Balancer) decrementWorkload(addr string) {
+	b.State.Do(func(s *ClusterState) {
+		if s.NodeWorkloads[addr] > 0 {
+			s.NodeWorkloads[addr]--
+		}
+	})
 }
 
 func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, duration time.Duration, clientKey, userID string, surge float64) {

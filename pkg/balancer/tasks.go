@@ -212,6 +212,8 @@ func (b *Balancer) ProcessQueue() {
 		case req.Response <- QueuedResponse{AgentAddr: addr}:
 		default:
 			// If channel full or no one listening, it's fine, req was already popped
+			// Since SelectAgent already incremented, we MUST decrement
+			b.decrementWorkload(addr)
 		}
 	}
 }
@@ -254,9 +256,7 @@ func (b *Balancer) ProcessBackgroundRequests() {
 						resp.Body.Close()
 					} else {
 						// Decrement workload on failure since Close() won't be called
-						b.State.Do(func(s *ClusterState) {
-							s.NodeWorkloads[a]--
-						})
+						b.decrementWorkload(a)
 					}
 				}(addr, path, body)
 			}
@@ -282,7 +282,7 @@ func (b *Balancer) CleanupStaleAgents() {
 }
 
 func (b *Balancer) RunMaintenance() {
-	logging.Global.Info("Running database maintenance...")
+	logging.Global.Infof("Running database maintenance...")
 
 	// 1. Prune metrics older than 7 days
 	if err := b.Storage.PruneMetrics(7); err != nil {
