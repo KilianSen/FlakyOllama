@@ -102,13 +102,27 @@ func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP
 	}
 	heap.Push(&rq.pq, item)
 
-	// Signal that an item is available (non-blocking)
+	// Signal that an item is available
 	select {
 	case rq.ch <- struct{}{}:
 	default:
 	}
 
 	return resCh
+}
+
+// Requeue put back an existing request item
+func (rq *RequestQueue) Requeue(item *QueuedRequest) {
+	rq.mu.Lock()
+	defer rq.mu.Unlock()
+
+	// Push it back as is (preserving original response channel and ID)
+	heap.Push(&rq.pq, item)
+
+	select {
+	case rq.ch <- struct{}{}:
+	default:
+	}
 }
 
 func (rq *RequestQueue) Pop() *QueuedRequest {
@@ -150,7 +164,11 @@ func (rq *RequestQueue) CancelRequest(id string) bool {
 	for i, item := range rq.pq {
 		if item.ID == id {
 			heap.Remove(&rq.pq, i)
-			item.Response <- QueuedResponse{Err: fmt.Errorf("request cancelled by administrator")}
+			// Non-blocking send
+			select {
+			case item.Response <- QueuedResponse{Err: fmt.Errorf("request cancelled by administrator")}:
+			default:
+			}
 			return true
 		}
 	}

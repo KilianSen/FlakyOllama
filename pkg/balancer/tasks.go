@@ -185,7 +185,7 @@ func (b *Balancer) ProcessQueue() {
 		return
 	}
 
-	// Limit processing to prevent infinite loops if something keeps failing
+	// Limit processing to prevent infinite loops
 	depth := b.Queue.QueueDepth()
 	for i := 0; i < depth; i++ {
 		req := b.Queue.Pop()
@@ -195,12 +195,17 @@ func (b *Balancer) ProcessQueue() {
 
 		addr, err := b.SelectAgent(req.Request.Model, req.UserID)
 		if err != nil {
-			// If we can't schedule it yet, push it back
-			b.Queue.Push(req.Request, req.Priority, req.ClientIP, req.ContextHash, req.UserID, req.Ctx)
+			// CRITICAL FIX: Use Requeue to preserve original Response channel
+			b.Queue.Requeue(req)
 			continue
 		}
 
-		req.Response <- QueuedResponse{AgentAddr: addr}
+		// Non-blocking send
+		select {
+		case req.Response <- QueuedResponse{AgentAddr: addr}:
+		default:
+			// If channel full or no one listening, it's fine, req was already popped
+		}
 	}
 }
 
