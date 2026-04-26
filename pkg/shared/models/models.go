@@ -228,6 +228,7 @@ type ClusterStatus struct {
 	AvgCPUUsage       float64                `json:"avg_cpu_usage"`
 	AvgMemUsage       float64                `json:"avg_mem_usage"`
 	PendingRequests   map[string]int         `json:"pending_requests"`
+	AllModels         []string               `json:"all_models"`
 	TotalInputTokens  int64                  `json:"total_input_tokens"`
 	TotalOutputTokens int64                  `json:"total_output_tokens"`
 	TotalReward       float64                `json:"total_reward"`

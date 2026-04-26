@@ -141,24 +141,14 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 0. Extract token from Header (Agent sends it as Bearer)
-	providedToken := status.AgentKey
-	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		parts := strings.Fields(authHeader)
-		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-			providedToken = parts[1]
-		}
-	}
-
 	// Token Verification
-	if providedToken == "" {
+	if status.AgentKey == "" {
 		http.Error(w, "Agent key required", http.StatusUnauthorized)
 		return
 	}
 
 	// 1. Check Global System Key
-	isGlobal := b.Config.RemoteToken != "" && providedToken == b.Config.RemoteToken
+	isGlobal := b.Config.RemoteToken != "" && status.AgentKey == b.Config.RemoteToken
 	nodeID := ""
 
 	if isGlobal {
@@ -168,9 +158,9 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// 2. Fall back to Individual Agent Keys (Database)
-		ak, err := b.Storage.GetAgentKey(providedToken)
+		ak, err := b.Storage.GetAgentKey(status.AgentKey)
 		if err != nil || !ak.Active {
-			logging.Global.Warnf("Registration attempt with invalid/inactive key for %s from %s", status.ID, status.Address)
+			logging.Global.Warnf("Registration attempt with invalid/inactive key: %s from %s", status.AgentKey, status.Address)
 			http.Error(w, "Invalid agent key", http.StatusForbidden)
 			return
 		}
@@ -206,12 +196,22 @@ func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 	uniqueModels := make(map[string]bool)
 	for _, node := range snap.Agents {
-		for _, m := range node.LocalModels {
-			uniqueModels[m.Name] = true
+		if node.State != models.StateBroken && !node.Draining {
+			for _, m := range node.LocalModels {
+				uniqueModels[m.Name] = true
+			}
 		}
 	}
 
+	// Add Virtual Models to Tags
+	b.configMu.RLock()
+	for m := range b.Config.VirtualModels {
+		uniqueModels[m] = true
+	}
+	b.configMu.RUnlock()
+
 	var tags models.TagsResponse
+	tags.Models = make([]models.ModelInfo, 0, len(uniqueModels))
 	for m := range uniqueModels {
 		tags.Models = append(tags.Models, models.ModelInfo{
 			Name:  m,

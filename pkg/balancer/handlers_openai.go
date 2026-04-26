@@ -65,13 +65,23 @@ func (b *Balancer) HandleV1Models(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 	uniqueModels := make(map[string]bool)
 	for _, node := range snap.Agents {
-		for _, m := range node.LocalModels {
-			uniqueModels[m.Name] = true
+		if node.State != models.StateBroken && !node.Draining {
+			for _, m := range node.LocalModels {
+				uniqueModels[m.Name] = true
+			}
 		}
 	}
 
+	// Add Virtual Models to OpenAI list
+	b.configMu.RLock()
+	for m := range b.Config.VirtualModels {
+		uniqueModels[m] = true
+	}
+	b.configMu.RUnlock()
+
 	var list models.OpenAIModelList
 	list.Object = "list"
+	list.Data = make([]models.OpenAIModel, 0, len(uniqueModels))
 	for m := range uniqueModels {
 		list.Data = append(list.Data, models.OpenAIModel{
 			ID:      m,

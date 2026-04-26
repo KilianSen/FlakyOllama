@@ -16,6 +16,25 @@ import (
 )
 
 func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
+	snap := b.State.GetSnapshot()
+	uniqueModels := make(map[string]bool)
+
+	// Physical models
+	for _, n := range snap.Agents {
+		if n.State != models.StateBroken && !n.Draining {
+			for _, m := range n.LocalModels {
+				uniqueModels[m.Name] = true
+			}
+		}
+	}
+
+	// Virtual models
+	b.configMu.RLock()
+	for m := range b.Config.VirtualModels {
+		uniqueModels[m] = true
+	}
+	b.configMu.RUnlock()
+
 	catalog := models.Catalog{
 		GlobalRewardMultiplier: b.Config.GlobalRewardMultiplier,
 		GlobalCostMultiplier:   b.Config.GlobalCostMultiplier,
@@ -26,9 +45,13 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 		}, 0),
 	}
 
-	for model, rf := range b.Config.ModelRewardFactors {
+	for m := range uniqueModels {
+		rf := 1.0
+		if f, ok := b.Config.ModelRewardFactors[m]; ok {
+			rf = f
+		}
 		cf := 1.0
-		if f, ok := b.Config.ModelCostFactors[model]; ok {
+		if f, ok := b.Config.ModelCostFactors[m]; ok {
 			cf = f
 		}
 		catalog.Models = append(catalog.Models, struct {
@@ -36,7 +59,7 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 			RewardFactor float64 `json:"reward_factor"`
 			CostFactor   float64 `json:"cost_factor"`
 		}{
-			Name:         model,
+			Name:         m,
 			RewardFactor: rf,
 			CostFactor:   cf,
 		})
@@ -89,12 +112,28 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 		UptimeSeconds:          int64(time.Since(b.startTime).Seconds()),
 	}
 
-	// Calculate Aggregate VRAM
+	// 1. Aggregate Physical Models
+	uniqueModels := make(map[string]bool)
 	for _, n := range snap.Agents {
 		if n.State != models.StateBroken && !n.Draining {
 			status.TotalVRAM += n.VRAMTotal
 			status.UsedVRAM += n.VRAMUsed
+			for _, m := range n.LocalModels {
+				uniqueModels[m.Name] = true
+			}
 		}
+	}
+
+	// 2. Add Virtual Models
+	b.configMu.RLock()
+	for m := range b.Config.VirtualModels {
+		uniqueModels[m] = true
+	}
+	b.configMu.RUnlock()
+
+	status.AllModels = make([]string, 0, len(uniqueModels))
+	for m := range uniqueModels {
+		status.AllModels = append(status.AllModels, m)
 	}
 
 	// Mask Node IPs for non-admins
