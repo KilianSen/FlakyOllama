@@ -135,55 +135,81 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
-	var status models.NodeStatus
-	if err := json.NewDecoder(r.Body).Decode(&status); err != nil {
+	var req models.RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	// 0. Extract token from Header (Agent sends it as Bearer)
+	providedToken := ""
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		parts := strings.Fields(authHeader)
+		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+			providedToken = parts[1]
+		}
+	}
+
 	// Token Verification
-	if status.AgentKey == "" {
+	if providedToken == "" {
 		http.Error(w, "Agent key required", http.StatusUnauthorized)
 		return
 	}
 
 	// 1. Check Global System Key
-	isGlobal := b.Config.RemoteToken != "" && status.AgentKey == b.Config.RemoteToken
+	isGlobal := b.Config.RemoteToken != "" && providedToken == b.Config.RemoteToken
 	nodeID := ""
 
 	if isGlobal {
-		nodeID = status.ID
+		nodeID = req.ID
 		if nodeID == "" {
-			nodeID = "agent-" + b.computeHash(status.Address)[:8]
+			nodeID = "agent-" + b.computeHash(req.Address)[:8]
 		}
 	} else {
 		// 2. Fall back to Individual Agent Keys (Database)
-		ak, err := b.Storage.GetAgentKey(status.AgentKey)
+		ak, err := b.Storage.GetAgentKey(providedToken)
 		if err != nil || !ak.Active {
-			logging.Global.Warnf("Registration attempt with invalid/inactive key: %s from %s", status.AgentKey, status.Address)
+			logging.Global.Warnf("Registration attempt with invalid/inactive key for %s from %s", req.ID, req.Address)
 			http.Error(w, "Invalid agent key", http.StatusForbidden)
 			return
 		}
 		nodeID = ak.NodeID
 	}
 
-	// Update State
-	status.ID = nodeID
-	status.LastSeen = time.Now()
+	// Create/Update State
+	status := models.NodeStatus{
+		ID:       nodeID,
+		Address:  req.Address,
+		Tier:     req.Tier,
+		HasGPU:   req.HasGPU,
+		GPUModel: req.GPUModel,
+		LastSeen: time.Now(),
+		State:    models.StateHealthy,
+	}
 
 	b.State.Do(func(s *ClusterState) {
 		// CRITICAL: Check if this node already exists at a different address and clean it up
 		for oldAddr, existing := range s.Agents {
-			if existing.ID == nodeID && oldAddr != status.Address {
-				logging.Global.Infof("Node %s changed address: %s -> %s. Cleaning up old record.", nodeID, oldAddr, status.Address)
+			if existing.ID == nodeID && oldAddr != req.Address {
+				logging.Global.Infof("Node %s changed address: %s -> %s. Cleaning up old record.", nodeID, oldAddr, req.Address)
 				delete(s.Agents, oldAddr)
-				// Migrate workload if any? (Usually not possible across IP change)
-				s.NodeWorkloads[status.Address] = s.NodeWorkloads[oldAddr]
+				s.NodeWorkloads[req.Address] = s.NodeWorkloads[oldAddr]
 				delete(s.NodeWorkloads, oldAddr)
 				break
 			}
 		}
-		s.Agents[status.Address] = &status
+
+		// If we already have info for this node at this address, preserve local models
+		if existing, ok := s.Agents[req.Address]; ok {
+			status.LocalModels = existing.LocalModels
+			status.ActiveModels = existing.ActiveModels
+			status.Reputation = existing.Reputation
+		} else {
+			status.Reputation = 1.0
+		}
+
+		s.Agents[req.Address] = &status
 	})
 
 	logging.Global.Infof("Node %s registered from %s (%d models, GPU: %v)", status.ID, status.Address, len(status.LocalModels), status.HasGPU)
