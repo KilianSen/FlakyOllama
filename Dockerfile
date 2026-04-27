@@ -1,8 +1,8 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26-bookworm AS builder
 
 # Install build dependencies
-RUN apk add --no-cache gcc musl-dev
+RUN apt-get update && apt-get install -y gcc libc6-dev
 
 WORKDIR /app
 
@@ -17,10 +17,10 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -o flakyollama main.go
 
 # Final stage
-FROM alpine:latest
+FROM debian:bookworm-slim
 
-# Install runtime dependencies (like nvidia-smi if needed, though usually it's passed from host)
-RUN apk add --no-cache ca-certificates sqlite
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y ca-certificates sqlite3 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /root/
 
