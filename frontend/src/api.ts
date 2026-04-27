@@ -74,7 +74,7 @@ export interface ClusterStatus {
   oidc_enabled: boolean;
   node_workloads: Record<string, number>;
   in_progress_pulls: Record<string, string>;
-  model_policies: Record<string, Record<string, { Banned: boolean, Pinned: boolean }>>;
+  model_policies: Record<string, Record<string, { Banned: boolean, Pinned: boolean, Persistent: boolean }>>;
 }
 
 export interface ClientKey {
@@ -375,10 +375,10 @@ export class FlakyOllamaSDK {
   }
 
   // Policies
-  async setModelPolicy(model: string, nodeId: string, banned: boolean, pinned: boolean): Promise<{status: string}> {
+  async setModelPolicy(model: string, nodeId: string, banned: boolean, pinned: boolean, persistent: boolean): Promise<{status: string}> {
       return this.request('/api/v1/policies', {
           method: 'POST',
-          body: JSON.stringify({ model, node_id: nodeId, is_banned: banned, is_pinned: pinned })
+          body: JSON.stringify({ model, node_id: nodeId, is_banned: banned, is_pinned: pinned, is_persistent: persistent })
       });
   }
 

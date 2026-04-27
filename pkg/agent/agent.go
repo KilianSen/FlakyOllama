@@ -46,6 +46,9 @@ type Agent struct {
 	httpClient *http.Client
 	httpServer *http.Server
 	proxy      *httputil.ReverseProxy
+
+	persistentModels []string
+	persistentMu     sync.RWMutex
 }
 
 func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *Agent {
@@ -158,7 +161,14 @@ func (a *Agent) Register() error {
 		return fmt.Errorf("failed to register with balancer: status %d", resp.StatusCode)
 	}
 
-	sharedLog.Global.Infof("Successfully registered agent %s", a.ID)
+	var result models.TelemetryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+		a.persistentMu.Lock()
+		a.persistentModels = result.PersistentModels
+		a.persistentMu.Unlock()
+	}
+
+	sharedLog.Global.Infof("Successfully registered agent %s (persistent models: %d)", a.ID, len(a.persistentModels))
 	return nil
 }
 func (a *Agent) NewMux() *http.ServeMux {
@@ -201,14 +211,62 @@ func (a *Agent) Serve() error {
 	// Start background tasks
 	a.Monitor.Start(a.ctx)
 
-	a.wg.Add(2)
+	a.wg.Add(3)
 	go a.StartLogShipper()
 	go a.StartRegistrationLoop()
+	go a.StartMaintenanceLoop()
 
 	if a.Config.TLS.Enabled {
 		return a.httpServer.ListenAndServeTLS(a.Config.TLS.CertFile, a.Config.TLS.KeyFile)
 	}
 	return a.httpServer.ListenAndServe()
+}
+
+func (a *Agent) StartMaintenanceLoop() {
+	defer a.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			a.persistentMu.RLock()
+			modelsToKeep := make([]string, len(a.persistentModels))
+			copy(modelsToKeep, a.persistentModels)
+			a.persistentMu.RUnlock()
+
+			if len(modelsToKeep) == 0 {
+				continue
+			}
+
+			ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+			active, err := a.Ollama.GetLoadedModels(ctx)
+			cancel()
+
+			if err != nil {
+				sharedLog.Global.Warnf("Maintenance: Failed to get loaded models: %v", err)
+				continue
+			}
+
+			activeMap := make(map[string]bool)
+			for _, m := range active {
+				activeMap[m] = true
+			}
+
+			for _, m := range modelsToKeep {
+				if !activeMap[m] {
+					sharedLog.Global.Infof("Maintenance: Pre-warming persistent model %s", m)
+					ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+					if err := a.Ollama.LoadPersistent(ctx, m); err != nil {
+						sharedLog.Global.Errorf("Maintenance: Failed to load persistent model %s: %v", m, err)
+					}
+					cancel()
+				}
+			}
+		case <-a.ctx.Done():
+			return
+		}
+	}
 }
 
 func (a *Agent) Stop() {

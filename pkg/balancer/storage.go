@@ -74,6 +74,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			node_id TEXT,
 			is_banned BOOLEAN DEFAULT 0,
 			is_pinned BOOLEAN DEFAULT 0,
+			is_persistent BOOLEAN DEFAULT 0,
 			PRIMARY KEY (model, node_id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS token_usage (
@@ -226,12 +227,12 @@ func (s *SQLiteStorage) UpdateModelRequestTaskID(id, taskID string) error {
 	return err
 }
 
-func (s *SQLiteStorage) SetModelPolicy(model, nodeID string, banned, pinned bool) error {
+func (s *SQLiteStorage) SetModelPolicy(model, nodeID string, banned, pinned, persistent bool) error {
 	_, err := s.db.Exec(`
-		INSERT INTO model_policies (model, node_id, is_banned, is_pinned) 
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(model, node_id) DO UPDATE SET is_banned = excluded.is_banned, is_pinned = excluded.is_pinned`,
-		model, nodeID, banned, pinned)
+		INSERT INTO model_policies (model, node_id, is_banned, is_pinned, is_persistent) 
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(model, node_id) DO UPDATE SET is_banned = excluded.is_banned, is_pinned = excluded.is_pinned, is_persistent = excluded.is_persistent`,
+		model, nodeID, banned, pinned, persistent)
 	return err
 }
 
@@ -643,24 +644,24 @@ func (s *SQLiteStorage) ListUserModelPolicies(userID string) ([]models.UserModel
 	return policies, nil
 }
 
-func (s *SQLiteStorage) GetModelPolicies() (map[string]map[string]struct{ Banned, Pinned bool }, error) {
-	rows, err := s.db.Query("SELECT model, node_id, is_banned, is_pinned FROM model_policies")
+func (s *SQLiteStorage) GetModelPolicies() (map[string]map[string]struct{ Banned, Pinned, Persistent bool }, error) {
+	rows, err := s.db.Query("SELECT model, node_id, is_banned, is_pinned, is_persistent FROM model_policies")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	policies := make(map[string]map[string]struct{ Banned, Pinned bool })
+	policies := make(map[string]map[string]struct{ Banned, Pinned, Persistent bool })
 	for rows.Next() {
 		var model, nodeID string
-		var banned, pinned bool
-		if err := rows.Scan(&model, &nodeID, &banned, &pinned); err != nil {
+		var banned, pinned, persistent bool
+		if err := rows.Scan(&model, &nodeID, &banned, &pinned, &persistent); err != nil {
 			return nil, err
 		}
 		if _, ok := policies[model]; !ok {
-			policies[model] = make(map[string]struct{ Banned, Pinned bool })
+			policies[model] = make(map[string]struct{ Banned, Pinned, Persistent bool })
 		}
-		policies[model][nodeID] = struct{ Banned, Pinned bool }{Banned: banned, Pinned: pinned}
+		policies[model][nodeID] = struct{ Banned, Pinned, Persistent bool }{Banned: banned, Pinned: pinned, Persistent: persistent}
 	}
 	return policies, nil
 }

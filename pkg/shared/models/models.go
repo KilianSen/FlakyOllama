@@ -320,3 +320,7 @@ type PipelineStep struct {
 	OnFail       string            `json:"on_fail"`    // "retry", "fallback", "error"
 	Routes       map[string]string `json:"routes"`     // If action is classify
 }
+type TelemetryResponse struct {
+	Status           string   `json:"status"`
+	PersistentModels []string `json:"persistent_models,omitempty"`
+}

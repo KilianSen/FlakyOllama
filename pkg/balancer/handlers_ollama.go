@@ -212,10 +212,23 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		s.Agents[req.Address] = &status
 	})
 
-	logging.Global.Infof("Node %s registered from %s (%d models, GPU: %v)", status.ID, status.Address, len(status.LocalModels), status.HasGPU)
+	// Identify persistent models for this node
+	var persistentModels []string
+	b.cacheMu.RLock()
+	for model, nodePolicies := range b.policyCache {
+		if pol, ok := nodePolicies[nodeID]; ok && pol.Persistent {
+			persistentModels = append(persistentModels, model)
+		}
+	}
+	b.cacheMu.RUnlock()
+
+	logging.Global.Infof("Node %s registered from %s (%d models, GPU: %v, persistent: %d)", status.ID, status.Address, len(status.LocalModels), status.HasGPU, len(persistentModels))
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"node_id": status.ID, "status": "registered"})
+	json.NewEncoder(w).Encode(models.TelemetryResponse{
+		Status:           "registered",
+		PersistentModels: persistentModels,
+	})
 }
 
 func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {

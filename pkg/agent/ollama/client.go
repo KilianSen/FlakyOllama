@@ -191,6 +191,24 @@ func (c *Client) Pull(ctx context.Context, model string) error {
 	return nil
 }
 
+// LoadPersistent loads a model and tells Ollama to keep it loaded indefinitely.
+func (c *Client) LoadPersistent(ctx context.Context, model string) error {
+	req := OllamaUnloadRequest{
+		Model:     model,
+		KeepAlive: -1, // Keep loaded indefinitely
+	}
+	resp, err := c.doRequest(ctx, "POST", "/api/generate", req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("load failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 // Unload unloads a model from memory.
 func (c *Client) Unload(ctx context.Context, model string) error {
 	req := OllamaUnloadRequest{

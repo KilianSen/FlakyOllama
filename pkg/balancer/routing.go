@@ -110,7 +110,7 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 		workload := float64(snap.NodeWorkloads[addr])
 		score -= (workload * b.Config.Weights.WorkloadPenalty * 50.0)
 
-		// Bonus for locally available model
+		// Bonus for locally available model (on disk)
 		hasModel := false
 		for _, m := range a.LocalModels {
 			if m.Name == modelName {
@@ -120,6 +120,23 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 		}
 		if hasModel {
 			score += b.Config.Weights.LocalModelBonus * 25.0
+		}
+
+		// Bonus for already LOADED model (ActiveModels)
+		isActive := false
+		for _, m := range a.ActiveModels {
+			if m == modelName {
+				isActive = true
+				break
+			}
+		}
+		if isActive {
+			score += 50.0 // Big bonus for already loaded models to avoid TTFT penalty
+		}
+
+		// Persistent Policy Bonus
+		if pol, ok := clusterPolicies[a.ID]; ok && pol.Persistent {
+			score += 100.0 // Massive bonus to prefer nodes where the model should be persistent
 		}
 
 		// Hardware penalties (CPU / Memory saturation)

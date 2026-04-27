@@ -51,7 +51,7 @@ type Balancer struct {
 		AvgTTFT, AvgDuration float64
 		Requests             int
 	}
-	policyCache map[string]map[string]struct{ Banned, Pinned bool } // [model][nodeID]
+	policyCache map[string]map[string]struct{ Banned, Pinned, Persistent bool } // [model][nodeID]
 	cacheMu     sync.RWMutex
 
 	server     *http.Server
@@ -91,7 +91,7 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 			AvgTTFT, AvgDuration float64
 			Requests             int
 		}),
-		policyCache: make(map[string]map[string]struct{ Banned, Pinned bool }),
+		policyCache: make(map[string]map[string]struct{ Banned, Pinned, Persistent bool }),
 	}
 
 	b.Init()

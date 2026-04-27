@@ -413,6 +413,16 @@ func (b *Balancer) pollAgent(addr string) {
 		return
 	}
 
+	// Identify persistent models for this node
+	var persistentModels []string
+	b.cacheMu.RLock()
+	for model, nodePolicies := range b.policyCache {
+		if pol, ok := nodePolicies[status.ID]; ok && pol.Persistent {
+			persistentModels = append(persistentModels, model)
+		}
+	}
+	b.cacheMu.RUnlock()
+
 	b.State.Do(func(s *ClusterState) {
 		if existing, ok := s.Agents[addr]; ok {
 			// Update dynamic fields but preserve identity and persistent state

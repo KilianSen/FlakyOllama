@@ -86,13 +86,14 @@ export const RegistryPage: React.FC = () => {
     } catch (err: any) { toast.error(err.message); }
   };
 
-  const togglePolicy = async (model: string, nodeID: string, type: 'banned' | 'pinned') => {
-    const current = status?.model_policies?.[model]?.[nodeID] || { Banned: false, Pinned: false };
+  const togglePolicy = async (model: string, nodeID: string, type: 'banned' | 'pinned' | 'persistent') => {
+    const current = status?.model_policies?.[model]?.[nodeID] || { Banned: false, Pinned: false, Persistent: false };
     const nextBanned = type === 'banned' ? !current.Banned : current.Banned;
     const nextPinned = type === 'pinned' ? !current.Pinned : current.Pinned;
+    const nextPersistent = type === 'persistent' ? !current.Persistent : current.Persistent;
 
     try {
-      await sdk.setModelPolicy(model, nodeID, nextBanned, nextPinned);
+      await sdk.setModelPolicy(model, nodeID, nextBanned, nextPinned, nextPersistent);
       toast.success('Policy updated');
       refresh();
     } catch (err: any) { toast.error(err.message); }
@@ -101,9 +102,9 @@ export const RegistryPage: React.FC = () => {
   const getModelStatusOnNode = (model: string, node: NodeStatus) => {
     const isLoaded = (node.active_models || []).includes(model);
     const isOnDisk = (node.local_models || []).some(m => m.model === model);
-    const policy = status?.model_policies?.[model]?.[node.id] || { Banned: false, Pinned: false };
+    const policy = status?.model_policies?.[model]?.[node.id] || { Banned: false, Pinned: false, Persistent: false };
     
-    return { isLoaded, isOnDisk, isBanned: policy.Banned, isPinned: policy.Pinned };
+    return { isLoaded, isOnDisk, isBanned: policy.Banned, isPinned: policy.Pinned, isPersistent: policy.Persistent };
   };
 
   const filteredModels = allModelNames.filter(m => m.toLowerCase().includes(search.toLowerCase()));
@@ -229,10 +230,11 @@ export const RegistryPage: React.FC = () => {
                                 <Badge variant="outline" className="h-4 text-[8px] font-black opacity-20">MISSING</Badge>
                               )}
                               {st.isPinned && <Pin size={10} className="text-amber-400 fill-amber-400/20" />}
-                            </div>
+                              {st.isPersistent && <Zap size={10} className="text-pink-400 fill-pink-400/20" />}
+                              </div>
 
-                            {/* Node Actions */}
-                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                              {/* Node Actions */}
+                              <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
                                {!st.isOnDisk && !st.isBanned && (
                                  <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md hover:bg-blue-500/10 hover:text-blue-400" onClick={() => handlePull(model, n.id)}>
                                    <Download size={12} />
@@ -243,21 +245,28 @@ export const RegistryPage: React.FC = () => {
                                    <Trash2 size={12} />
                                  </Button>
                                )}
-                               <Button 
-                                variant="ghost" size="icon" 
+                               <Button
+                                variant="ghost" size="icon"
                                 className={`h-6 w-6 rounded-md ${st.isBanned ? 'text-red-500 bg-red-500/10' : 'text-muted-foreground'}`}
                                 onClick={() => togglePolicy(model, n.id, 'banned')}
                                >
                                  <ShieldX size={12} />
                                </Button>
-                               <Button 
-                                variant="ghost" size="icon" 
+                               <Button
+                                variant="ghost" size="icon"
                                 className={`h-6 w-6 rounded-md ${st.isPinned ? 'text-amber-500 bg-amber-500/10' : 'text-muted-foreground'}`}
                                 onClick={() => togglePolicy(model, n.id, 'pinned')}
                                >
                                  <Pin size={12} />
                                </Button>
-                            </div>
+                               <Button
+                                variant="ghost" size="icon"
+                                className={`h-6 w-6 rounded-md ${st.isPersistent ? 'text-pink-500 bg-pink-500/10' : 'text-muted-foreground'}`}
+                                onClick={() => togglePolicy(model, n.id, 'persistent')}
+                               >
+                                 <Zap size={12} />
+                               </Button>
+
                           </div>
                         </TableCell>
                       );

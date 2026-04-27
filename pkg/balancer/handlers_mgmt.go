@@ -413,17 +413,18 @@ func (b *Balancer) HandleV1ModelRequestDecline(w http.ResponseWriter, r *http.Re
 
 func (b *Balancer) HandleV1ModelPolicySet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Model  string `json:"model"`
-		NodeID string `json:"node_id"`
-		Banned bool   `json:"is_banned"`
-		Pinned bool   `json:"is_pinned"`
+		Model      string `json:"model"`
+		NodeID     string `json:"node_id"`
+		Banned     bool   `json:"is_banned"`
+		Pinned     bool   `json:"is_pinned"`
+		Persistent bool   `json:"is_persistent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
-	if err := b.Storage.SetModelPolicy(req.Model, req.NodeID, req.Banned, req.Pinned); err != nil {
+	if err := b.Storage.SetModelPolicy(req.Model, req.NodeID, req.Banned, req.Pinned, req.Persistent); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
