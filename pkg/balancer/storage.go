@@ -65,6 +65,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			model TEXT,
 			node_id TEXT,
 			status TEXT,
+			agent_task_id TEXT,
 			requested_at DATETIME,
 			approved_at DATETIME
 		);`,
@@ -143,30 +144,34 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 
 func (s *SQLiteStorage) CreateModelRequest(req models.ModelRequest) error {
 	_, err := s.db.Exec(`
-		INSERT INTO model_requests (id, type, model, node_id, status, requested_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		req.ID, req.Type, req.Model, req.NodeID, req.Status, req.RequestedAt)
+		INSERT INTO model_requests (id, type, model, node_id, status, agent_task_id, requested_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		req.ID, req.Type, req.Model, req.NodeID, req.Status, req.AgentTaskID, req.RequestedAt)
 	return err
 }
 
 func (s *SQLiteStorage) GetModelRequest(id string) (models.ModelRequest, error) {
 	var req models.ModelRequest
 	var approvedAt sql.NullTime
+	var taskID sql.NullString
 	err := s.db.QueryRow(`
-		SELECT id, type, model, node_id, status, requested_at, approved_at 
+		SELECT id, type, model, node_id, status, agent_task_id, requested_at, approved_at 
 		FROM model_requests WHERE id = ?`, id).
-		Scan(&req.ID, &req.Type, &req.Model, &req.NodeID, &req.Status, &req.RequestedAt, &approvedAt)
+		Scan(&req.ID, &req.Type, &req.Model, &req.NodeID, &req.Status, &taskID, &req.RequestedAt, &approvedAt)
 	if err != nil {
 		return req, err
 	}
 	if approvedAt.Valid {
 		req.ApprovedAt = &approvedAt.Time
 	}
+	if taskID.Valid {
+		req.AgentTaskID = taskID.String
+	}
 	return req, nil
 }
 
 func (s *SQLiteStorage) ListModelRequests(status models.ModelRequestStatus) ([]models.ModelRequest, error) {
-	query := `SELECT id, type, model, node_id, status, requested_at, approved_at FROM model_requests`
+	query := `SELECT id, type, model, node_id, status, agent_task_id, requested_at, approved_at FROM model_requests`
 	var rows *sql.Rows
 	var err error
 	if status != "" {
@@ -184,11 +189,15 @@ func (s *SQLiteStorage) ListModelRequests(status models.ModelRequestStatus) ([]m
 	for rows.Next() {
 		var req models.ModelRequest
 		var approvedAt sql.NullTime
-		if err := rows.Scan(&req.ID, &req.Type, &req.Model, &req.NodeID, &req.Status, &req.RequestedAt, &approvedAt); err != nil {
+		var taskID sql.NullString
+		if err := rows.Scan(&req.ID, &req.Type, &req.Model, &req.NodeID, &req.Status, &taskID, &req.RequestedAt, &approvedAt); err != nil {
 			return nil, err
 		}
 		if approvedAt.Valid {
 			req.ApprovedAt = &approvedAt.Time
+		}
+		if taskID.Valid {
+			req.AgentTaskID = taskID.String
 		}
 		reqs = append(reqs, req)
 	}
@@ -202,7 +211,18 @@ func (s *SQLiteStorage) UpdateModelRequestStatus(id string, status models.ModelR
 	} else {
 		approvedAt = nil
 	}
-	_, err := s.db.Exec("UPDATE model_requests SET status = ?, approved_at = ? WHERE id = ?", status, approvedAt, id)
+
+	if status == models.StatusApproved {
+		_, err := s.db.Exec("UPDATE model_requests SET status = ?, approved_at = ? WHERE id = ?", status, approvedAt, id)
+		return err
+	}
+
+	_, err := s.db.Exec("UPDATE model_requests SET status = ? WHERE id = ?", status, id)
+	return err
+}
+
+func (s *SQLiteStorage) UpdateModelRequestTaskID(id, taskID string) error {
+	_, err := s.db.Exec("UPDATE model_requests SET agent_task_id = ? WHERE id = ?", taskID, id)
 	return err
 }
 

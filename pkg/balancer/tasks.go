@@ -166,6 +166,7 @@ func (b *Balancer) StartBackgroundTasks() {
 			case <-ticker.C:
 				b.ProcessQueue()
 				b.ProcessBackgroundRequests()
+				b.pollAgentTasks()
 				b.CleanupStaleAgents()
 			case <-maintenanceTicker.C:
 				b.RunMaintenance()
@@ -229,13 +230,13 @@ func (b *Balancer) ProcessBackgroundRequests() {
 	for _, r := range reqs {
 		logging.Global.Infof("Processing background model request: %s %s on %s", r.Type, r.Model, r.NodeID)
 
-		// Map to correct endpoint
-		path := "/api/pull"
+		// Map to correct endpoint (using the new Agent paths)
+		path := "/api/models/pull"
 		if r.Type == models.RequestDelete {
-			path = "/api/delete"
+			path = "/api/models/delete"
 		}
 
-		body, _ := json.Marshal(map[string]string{"name": r.Model})
+		body, _ := json.Marshal(map[string]string{"model": r.Model})
 
 		if r.NodeID != "" {
 			var addr string
@@ -248,24 +249,100 @@ func (b *Balancer) ProcessBackgroundRequests() {
 				}
 			})
 			if addr != "" {
-				// Manually increment workload for background task
-				b.State.Do(func(s *ClusterState) {
-					s.NodeWorkloads[addr]++
-				})
-				go func(a, p string, d []byte) {
+				// Transition to Processing immediately
+				b.Storage.UpdateModelRequestStatus(r.ID, models.StatusProcessing)
+				b.Jobs.UpdateJob(r.ID, JobRunning, 10, "Request sent to agent")
+
+				go func(requestID, a, p string, d []byte) {
 					resp, err := b.sendToAgent(a, p, d)
 					if err == nil {
+						var result struct {
+							TaskID string `json:"task_id"`
+						}
+						if json.NewDecoder(resp.Body).Decode(&result) == nil && result.TaskID != "" {
+							b.Storage.UpdateModelRequestTaskID(requestID, result.TaskID)
+						}
 						resp.Body.Close()
 					} else {
-						// Decrement workload on failure since Close() won't be called
-						b.decrementWorkload(a)
+						// On failure, revert to approved so it can be retried
+						b.Storage.UpdateModelRequestStatus(requestID, models.StatusApproved)
+						b.Jobs.UpdateJob(requestID, JobFailed, 0, "Failed to reach agent: "+err.Error())
 					}
-				}(addr, path, body)
+				}(r.ID, addr, path, body)
 			}
+		} else {
+			b.Storage.UpdateModelRequestStatus(r.ID, models.StatusFailed)
+			b.Jobs.UpdateJob(r.ID, JobFailed, 0, "No target node specified")
+		}
+	}
+}
+
+func (b *Balancer) pollAgentTasks() {
+	reqs, err := b.Storage.ListModelRequests(models.StatusProcessing)
+	if err != nil || len(reqs) == 0 {
+		return
+	}
+
+	for _, r := range reqs {
+		if r.AgentTaskID == "" {
+			continue
 		}
 
-		b.Storage.UpdateModelRequestStatus(r.ID, "completed")
-		b.Jobs.UpdateJob(r.ID, JobCompleted, 100, "Request processed")
+		// Find agent address
+		var addr string
+		b.State.View(func(s ClusterState) {
+			for a, n := range s.Agents {
+				if n.ID == r.NodeID {
+					addr = a
+					break
+				}
+			}
+		})
+
+		if addr == "" {
+			continue
+		}
+
+		go func(req models.ModelRequest, agentAddr string) {
+			scheme := "http"
+			if b.Config.TLS.Enabled {
+				scheme = "https"
+			}
+			url := fmt.Sprintf("%s://%s/tasks", scheme, agentAddr)
+
+			hReq, _ := http.NewRequest("GET", url, nil)
+			if b.Config.RemoteToken != "" {
+				hReq.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
+			}
+
+			client := &http.Client{Timeout: 2 * time.Second}
+			resp, err := client.Do(hReq)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			var tasks []models.AgentTask
+			if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+				return
+			}
+
+			for _, t := range tasks {
+				if t.ID == req.AgentTaskID {
+					if t.Status == models.TaskCompleted {
+						b.Storage.UpdateModelRequestStatus(req.ID, models.StatusCompleted)
+						b.Jobs.UpdateJob(req.ID, JobCompleted, 100, "Task completed by agent")
+
+						// Force a telemetry poll to update local models list
+						go b.pollAgent(agentAddr)
+					} else if t.Status == models.TaskFailed {
+						b.Storage.UpdateModelRequestStatus(req.ID, models.StatusFailed)
+						b.Jobs.UpdateJob(req.ID, JobFailed, 0, "Agent task failed: "+t.Error)
+					}
+					break
+				}
+			}
+		}(r, addr)
 	}
 }
 

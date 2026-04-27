@@ -159,9 +159,12 @@ const (
 type ModelRequestStatus string
 
 const (
-	StatusPending  ModelRequestStatus = "pending"
-	StatusApproved ModelRequestStatus = "approved"
-	StatusRejected ModelRequestStatus = "rejected"
+	StatusPending    ModelRequestStatus = "pending"
+	StatusApproved   ModelRequestStatus = "approved"
+	StatusProcessing ModelRequestStatus = "processing"
+	StatusCompleted  ModelRequestStatus = "completed"
+	StatusRejected   ModelRequestStatus = "rejected"
+	StatusFailed     ModelRequestStatus = "failed"
 )
 
 type ModelRequest struct {
@@ -170,6 +173,7 @@ type ModelRequest struct {
 	Model       string             `json:"model"`
 	NodeID      string             `json:"node_id"` // Empty for all nodes
 	Status      ModelRequestStatus `json:"status"`
+	AgentTaskID string             `json:"agent_task_id,omitempty"`
 	RequestedAt time.Time          `json:"requested_at"`
 	ApprovedAt  *time.Time         `json:"approved_at,omitempty"`
 }

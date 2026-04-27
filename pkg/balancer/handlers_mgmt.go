@@ -343,8 +343,44 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleV1ModelUnload(w http.ResponseWriter, r *http.Request) {
-	// Not implemented in agent yet
-	b.jsonError(w, http.StatusNotImplemented, "not implemented")
+	var req struct {
+		Model  string `json:"model"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	var addr string
+	b.State.View(func(s ClusterState) {
+		for a, n := range s.Agents {
+			if n.ID == req.NodeID {
+				addr = a
+				break
+			}
+		}
+	})
+
+	if addr == "" {
+		b.jsonError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	body, _ := json.Marshal(map[string]string{"model": req.Model})
+	resp, err := b.sendToAgentWithContext(r.Context(), addr, "/api/models/unload", body)
+	if err != nil {
+		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b.jsonError(w, resp.StatusCode, "agent error")
+		return
+	}
+
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "unloaded"})
 }
 
 func (b *Balancer) HandleV1ModelRequestsList(w http.ResponseWriter, r *http.Request) {
