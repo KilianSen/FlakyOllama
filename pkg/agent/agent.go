@@ -148,17 +148,19 @@ func (a *Agent) Register() error {
 
 	resp, err := a.httpClient.Do(agentReq)
 	if err != nil {
+		sharedLog.Global.Errorf("Registration request failed for agent %s: %v", a.ID, err)
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		sharedLog.Global.Errorf("Balancer rejected registration for agent %s: status %d", a.ID, resp.StatusCode)
 		return fmt.Errorf("failed to register with balancer: status %d", resp.StatusCode)
 	}
 
+	sharedLog.Global.Infof("Successfully registered agent %s", a.ID)
 	return nil
 }
-
 func (a *Agent) NewMux() *http.ServeMux {
 	token := a.Config.AuthToken
 	mux := http.NewServeMux()
@@ -250,6 +252,7 @@ func (a *Agent) StartRegistrationLoop() {
 func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
 	if err != nil {
+		sharedLog.Global.Errorf("Failed to get hardware status: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -264,15 +267,21 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	if active, err := a.Ollama.GetLoadedModels(ctx); err == nil {
 		status.ActiveModels = active
+	} else {
+		sharedLog.Global.Warnf("Failed to fetch active models from Ollama: %v", err)
 	}
+
 	if local, err := a.Ollama.ListLocalModels(ctx); err == nil {
 		status.LocalModels = local
+	} else {
+		sharedLog.Global.Warnf("Failed to list local models from Ollama: %v", err)
 	}
 
 	json.NewEncoder(w).Encode(status)
 }
 
 func (a *Agent) HandleTasks(w http.ResponseWriter, r *http.Request) {
+	sharedLog.Global.Debugf("Listing active tasks for agent %s", a.ID)
 	json.NewEncoder(w).Encode(a.Tasks.ListTasks())
 }
 
@@ -281,6 +290,7 @@ func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
 		Model string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sharedLog.Global.Errorf("Invalid pull request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -293,9 +303,9 @@ func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
 		err := a.Ollama.Pull(a.ctx, req.Model)
 		a.Tasks.CompleteTask(taskID, err)
 		if err != nil {
-			sharedLog.Global.Errorf("Task %s: Pull failed: %v", taskID, err)
+			sharedLog.Global.Errorf("Task %s: Pull failed for model %s: %v", taskID, req.Model, err)
 		} else {
-			sharedLog.Global.Infof("Task %s: Pull completed", taskID)
+			sharedLog.Global.Infof("Task %s: Successfully pulled model %s", taskID, req.Model)
 		}
 	}()
 
@@ -308,13 +318,16 @@ func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
 		Model string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sharedLog.Global.Errorf("Invalid unload request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	sharedLog.Global.Infof("Unloading model %s", req.Model)
 	if err := a.Ollama.Unload(ctx, req.Model); err != nil {
+		sharedLog.Global.Errorf("Failed to unload model %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -326,13 +339,16 @@ func (a *Agent) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		Model string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sharedLog.Global.Errorf("Invalid delete request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	sharedLog.Global.Infof("Deleting model %s from disk", req.Model)
 	if err := a.Ollama.Delete(ctx, req.Model); err != nil {
+		sharedLog.Global.Errorf("Failed to delete model %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -344,14 +360,17 @@ func (a *Agent) HandleShow(w http.ResponseWriter, r *http.Request) {
 		Model string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sharedLog.Global.Errorf("Invalid show request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	sharedLog.Global.Debugf("Showing metadata for model %s", req.Model)
 	result, err := a.Ollama.Show(ctx, req.Model)
 	if err != nil {
+		sharedLog.Global.Errorf("Failed to show model %s: %v", req.Model, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -364,6 +383,7 @@ func (a *Agent) HandleVersion(w http.ResponseWriter, r *http.Request) {
 
 	version, err := a.Ollama.Version(ctx)
 	if err != nil {
+		sharedLog.Global.Errorf("Failed to get Ollama version: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -376,6 +396,7 @@ func (a *Agent) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		Modelfile string `json:"modelfile"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sharedLog.Global.Errorf("Invalid create request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -384,10 +405,14 @@ func (a *Agent) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	a.Tasks.AddTask(taskID, "create", req.Name)
 
 	go func() {
+		sharedLog.Global.Infof("Task %s: Creating model %s", taskID, req.Name)
 		stream, _, err := a.Ollama.Create(a.ctx, req.Name, req.Modelfile)
 		if err == nil {
 			_, _ = io.Copy(io.Discard, stream)
 			stream.Close()
+			sharedLog.Global.Infof("Task %s: Successfully created model %s", taskID, req.Name)
+		} else {
+			sharedLog.Global.Errorf("Task %s: Failed to create model %s: %v", taskID, req.Name, err)
 		}
 		a.Tasks.CompleteTask(taskID, err)
 	}()
@@ -402,14 +427,17 @@ func (a *Agent) HandleCopy(w http.ResponseWriter, r *http.Request) {
 		Destination string `json:"destination"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sharedLog.Global.Errorf("Invalid copy request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	sharedLog.Global.Infof("Copying model %s to %s", req.Source, req.Destination)
 	_, err := a.Ollama.Copy(ctx, req.Source, req.Destination)
 	if err != nil {
+		sharedLog.Global.Errorf("Failed to copy model %s to %s: %v", req.Source, req.Destination, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -421,6 +449,7 @@ func (a *Agent) HandlePush(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sharedLog.Global.Errorf("Invalid push request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -429,10 +458,14 @@ func (a *Agent) HandlePush(w http.ResponseWriter, r *http.Request) {
 	a.Tasks.AddTask(taskID, "push", req.Name)
 
 	go func() {
+		sharedLog.Global.Infof("Task %s: Pushing model %s", taskID, req.Name)
 		stream, _, err := a.Ollama.Push(a.ctx, req.Name)
 		if err == nil {
 			_, _ = io.Copy(io.Discard, stream)
 			stream.Close()
+			sharedLog.Global.Infof("Task %s: Successfully pushed model %s", taskID, req.Name)
+		} else {
+			sharedLog.Global.Errorf("Task %s: Failed to push model %s: %v", taskID, req.Name, err)
 		}
 		a.Tasks.CompleteTask(taskID, err)
 	}()
@@ -440,7 +473,6 @@ func (a *Agent) HandlePush(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})
 }
-
 func (a *Agent) StartLogShipper() {
 	defer a.wg.Done()
 
