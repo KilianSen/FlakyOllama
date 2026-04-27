@@ -193,6 +193,8 @@ func (b *Balancer) SetupRoutes() http.Handler {
 				r.Get("/", b.HandleV1UsersList)
 				r.Post("/{id}/quota", b.HandleV1UserUpdateQuota)
 				r.Delete("/{id}", b.HandleV1UserDelete)
+				r.Get("/{id}/policies", b.HandleV1UserModelPoliciesList)
+				r.Post("/policies", b.HandleV1UserModelPolicySet)
 			})
 			r.Route("/queue", func(r chi.Router) {
 				r.Get("/", b.HandleV1QueueList)

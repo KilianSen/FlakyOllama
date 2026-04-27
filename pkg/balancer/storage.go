@@ -257,8 +257,9 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 	defer tx.Rollback()
 
 	for _, e := range entries {
-		// 2. Update Quotas FIRST to get correct targetUserID
 		targetUserID := e.UserID
+
+		// 1. Update Quotas and get UserID if not provided
 		if e.ClientKey != "" {
 			var dbUserID sql.NullString
 			err = tx.QueryRow(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ? RETURNING user_id`,
@@ -266,7 +267,7 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 			if err != nil {
 				return err
 			}
-			if dbUserID.Valid && dbUserID.String != "" {
+			if targetUserID == "" && dbUserID.Valid && dbUserID.String != "" {
 				targetUserID = dbUserID.String
 			}
 		}
@@ -278,7 +279,7 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 			}
 		}
 
-		// 1. Record the usage (now with resolved user_id)
+		// 2. Record the usage
 		_, err = tx.Exec(`
 			INSERT INTO token_usage (timestamp, node_id, model, input_tokens, output_tokens, reward, cost, ttft_ms, duration_ms, client_key, user_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

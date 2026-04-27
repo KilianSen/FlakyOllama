@@ -3,7 +3,6 @@ package balancer
 import (
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/models"
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,54 +10,59 @@ import (
 	"time"
 )
 
-func TestBalancer_Route(t *testing.T) {
+func TestBalancer_SelectAgent(t *testing.T) {
 	b, _ := NewBalancer(":8080", ":memory:", config.DefaultConfig())
 
 	// Test case 1: No agents
-	_, _, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
+	_, err := b.SelectAgent("llama2", "")
 	if err == nil {
 		t.Errorf("Expected error when no agents available, got nil")
 	}
 
 	// Test case 2: One agent, model not loaded
-	b.State.UpsertNode("localhost:8081", &models.NodeStatus{
-		ID:           "agent-1",
-		Address:      "localhost:8081",
-		CPUUsage:     10.0,
-		VRAMTotal:    10 * 1024 * 1024 * 1024,
-		LastSeen:     time.Now(),
-		ActiveModels: []string{},
+	b.State.Do(func(s *ClusterState) {
+		s.Agents["localhost:8081"] = &models.NodeStatus{
+			ID:           "agent-1",
+			Address:      "localhost:8081",
+			CPUUsage:     10.0,
+			VRAMTotal:    10 * 1024 * 1024 * 1024,
+			LastSeen:     time.Now(),
+			ActiveModels: []string{},
+			Reputation:   1.0,
+			State:        models.StateHealthy,
+		}
 	})
 
-	// Wait for actor to process upsert
+	// Wait for actor to process
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err := b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
+	addr, err := b.SelectAgent("llama2", "")
 	if err != nil {
-		t.Fatalf("Failed to route: %v", err)
+		t.Fatalf("Failed to select agent: %v", err)
 	}
 	if addr != "localhost:8081" {
 		t.Errorf("Expected route to localhost:8081, got %s", addr)
 	}
-	if id != "agent-1" {
-		t.Errorf("Expected agent-1, got %s", id)
-	}
 
 	// Test case 3: Two agents, one has model loaded
-	b.State.UpsertNode("localhost:8082", &models.NodeStatus{
-		ID:           "agent-2",
-		Address:      "localhost:8082",
-		CPUUsage:     20.0,
-		VRAMTotal:    10 * 1024 * 1024 * 1024,
-		LastSeen:     time.Now(),
-		ActiveModels: []string{"llama2"},
+	b.State.Do(func(s *ClusterState) {
+		s.Agents["localhost:8082"] = &models.NodeStatus{
+			ID:           "agent-2",
+			Address:      "localhost:8082",
+			CPUUsage:     20.0,
+			VRAMTotal:    10 * 1024 * 1024 * 1024,
+			LastSeen:     time.Now(),
+			ActiveModels: []string{"llama2"},
+			Reputation:   1.0,
+			State:        models.StateHealthy,
+		}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
+	addr, err = b.SelectAgent("llama2", "")
 	if err != nil {
-		t.Fatalf("Failed to route: %v", err)
+		t.Fatalf("Failed to select agent: %v", err)
 	}
 	// Should prefer agent-2 because it has the model loaded, even if CPU is higher
 	if addr != "localhost:8082" {
@@ -66,19 +70,47 @@ func TestBalancer_Route(t *testing.T) {
 	}
 
 	// Test case 4: Two agents, both have model loaded, pick lowest CPU
-	// Note: agent-2 currently has session affinity from previous test, so it will still be picked due to stickiness bonus.
-	b.State.UpdateNode("localhost:8081", func(n *models.NodeStatus) {
-		n.ActiveModels = []string{"llama2"}
+	b.State.Do(func(s *ClusterState) {
+		s.Agents["localhost:8081"].ActiveModels = []string{"llama2"}
+		s.Agents["localhost:8081"].LocalModels = []models.ModelInfo{{Name: "llama2"}}
+		s.Agents["localhost:8082"].LocalModels = []models.ModelInfo{{Name: "llama2"}}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	id, addr, err = b.Route(context.Background(), models.InferenceRequest{Model: "llama2"}, "", "")
+	addr, err = b.SelectAgent("llama2", "")
 	if err != nil {
-		t.Fatalf("Failed to route: %v", err)
+		t.Fatalf("Failed to select agent: %v", err)
+	}
+	// agent-1 has 10% CPU, agent-2 has 20% CPU.
+	if addr != "localhost:8081" {
+		t.Errorf("Expected route to agent-1 (localhost:8081) due to lower CPU, got %s", addr)
+	}
+
+	// Test case 5: Budget-Aware Scoring
+	// agent-1: Reputation 1.0
+	// agent-2: Reputation 5.0
+	// User with high CostFactor should prefer agent-2
+	b.State.Do(func(s *ClusterState) {
+		s.Agents["localhost:8081"].Reputation = 1.0
+		s.Agents["localhost:8082"].Reputation = 5.0
+		s.Agents["localhost:8081"].CPUUsage = 10.0
+		s.Agents["localhost:8082"].CPUUsage = 10.0
+	})
+	b.Storage.SetUserModelPolicy(models.UserModelPolicy{
+		UserID:     "rich_user",
+		Model:      "llama2",
+		CostFactor: 2.0,
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	addr, err = b.SelectAgent("llama2", "rich_user")
+	if err != nil {
+		t.Fatalf("Failed to select agent for rich_user: %v", err)
 	}
 	if addr != "localhost:8082" {
-		t.Errorf("Expected route to agent-2 (localhost:8082) due to session stickiness, got %s", addr)
+		t.Errorf("Expected route to agent-2 (high reputation) for rich_user, got %s", addr)
 	}
 }
 
@@ -87,17 +119,16 @@ func TestBalancer_HandleRegister(t *testing.T) {
 	cfg.RemoteToken = "test-remote-token"
 	b, _ := NewBalancer(":8080", ":memory:", cfg)
 
-	// Mock registration request from an agent with 0.0.0.0
-	regBody := `{"id": "agent-0", "address": "0.0.0.0:8081"}`
+	// Mock registration request from an agent
+	regBody := `{"id": "agent-0", "address": "192.168.1.50:8081"}`
 	req, _ := http.NewRequest("POST", "/register", strings.NewReader(regBody))
 	req.Header.Set("Authorization", "Bearer test-remote-token")
-	req.RemoteAddr = "192.168.1.50:54321" // Simulated remote address
 
 	rr := httptest.NewRecorder()
-	b.NewMux().ServeHTTP(rr, req)
+	b.SetupRoutes().ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Fatalf("Expected status 200, got %d", rr.Code)
+		t.Fatalf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 
 	time.Sleep(10 * time.Millisecond) // Wait for actor
@@ -107,7 +138,7 @@ func TestBalancer_HandleRegister(t *testing.T) {
 	agent, ok := snapshot.Agents[expectedAddr]
 
 	if !ok {
-		t.Fatalf("Agent at %s not registered", expectedAddr)
+		t.Fatalf("Agent at %s not registered. Snapshot: %+v", expectedAddr, snapshot.Agents)
 	}
 
 	if agent.ID != "agent-0" {

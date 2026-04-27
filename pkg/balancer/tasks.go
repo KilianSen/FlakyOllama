@@ -182,40 +182,47 @@ func (b *Balancer) ProcessQueue() {
 		return
 	}
 
-	// Check for available nodes
 	snap := b.State.GetSnapshot()
-	availableNodes := 0
+
+	// Quick check if we have ANY healthy nodes at all
+	hasHealthy := false
 	for _, a := range snap.Agents {
 		if a.State == models.StateHealthy && !a.Draining {
-			availableNodes++
+			hasHealthy = true
+			break
 		}
 	}
-	if availableNodes == 0 {
+	if !hasHealthy {
 		return
 	}
 
-	// Limit processing to prevent infinite loops
-	depth := b.Queue.QueueDepth()
-	for i := 0; i < depth; i++ {
+	// Process a limited number of requests per tick to prevent thundering herd
+	// and allow state to update between assignments.
+	maxToProcess := 10
+	if depth := b.Queue.QueueDepth(); depth < maxToProcess {
+		maxToProcess = depth
+	}
+
+	for i := 0; i < maxToProcess; i++ {
 		req := b.Queue.Pop()
 		if req == nil {
 			break
 		}
 
-		// Use the context from the queued request to pass user info to SelectAgent if needed
 		addr, err := b.SelectAgent(req.Request.Model, req.UserID)
 		if err != nil {
-			// CRITICAL FIX: Use Requeue to preserve original Response channel
+			// If we couldn't find a node right now, put it back
 			b.Queue.Requeue(req)
-			continue
+			// If SelectAgent failed, it's likely all nodes are saturated for this model,
+			// so stop processing for this tick to avoid spinning.
+			break
 		}
 
-		// Non-blocking send
+		// Non-blocking send to the waiting request
 		select {
 		case req.Response <- QueuedResponse{AgentAddr: addr}:
 		default:
-			// If channel full or no one listening, it's fine, req was already popped
-			// Since SelectAgent already incremented, we MUST decrement
+			// If no one is listening anymore (client disconnected), decrement the workload
 			b.decrementWorkload(addr)
 		}
 	}

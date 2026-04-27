@@ -10,7 +10,8 @@ import (
 
 func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 	var bestAgent string
-	var bestScore float64 = -1
+	var bestScore float64 = -1e18 // Use a very small number to handle negative scores
+	var userPolicy models.UserModelPolicy
 
 	// Strip common prefixes for compatibility
 	modelName = strings.TrimPrefix(modelName, "a.")
@@ -18,9 +19,15 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 	// 1. Check User-Specific Policy
 	if userID != "" {
 		p, err := b.Storage.GetUserModelPolicy(userID, modelName)
-		if err == nil && p.Disabled {
-			return "", fmt.Errorf("user not authorized to use model %s", modelName)
+		if err == nil {
+			if p.Disabled {
+				return "", fmt.Errorf("user not authorized to use model %s", modelName)
+			}
+			userPolicy = p
 		}
+	} else {
+		// Default policy
+		userPolicy = models.UserModelPolicy{RewardFactor: 1.0, CostFactor: 1.0}
 	}
 
 	snap := b.State.GetSnapshot()
@@ -74,19 +81,15 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 	}
 
 	// 3. Forced Pinning check
-	for _, a := range snap.Agents {
+	pinnedCandidates := make([]string, 0)
+	for _, addr := range candidates {
+		a := snap.Agents[addr]
 		if pol, ok := clusterPolicies[a.ID]; ok && pol.Pinned {
-			pinnedCandidates := make([]string, 0)
-			for _, c := range candidates {
-				if snap.Agents[c].ID == a.ID {
-					pinnedCandidates = append(pinnedCandidates, c)
-				}
-			}
-			if len(pinnedCandidates) > 0 {
-				candidates = pinnedCandidates
-				break
-			}
+			pinnedCandidates = append(pinnedCandidates, addr)
 		}
+	}
+	if len(pinnedCandidates) > 0 {
+		candidates = pinnedCandidates
 	}
 
 	// 4. Enhanced Scoring
@@ -95,6 +98,13 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 
 		// Base score from reputation
 		score := a.Reputation * 100.0
+
+		// Budget-Aware Scoring:
+		// If the user has a high CostFactor (they pay more), they should be routed
+		// to higher reputation nodes to ensure success.
+		if userPolicy.CostFactor > 1.2 {
+			score += a.Reputation * 50.0 * (userPolicy.CostFactor - 1.0)
+		}
 
 		// Penalize workload
 		workload := float64(snap.NodeWorkloads[addr])

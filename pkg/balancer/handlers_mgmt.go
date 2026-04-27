@@ -427,7 +427,41 @@ func (b *Balancer) HandleV1ModelPolicySet(w http.ResponseWriter, r *http.Request
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Trigger immediate cache refresh
+	b.refreshCaches()
+
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "policy updated"})
+}
+
+func (b *Balancer) HandleV1UserModelPolicySet(w http.ResponseWriter, r *http.Request) {
+	var p models.UserModelPolicy
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	if p.UserID == "" {
+		b.jsonError(w, http.StatusBadRequest, "user_id required")
+		return
+	}
+
+	if err := b.Storage.SetUserModelPolicy(p); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "user policy updated"})
+}
+
+func (b *Balancer) HandleV1UserModelPoliciesList(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	policies, err := b.Storage.ListUserModelPolicies(id)
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, policies)
 }
 
 func (b *Balancer) HandleV1KeySetStatus(w http.ResponseWriter, r *http.Request) {

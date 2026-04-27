@@ -5,6 +5,7 @@ import (
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -29,45 +30,59 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 		}
 	}
 
-	// 1. Enter Priority Queue
-	resCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority, clientIP, contextHash, userID, ctx)
+	resultCh := make(chan hedgeResult, 2)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	var agentAddr string
-	select {
-	case res := <-resCh:
-		if res.Err != nil {
-			return nil, p90, "", res.Err
+	sendRequest := func(p int) {
+		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, p, clientIP, contextHash, userID, ctx)
+		select {
+		case res := <-resCh:
+			if res.Err != nil {
+				resultCh <- hedgeResult{err: res.Err}
+				return
+			}
+			resp, err := b.sendToAgentWithContext(ctx, res.AgentAddr, path, body)
+			resultCh <- hedgeResult{resp: resp, agentAddr: res.AgentAddr, err: err}
+		case <-ctx.Done():
+			resultCh <- hedgeResult{err: ctx.Err()}
 		}
-		agentAddr = res.AgentAddr
-	case <-ctx.Done():
-		return nil, p90, "", ctx.Err()
 	}
 
-	// 2. Initial Request
-	resp, err := b.sendToAgentWithContext(ctx, agentAddr, path, body)
-	if err == nil && resp.StatusCode < 400 {
-		return resp, p90, agentAddr, nil
+	// 1. Initial Request
+	go sendRequest(priority)
+
+	// 2. Hedge Request (if enabled)
+	var hedgeTimer *time.Timer
+	if allowHedging && b.Config.EnableHedging {
+		hedgeTimer = time.AfterFunc(p90, func() {
+			logging.Global.Debugf("P90 (%v) exceeded for %s, sending hedge request", p90, model)
+			sendRequest(priority + 1)
+		})
+		defer hedgeTimer.Stop()
 	}
 
-	// If initial failed and hedging disabled, return
-	if !allowHedging || !b.Config.EnableHedging {
-		if err != nil {
-			return nil, p90, agentAddr, err
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-resultCh:
+			if res.err == nil && res.resp != nil && res.resp.StatusCode < 400 {
+				cancel() // Stop the other request
+				return res.resp, p90, res.agentAddr, nil
+			}
+			if res.err != nil && firstErr == nil {
+				firstErr = res.err
+			} else if res.resp != nil && res.resp.StatusCode >= 400 && firstErr == nil {
+				firstErr = fmt.Errorf("agent returned status %d", res.resp.StatusCode)
+			}
+
+			if !allowHedging || !b.Config.EnableHedging {
+				return res.resp, p90, res.agentAddr, res.err
+			}
+		case <-ctx.Done():
+			return nil, p90, "", ctx.Err()
 		}
-		return resp, p90, agentAddr, nil
 	}
 
-	// 3. Hedging Logic (simplified for now - just one retry if first failed)
-	logging.Global.Debugf("Initial request to %s failed, attempting hedge", agentAddr)
-	newResCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority+1, clientIP, contextHash, userID, ctx)
-	select {
-	case res := <-newResCh:
-		if res.Err != nil {
-			return nil, p90, "", res.Err
-		}
-		r, e := b.sendToAgentWithContext(ctx, res.AgentAddr, path, body)
-		return r, p90, res.AgentAddr, e
-	case <-ctx.Done():
-		return nil, p90, "", ctx.Err()
-	}
+	return nil, p90, "", firstErr
 }
