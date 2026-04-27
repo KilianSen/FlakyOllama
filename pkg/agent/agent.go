@@ -1,11 +1,13 @@
 package agent
 
 import (
+	agentLogging "FlakyOllama/pkg/agent/logging"
 	"FlakyOllama/pkg/agent/monitoring"
 	"FlakyOllama/pkg/agent/ollama"
+	"FlakyOllama/pkg/agent/tasks"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
-	"FlakyOllama/pkg/shared/logging"
+	sharedLog "FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"context"
@@ -15,7 +17,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,22 +29,23 @@ import (
 // Agent handles local telemetry and proxies requests to Ollama.
 type Agent struct {
 	ID               string
-	AgentKey         string // The secret token for registration
-	Address          string // Listening address (e.g. 0.0.0.0:8081)
-	EffectiveAddress string // Publicly reachable address
+	AgentKey         string
+	Address          string
+	EffectiveAddress string
 	BalancerURL      string
 	Monitor          *monitoring.Monitor
 	Ollama           *ollama.Client
 	Config           *config.Config
+	Tasks            *tasks.TaskManager
+	Logs             *agentLogging.DiskQueue
 
-	lastStatus     models.NodeStatus
-	lastStatusTime time.Time
-	statusMu       sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
-	LogCh  chan models.LogEntry
-	stopCh chan struct{}
-
+	httpClient *http.Client
 	httpServer *http.Server
+	proxy      *httputil.ReverseProxy
 }
 
 func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *Agent {
@@ -54,21 +60,53 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 		key = cfg.RemoteToken
 	}
 
-	return &Agent{
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Initialize DiskQueue for logs
+	dbPath := filepath.Join(os.TempDir(), fmt.Sprintf("agent_logs_%s.db", id))
+	dq, err := agentLogging.NewDiskQueue(dbPath)
+	if err != nil {
+		sharedLog.Global.Errorf("Failed to initialize disk queue: %v", err)
+	}
+
+	// Initialize Reverse Proxy
+	target, _ := url.Parse(ollamaURL)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
+			},
+		},
+		Timeout: 30 * time.Second,
+	}
+
+	a := &Agent{
 		ID:               id,
 		AgentKey:         key,
 		Address:          address,
-		EffectiveAddress: address, // Default to listening address
+		EffectiveAddress: address,
 		BalancerURL:      balancerURL,
 		Monitor:          monitoring.NewMonitor(),
 		Ollama:           ollama.NewClient(ollamaURL),
 		Config:           cfg,
-		LogCh:            make(chan models.LogEntry, 100),
-		stopCh:           make(chan struct{}),
+		Tasks:            tasks.NewTaskManager(),
+		Logs:             dq,
+		ctx:              ctx,
+		cancel:           cancel,
+		httpClient:       httpClient,
+		proxy:            proxy,
 	}
+
+	// Set disk queue as the sink for the global logger if it exists
+	if dq != nil {
+		sharedLog.Global.SetSink(dq)
+	}
+
+	return a
 }
 
-// Register registers the agent with the balancer.
 func (a *Agent) Register() error {
 	address := a.Address
 	if strings.HasPrefix(address, "0.0.0.0:") || strings.HasPrefix(address, ":") {
@@ -94,13 +132,12 @@ func (a *Agent) Register() error {
 		HasGPU:   status.HasGPU,
 		GPUModel: status.GPUModel,
 	}
-	logging.Global.Infof("Registering agent %s with address %s [GPU: %v (%s)]", a.ID, a.EffectiveAddress, req.HasGPU, req.GPUModel)
-	body, _ := json.Marshal(req)
+	sharedLog.Global.Infof("Registering agent %s with address %s [GPU: %v (%s)]", a.ID, a.EffectiveAddress, req.HasGPU, req.GPUModel)
 
-	agentReq, _ := http.NewRequest("POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
+	body, _ := json.Marshal(req)
+	agentReq, _ := http.NewRequestWithContext(a.ctx, "POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
 	agentReq.Header.Set("Content-Type", "application/json")
 
-	// Auth: Prefer AgentKey, fallback to RemoteToken
 	token := a.AgentKey
 	if token == "" {
 		token = a.Config.RemoteToken
@@ -109,14 +146,7 @@ func (a *Agent) Register() error {
 		agentReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: a.Config.TLS.InsecureSkipVerify,
-			},
-		},
-	}
-	resp, err := client.Do(agentReq)
+	resp, err := a.httpClient.Do(agentReq)
 	if err != nil {
 		return err
 	}
@@ -129,35 +159,37 @@ func (a *Agent) Register() error {
 	return nil
 }
 
-// NewMux returns a mux with the agent's handlers registered.
 func (a *Agent) NewMux() *http.ServeMux {
 	token := a.Config.AuthToken
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/telemetry", auth.Middleware([]string{token}, nil, a.HandleTelemetry))
-	mux.HandleFunc("/inference", auth.Middleware([]string{token}, nil, a.HandleInference))
-	mux.HandleFunc("/chat", auth.Middleware([]string{token}, nil, a.HandleChat))
+	mux.HandleFunc("/tasks", auth.Middleware([]string{token}, nil, a.HandleTasks))
 
-	// OpenAI Compatibility Routes (forward to Ollama native /v1)
-	mux.HandleFunc("/v1/", auth.Middleware([]string{token}, nil, a.HandleV1Proxy))
+	// Proxy routes using ReverseProxy
+	mux.HandleFunc("/v1/", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/inference", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/chat", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/embeddings", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
 
+	// Direct handlers for more control
 	mux.HandleFunc("/show", auth.Middleware([]string{token}, nil, a.HandleShow))
-	mux.HandleFunc("/embeddings", auth.Middleware([]string{token}, nil, a.HandleEmbeddings))
 	mux.HandleFunc("/version", auth.Middleware([]string{token}, nil, a.HandleVersion))
-	mux.HandleFunc("/models/create", auth.Middleware([]string{token}, nil, a.HandleCreate))
-	mux.HandleFunc("/models/copy", auth.Middleware([]string{token}, nil, a.HandleCopy))
-	mux.HandleFunc("/models/push", auth.Middleware([]string{token}, nil, a.HandlePush))
+
+	// Async Task handlers
 	mux.HandleFunc("/models/pull", auth.Middleware([]string{token}, nil, a.HandlePull))
 	mux.HandleFunc("/models/unload", auth.Middleware([]string{token}, nil, a.HandleUnload))
 	mux.HandleFunc("/models/delete", auth.Middleware([]string{token}, nil, a.HandleDelete))
+	mux.HandleFunc("/models/create", auth.Middleware([]string{token}, nil, a.HandleCreate))
+	mux.HandleFunc("/models/copy", auth.Middleware([]string{token}, nil, a.HandleCopy))
+	mux.HandleFunc("/models/push", auth.Middleware([]string{token}, nil, a.HandlePush))
 
 	return mux
 }
 
-// Serve starts the HTTP server.
 func (a *Agent) Serve() error {
-	logging.Global.Infof("Agent %s listening on %s (TLS: %v)", a.ID, a.Address, a.Config.TLS.Enabled)
+	sharedLog.Global.Infof("Agent %s listening on %s (TLS: %v)", a.ID, a.Address, a.Config.TLS.Enabled)
 
 	a.httpServer = &http.Server{
 		Addr:    a.Address,
@@ -165,6 +197,9 @@ func (a *Agent) Serve() error {
 	}
 
 	// Start background tasks
+	a.Monitor.Start(a.ctx)
+
+	a.wg.Add(2)
 	go a.StartLogShipper()
 	go a.StartRegistrationLoop()
 
@@ -175,20 +210,26 @@ func (a *Agent) Serve() error {
 }
 
 func (a *Agent) Stop() {
-	logging.Global.Infof("Agent %s shutting down...", a.ID)
-	close(a.stopCh)
+	sharedLog.Global.Infof("Agent %s shutting down...", a.ID)
+	a.cancel()
+	a.Monitor.Stop()
+
 	if a.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		a.httpServer.Shutdown(ctx)
 	}
+
+	a.wg.Wait()
+	if a.Logs != nil {
+		a.Logs.Close()
+	}
 }
 
-// StartRegistrationLoop ensures the agent stays registered even if the balancer restarts.
 func (a *Agent) StartRegistrationLoop() {
-	// Register immediately on start
+	defer a.wg.Done()
 	if err := a.Register(); err != nil {
-		logging.Global.Errorf("Initial registration failed: %v", err)
+		sharedLog.Global.Errorf("Initial registration failed: %v", err)
 	}
 
 	ticker := time.NewTicker(1 * time.Minute)
@@ -198,24 +239,15 @@ func (a *Agent) StartRegistrationLoop() {
 		select {
 		case <-ticker.C:
 			if err := a.Register(); err != nil {
-				logging.Global.Debugf("Periodic re-registration failed: %v", err)
+				sharedLog.Global.Debugf("Periodic re-registration failed: %v", err)
 			}
-		case <-a.stopCh:
+		case <-a.ctx.Done():
 			return
 		}
 	}
 }
 
 func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
-	a.statusMu.Lock()
-	defer a.statusMu.Unlock()
-
-	// Use cache if it's less than 2 seconds old
-	if time.Since(a.lastStatusTime) < 2*time.Second {
-		json.NewEncoder(w).Encode(a.lastStatus)
-		return
-	}
-
 	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -226,50 +258,22 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	status.Address = a.EffectiveAddress
 	status.LastSeen = time.Now()
 
-	// Get currently loaded models
-	if active, err := a.Ollama.GetLoadedModels(); err == nil {
+	// Use contexts for Ollama calls
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	if active, err := a.Ollama.GetLoadedModels(ctx); err == nil {
 		status.ActiveModels = active
 	}
-
-	// Get all models on disk
-	if local, err := a.Ollama.ListLocalModels(); err == nil {
+	if local, err := a.Ollama.ListLocalModels(ctx); err == nil {
 		status.LocalModels = local
 	}
-
-	a.lastStatus = status
-	a.lastStatusTime = time.Now()
 
 	json.NewEncoder(w).Encode(status)
 }
 
-func (a *Agent) HandleV1Proxy(w http.ResponseWriter, r *http.Request) {
-	// Transparently forward OpenAI requests to Ollama's native /v1 endpoint
-	// This ensures SSE and OpenAI formatting are preserved
-	url := a.Ollama.BaseURL + r.URL.Path
-	if r.URL.RawQuery != "" {
-		url += "?" + r.URL.RawQuery
-	}
-
-	req, _ := http.NewRequest(r.Method, url, r.Body)
-	for k, v := range r.Header {
-		if k != "Authorization" && k != "Host" {
-			req.Header[k] = v
-		}
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer resp.Body.Close()
-
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+func (a *Agent) HandleTasks(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(a.Tasks.ListTasks())
 }
 
 func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
@@ -280,14 +284,23 @@ func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	taskID := fmt.Sprintf("pull-%d", time.Now().UnixNano())
+	a.Tasks.AddTask(taskID, "pull", req.Model)
+
 	go func() {
-		if err := a.Ollama.Pull(req.Model); err != nil {
-			logging.Global.Infof("Pull failed for model %s: %v", req.Model, err)
+		sharedLog.Global.Infof("Task %s: Pulling model %s", taskID, req.Model)
+		err := a.Ollama.Pull(a.ctx, req.Model)
+		a.Tasks.CompleteTask(taskID, err)
+		if err != nil {
+			sharedLog.Global.Errorf("Task %s: Pull failed: %v", taskID, err)
 		} else {
-			logging.Global.Infof("Pull finished for model %s", req.Model)
+			sharedLog.Global.Infof("Task %s: Pull completed", taskID)
 		}
 	}()
+
 	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})
 }
 
 func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
@@ -298,8 +311,10 @@ func (a *Agent) HandleUnload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	logging.Global.Infof("Unloading model %s", req.Model)
-	if err := a.Ollama.Unload(req.Model); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := a.Ollama.Unload(ctx, req.Model); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -314,8 +329,10 @@ func (a *Agent) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	logging.Global.Infof("Deleting model %s from disk", req.Model)
-	if err := a.Ollama.Delete(req.Model); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := a.Ollama.Delete(ctx, req.Model); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -330,7 +347,10 @@ func (a *Agent) HandleShow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	result, err := a.Ollama.Show(req.Model)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := a.Ollama.Show(ctx, req.Model)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -338,97 +358,11 @@ func (a *Agent) HandleShow(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-func (a *Agent) HandleInference(w http.ResponseWriter, r *http.Request) {
-	var req models.InferenceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	logging.Global.Infof("Starting inference for model %s", req.Model)
-
-	// Propagation of context for cancellation
-	stream, code, err := a.Ollama.GenerateStream(req)
-	if err != nil {
-		http.Error(w, err.Error(), code)
-		return
-	}
-	defer stream.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	// Create a pipe to detect client disconnects during streaming
-	done := make(chan struct{})
-	go func() {
-		io.Copy(w, stream)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		logging.Global.Infof("Inference completed for model %s", req.Model)
-	case <-r.Context().Done():
-		logging.Global.Infof("Inference cancelled by Balancer for model %s", req.Model)
-	}
-}
-
-func (a *Agent) HandleChat(w http.ResponseWriter, r *http.Request) {
-	var req models.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	logging.Global.Infof("Starting chat completion for model %s", req.Model)
-
-	stream, code, err := a.Ollama.ChatStream(req)
-	if err != nil {
-		http.Error(w, err.Error(), code)
-		return
-	}
-	defer stream.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	done := make(chan struct{})
-	go func() {
-		io.Copy(w, stream)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-r.Context().Done():
-		logging.Global.Infof("Chat cancelled by Balancer for model %s", req.Model)
-	}
-}
-
-func (a *Agent) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Model string      `json:"model"`
-		Input interface{} `json:"input"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	stream, code, err := a.Ollama.Embeddings(req.Model, req.Input)
-	if err != nil {
-		http.Error(w, err.Error(), code)
-		return
-	}
-	defer stream.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	io.Copy(w, stream)
-}
-
 func (a *Agent) HandleVersion(w http.ResponseWriter, r *http.Request) {
-	version, err := a.Ollama.Version()
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	version, err := a.Ollama.Version(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -445,15 +379,21 @@ func (a *Agent) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	stream, code, err := a.Ollama.Create(req.Name, req.Modelfile)
-	if err != nil {
-		http.Error(w, err.Error(), code)
-		return
-	}
-	defer stream.Close()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	io.Copy(w, stream)
+
+	taskID := fmt.Sprintf("create-%d", time.Now().UnixNano())
+	a.Tasks.AddTask(taskID, "create", req.Name)
+
+	go func() {
+		stream, _, err := a.Ollama.Create(a.ctx, req.Name, req.Modelfile)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, stream)
+			stream.Close()
+		}
+		a.Tasks.CompleteTask(taskID, err)
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})
 }
 
 func (a *Agent) HandleCopy(w http.ResponseWriter, r *http.Request) {
@@ -465,9 +405,12 @@ func (a *Agent) HandleCopy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	code, err := a.Ollama.Copy(req.Source, req.Destination)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	_, err := a.Ollama.Copy(ctx, req.Source, req.Destination)
 	if err != nil {
-		http.Error(w, err.Error(), code)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -481,70 +424,86 @@ func (a *Agent) HandlePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	stream, code, err := a.Ollama.Push(req.Name)
-	if err != nil {
-		http.Error(w, err.Error(), code)
-		return
-	}
-	defer stream.Close()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	io.Copy(w, stream)
+
+	taskID := fmt.Sprintf("push-%d", time.Now().UnixNano())
+	a.Tasks.AddTask(taskID, "push", req.Name)
+
+	go func() {
+		stream, _, err := a.Ollama.Push(a.ctx, req.Name)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, stream)
+			stream.Close()
+		}
+		a.Tasks.CompleteTask(taskID, err)
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})
 }
 
 func (a *Agent) StartLogShipper() {
+	defer a.wg.Done()
+
 	scheme := "http"
 	if a.Config.TLS.Enabled {
 		scheme = "https"
 	}
-	url := a.BalancerURL
-	if strings.Contains(url, "://") {
-		parts := strings.Split(url, "://")
-		url = scheme + "://" + parts[1]
-	} else {
-		url = scheme + "://" + url
+	urlStr := a.BalancerURL
+	if !strings.Contains(urlStr, "://") {
+		urlStr = scheme + "://" + urlStr
 	}
-	url = strings.TrimSuffix(url, "/") + "/api/log/collect"
+	urlStr = strings.TrimSuffix(urlStr, "/") + "/api/log/collect"
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: a.Config.TLS.InsecureSkipVerify,
-			},
-		},
-		Timeout: 5 * time.Second,
-	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case entry := <-a.LogCh:
-			body, _ := json.Marshal(entry)
-			req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
-			req.Header.Set("Content-Type", "application/json")
-
-			token := a.AgentKey
-			if token == "" {
-				token = a.Config.RemoteToken
-			}
-			if token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-			}
-
-			resp, err := client.Do(req)
-			if err != nil {
+		case <-ticker.C:
+			if a.Logs == nil {
 				continue
 			}
-			resp.Body.Close()
-		case <-a.stopCh:
+
+			pending, err := a.Logs.FetchLogs(50)
+			if err != nil || len(pending) == 0 {
+				continue
+			}
+
+			var idsToDelete []int64
+			for _, p := range pending {
+				body, _ := json.Marshal(p.Entry)
+				req, _ := http.NewRequestWithContext(a.ctx, "POST", urlStr, bytes.NewBuffer(body))
+				req.Header.Set("Content-Type", "application/json")
+
+				token := a.AgentKey
+				if token == "" {
+					token = a.Config.RemoteToken
+				}
+				if token != "" {
+					req.Header.Set("Authorization", "Bearer "+token)
+				}
+
+				resp, err := a.httpClient.Do(req)
+				if err == nil && resp.StatusCode == http.StatusOK {
+					idsToDelete = append(idsToDelete, p.ID)
+					resp.Body.Close()
+				} else {
+					if resp != nil {
+						resp.Body.Close()
+					}
+					break
+				}
+			}
+			_ = a.Logs.DeleteLogs(idsToDelete)
+
+		case <-a.ctx.Done():
 			return
 		}
 	}
 }
 
-// LogSink implementation
 func (a *Agent) Ship(entry models.LogEntry) {
-	select {
-	case a.LogCh <- entry:
-	default:
+	if a.Logs != nil {
+		a.Logs.Ship(entry)
 	}
 }

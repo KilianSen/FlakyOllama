@@ -3,12 +3,50 @@ package ollama
 import (
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
+
+// Request types for Ollama API
+type OllamaDeleteRequest struct {
+	Name string `json:"name"`
+}
+
+type OllamaPullRequest struct {
+	Name string `json:"name"`
+}
+
+type OllamaUnloadRequest struct {
+	Model     string `json:"model"`
+	Prompt    string `json:"prompt"`
+	KeepAlive int    `json:"keep_alive"`
+}
+
+type OllamaShowRequest struct {
+	Name string `json:"name"`
+}
+
+type OllamaEmbeddingsRequest struct {
+	Model string      `json:"model"`
+	Input interface{} `json:"input"`
+}
+
+type OllamaCreateRequest struct {
+	Name      string `json:"name"`
+	Modelfile string `json:"modelfile"`
+}
+
+type OllamaCopyRequest struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+}
+
+type OllamaPushRequest struct {
+	Name string `json:"name"`
+}
 
 // Client interacts with a local Ollama instance.
 type Client struct {
@@ -18,21 +56,35 @@ type Client struct {
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		BaseURL: baseURL,
+		BaseURL:    baseURL,
 		HTTPClient: &http.Client{
-			Timeout: 1 * time.Hour, // Long timeout for large model pulls/generation
+			// The default client doesn't have a timeout here because we use contexts
 		},
 	}
 }
 
-// GenerateStream sends an inference request and returns the streaming response body.
-func (c *Client) GenerateStream(req models.InferenceRequest) (io.ReadCloser, int, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, 0, err
+func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = bytes.NewBuffer(b)
 	}
 
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/generate", "application/json", bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	return c.HTTPClient.Do(req)
+}
+
+// GenerateStream sends an inference request and returns the streaming response body.
+func (c *Client) GenerateStream(ctx context.Context, req models.InferenceRequest) (io.ReadCloser, int, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/generate", req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -47,13 +99,8 @@ func (c *Client) GenerateStream(req models.InferenceRequest) (io.ReadCloser, int
 }
 
 // ChatStream sends a chat request and returns the streaming response body.
-func (c *Client) ChatStream(req models.ChatRequest) (io.ReadCloser, int, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/chat", "application/json", bytes.NewBuffer(body))
+func (c *Client) ChatStream(ctx context.Context, req models.ChatRequest) (io.ReadCloser, int, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/chat", req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -68,8 +115,8 @@ func (c *Client) ChatStream(req models.ChatRequest) (io.ReadCloser, int, error) 
 }
 
 // GetLoadedModels returns the list of models currently loaded.
-func (c *Client) GetLoadedModels() ([]string, error) {
-	resp, err := c.HTTPClient.Get(c.BaseURL + "/api/ps")
+func (c *Client) GetLoadedModels(ctx context.Context) ([]string, error) {
+	resp, err := c.doRequest(ctx, "GET", "/api/ps", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +143,8 @@ func (c *Client) GetLoadedModels() ([]string, error) {
 }
 
 // ListLocalModels returns all models available on disk.
-func (c *Client) ListLocalModels() ([]models.ModelInfo, error) {
-	resp, err := c.HTTPClient.Get(c.BaseURL + "/api/tags")
+func (c *Client) ListLocalModels(ctx context.Context) ([]models.ModelInfo, error) {
+	resp, err := c.doRequest(ctx, "GET", "/api/tags", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -117,10 +164,8 @@ func (c *Client) ListLocalModels() ([]models.ModelInfo, error) {
 }
 
 // Delete removes a model from disk.
-func (c *Client) Delete(model string) error {
-	req, _ := http.NewRequest("DELETE", c.BaseURL+"/api/delete", bytes.NewBuffer([]byte(fmt.Sprintf(`{"name":"%s"}`, model))))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTPClient.Do(req)
+func (c *Client) Delete(ctx context.Context, model string) error {
+	resp, err := c.doRequest(ctx, "DELETE", "/api/delete", OllamaDeleteRequest{Name: model})
 	if err != nil {
 		return err
 	}
@@ -132,9 +177,8 @@ func (c *Client) Delete(model string) error {
 }
 
 // Pull triggers a model download in Ollama.
-func (c *Client) Pull(model string) error {
-	body, _ := json.Marshal(map[string]string{"name": model})
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/pull", "application/json", bytes.NewBuffer(body))
+func (c *Client) Pull(ctx context.Context, model string) error {
+	resp, err := c.doRequest(ctx, "POST", "/api/pull", OllamaPullRequest{Name: model})
 	if err != nil {
 		return err
 	}
@@ -148,14 +192,13 @@ func (c *Client) Pull(model string) error {
 }
 
 // Unload unloads a model from memory.
-func (c *Client) Unload(model string) error {
-	req := map[string]interface{}{
-		"model":      model,
-		"prompt":     "",
-		"keep_alive": 0,
+func (c *Client) Unload(ctx context.Context, model string) error {
+	req := OllamaUnloadRequest{
+		Model:     model,
+		Prompt:    "",
+		KeepAlive: 0,
 	}
-	body, _ := json.Marshal(req)
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/generate", "application/json", bytes.NewBuffer(body))
+	resp, err := c.doRequest(ctx, "POST", "/api/generate", req)
 	if err != nil {
 		return err
 	}
@@ -168,9 +211,8 @@ func (c *Client) Unload(model string) error {
 }
 
 // Show returns metadata for a model.
-func (c *Client) Show(model string) (map[string]interface{}, error) {
-	body, _ := json.Marshal(map[string]string{"name": model})
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/show", "application/json", bytes.NewBuffer(body))
+func (c *Client) Show(ctx context.Context, model string) (map[string]interface{}, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/show", OllamaShowRequest{Name: model})
 	if err != nil {
 		return nil, err
 	}
@@ -186,13 +228,8 @@ func (c *Client) Show(model string) (map[string]interface{}, error) {
 }
 
 // Embeddings generates embeddings for a given input.
-func (c *Client) Embeddings(model string, input interface{}) (io.ReadCloser, int, error) {
-	req := map[string]interface{}{
-		"model": model,
-		"input": input,
-	}
-	body, _ := json.Marshal(req)
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/embeddings", "application/json", bytes.NewBuffer(body))
+func (c *Client) Embeddings(ctx context.Context, model string, input interface{}) (io.ReadCloser, int, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/embeddings", OllamaEmbeddingsRequest{Model: model, Input: input})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -205,13 +242,8 @@ func (c *Client) Embeddings(model string, input interface{}) (io.ReadCloser, int
 }
 
 // Create creates a model from a Modelfile.
-func (c *Client) Create(name, modelfile string) (io.ReadCloser, int, error) {
-	req := map[string]interface{}{
-		"name":      name,
-		"modelfile": modelfile,
-	}
-	body, _ := json.Marshal(req)
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/create", "application/json", bytes.NewBuffer(body))
+func (c *Client) Create(ctx context.Context, name, modelfile string) (io.ReadCloser, int, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/create", OllamaCreateRequest{Name: name, Modelfile: modelfile})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -224,13 +256,8 @@ func (c *Client) Create(name, modelfile string) (io.ReadCloser, int, error) {
 }
 
 // Copy copies a model.
-func (c *Client) Copy(source, destination string) (int, error) {
-	req := map[string]interface{}{
-		"source":      source,
-		"destination": destination,
-	}
-	body, _ := json.Marshal(req)
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/copy", "application/json", bytes.NewBuffer(body))
+func (c *Client) Copy(ctx context.Context, source, destination string) (int, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/copy", OllamaCopyRequest{Source: source, Destination: destination})
 	if err != nil {
 		return 0, err
 	}
@@ -243,12 +270,8 @@ func (c *Client) Copy(source, destination string) (int, error) {
 }
 
 // Push pushes a model to a registry.
-func (c *Client) Push(name string) (io.ReadCloser, int, error) {
-	req := map[string]interface{}{
-		"name": name,
-	}
-	body, _ := json.Marshal(req)
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/push", "application/json", bytes.NewBuffer(body))
+func (c *Client) Push(ctx context.Context, name string) (io.ReadCloser, int, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/push", OllamaPushRequest{Name: name})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -261,8 +284,8 @@ func (c *Client) Push(name string) (io.ReadCloser, int, error) {
 }
 
 // Version returns the Ollama version.
-func (c *Client) Version() (string, error) {
-	resp, err := c.HTTPClient.Get(c.BaseURL + "/api/version")
+func (c *Client) Version(ctx context.Context) (string, error) {
+	resp, err := c.doRequest(ctx, "GET", "/api/version", nil)
 	if err != nil {
 		return "", err
 	}

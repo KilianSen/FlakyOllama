@@ -281,7 +281,24 @@ type AgentKey struct {
 	Status        KeyStatus `json:"status"`
 }
 
-// VirtualModelConfig defines how a virtual model resolves to real models.
+type AgentTaskStatus string
+
+const (
+	TaskRunning   AgentTaskStatus = "running"
+	TaskCompleted AgentTaskStatus = "completed"
+	TaskFailed    AgentTaskStatus = "failed"
+)
+
+type AgentTask struct {
+	ID        string          `json:"id"`
+	Type      string          `json:"type"` // "pull", "push", "create"
+	Model     string          `json:"model"`
+	Status    AgentTaskStatus `json:"status"`
+	Error     string          `json:"error,omitempty"`
+	StartedAt time.Time       `json:"started_at"`
+	EndedAt   *time.Time      `json:"ended_at,omitempty"`
+}
+
 type VirtualModelConfig struct {
 	Type       string         `json:"type"`        // "pipeline", "arena", "metric"
 	Strategy   string         `json:"strategy"`    // "fastest", "cheapest", "random"
