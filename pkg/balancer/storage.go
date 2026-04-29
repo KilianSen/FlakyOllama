@@ -117,6 +117,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 			key TEXT PRIMARY KEY,
 			label TEXT,
 			node_id TEXT,
+			balancer_token TEXT DEFAULT '',
 			credits_earned REAL DEFAULT 0,
 			reputation REAL DEFAULT 1.0,
 			active BOOLEAN DEFAULT 1,
@@ -502,8 +503,8 @@ func (s *SQLiteStorage) RecordUsage(clientKey string, tokens int64) error {
 
 // Agent Key Management
 func (s *SQLiteStorage) CreateAgentKey(k models.AgentKey) error {
-	_, err := s.db.Exec(`INSERT INTO agent_keys (key, label, node_id, user_id, status) VALUES (?, ?, ?, ?, ?)`,
-		k.Key, k.Label, k.NodeID, k.UserID, k.Status)
+	_, err := s.db.Exec(`INSERT INTO agent_keys (key, label, node_id, balancer_token, user_id, status) VALUES (?, ?, ?, ?, ?, ?)`,
+		k.Key, k.Label, k.NodeID, k.BalancerToken, k.UserID, k.Status)
 	return err
 }
 
@@ -527,8 +528,8 @@ func (s *SQLiteStorage) RecordReputation(key string, change float64) error {
 func (s *SQLiteStorage) GetAgentKey(key string) (models.AgentKey, error) {
 	var k models.AgentKey
 	var userID sql.NullString
-	err := s.db.QueryRow(`SELECT key, label, node_id, credits_earned, reputation, active, user_id, status FROM agent_keys WHERE key = ?`, key).
-		Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID, &k.Status)
+	err := s.db.QueryRow(`SELECT key, label, node_id, balancer_token, credits_earned, reputation, active, user_id, status FROM agent_keys WHERE key = ?`, key).
+		Scan(&k.Key, &k.Label, &k.NodeID, &k.BalancerToken, &k.CreditsEarned, &k.Reputation, &k.Active, &userID, &k.Status)
 	if err != nil {
 		return k, err
 	}
@@ -539,7 +540,7 @@ func (s *SQLiteStorage) GetAgentKey(key string) (models.AgentKey, error) {
 }
 
 func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
-	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id, status FROM agent_keys`)
+	rows, err := s.db.Query(`SELECT key, label, node_id, balancer_token, credits_earned, reputation, active, user_id, status FROM agent_keys`)
 	if err != nil {
 		return nil, err
 	}
@@ -548,7 +549,7 @@ func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
 	for rows.Next() {
 		var k models.AgentKey
 		var userID sql.NullString
-		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &userID, &k.Status); err != nil {
+		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.BalancerToken, &k.CreditsEarned, &k.Reputation, &k.Active, &userID, &k.Status); err != nil {
 			return nil, err
 		}
 		if userID.Valid {
@@ -560,7 +561,7 @@ func (s *SQLiteStorage) ListAgentKeys() ([]models.AgentKey, error) {
 }
 
 func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, error) {
-	rows, err := s.db.Query(`SELECT key, label, node_id, credits_earned, reputation, active, user_id, status FROM agent_keys WHERE user_id = ?`, userID)
+	rows, err := s.db.Query(`SELECT key, label, node_id, balancer_token, credits_earned, reputation, active, user_id, status FROM agent_keys WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +569,7 @@ func (s *SQLiteStorage) GetAgentKeysByUserID(userID string) ([]models.AgentKey, 
 	keys := make([]models.AgentKey, 0)
 	for rows.Next() {
 		var k models.AgentKey
-		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.CreditsEarned, &k.Reputation, &k.Active, &k.UserID, &k.Status); err != nil {
+		if err := rows.Scan(&k.Key, &k.Label, &k.NodeID, &k.BalancerToken, &k.CreditsEarned, &k.Reputation, &k.Active, &k.UserID, &k.Status); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
@@ -585,6 +586,35 @@ func (s *SQLiteStorage) UpdateClientKey(k models.ClientKey) error {
 func (s *SQLiteStorage) DeleteClientKey(key string) error {
 	_, err := s.db.Exec(`DELETE FROM client_keys WHERE key = ?`, key)
 	return err
+}
+
+func (s *SQLiteStorage) RotateAgentKey(oldKey, newKey, newBalancerToken string) (models.AgentKey, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return models.AgentKey{}, err
+	}
+	defer tx.Rollback()
+
+	// Copy existing record with new key value
+	_, err = tx.Exec(`
+		INSERT INTO agent_keys (key, label, node_id, balancer_token, credits_earned, reputation, active, user_id, status)
+		SELECT ?, label, node_id, ?, credits_earned, reputation, active, user_id, status
+		FROM agent_keys WHERE key = ?`, newKey, newBalancerToken, oldKey)
+	if err != nil {
+		return models.AgentKey{}, err
+	}
+
+	// Remove old record
+	_, err = tx.Exec(`DELETE FROM agent_keys WHERE key = ?`, oldKey)
+	if err != nil {
+		return models.AgentKey{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return models.AgentKey{}, err
+	}
+
+	return s.GetAgentKey(newKey)
 }
 
 func (s *SQLiteStorage) DeleteAgentKey(key string) error {

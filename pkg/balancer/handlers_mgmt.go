@@ -541,7 +541,10 @@ func (b *Balancer) HandleV1AgentKeyCreate(w http.ResponseWriter, r *http.Request
 	}
 
 	if k.Key == "" {
-		k.Key = "ak_" + b.computeHash(fmt.Sprintf("%d_%s", time.Now().UnixNano(), k.Label))[:24]
+		k.Key = "ak_" + b.computeHash(fmt.Sprintf("%d_%s_key", time.Now().UnixNano(), k.Label))[:24]
+	}
+	if k.BalancerToken == "" {
+		k.BalancerToken = "bt_" + b.computeHash(fmt.Sprintf("%d_%s_bt", time.Now().UnixNano(), k.Label))[:24]
 	}
 	k.Active = true
 	k.Status = models.KeyStatusActive
@@ -605,6 +608,55 @@ func (b *Balancer) HandleV1ClientKeyDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (b *Balancer) HandleV1AgentKeyRotate(w http.ResponseWriter, r *http.Request) {
+	oldKey := chi.URLParam(r, "key")
+
+	var req struct {
+		RotateAgentToken    bool `json:"rotate_agent_token"`
+		RotateBalancerToken bool `json:"rotate_balancer_token"`
+	}
+	// Default: rotate both
+	req.RotateAgentToken = true
+	req.RotateBalancerToken = true
+	json.NewDecoder(r.Body).Decode(&req)
+
+	existing, err := b.Storage.GetAgentKey(oldKey)
+	if err != nil {
+		b.jsonError(w, http.StatusNotFound, "agent key not found")
+		return
+	}
+
+	newKey := oldKey
+	if req.RotateAgentToken {
+		newKey = "ak_" + b.computeHash(fmt.Sprintf("%d_%s_rotated_key", time.Now().UnixNano(), existing.Label))[:24]
+	}
+
+	newBalancerToken := existing.BalancerToken
+	if req.RotateBalancerToken {
+		newBalancerToken = "bt_" + b.computeHash(fmt.Sprintf("%d_%s_rotated_bt", time.Now().UnixNano(), existing.Label))[:24]
+	}
+
+	updated, err := b.Storage.RotateAgentKey(oldKey, newKey, newBalancerToken)
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, "failed to rotate key: "+err.Error())
+		return
+	}
+
+	// Update in-flight cluster state so balancer uses the new balancer token immediately
+	b.State.Do(func(s *ClusterState) {
+		for _, node := range s.Agents {
+			if node.AgentKey == oldKey {
+				node.AgentKey = newKey
+				node.BalancerToken = newBalancerToken
+				break
+			}
+		}
+	})
+
+	logging.Global.Infof("Agent key rotated: %s -> %s (label: %s)", oldKey, newKey, existing.Label)
+	b.jsonResponse(w, http.StatusOK, updated)
 }
 
 func (b *Balancer) HandleV1AgentKeyDelete(w http.ResponseWriter, r *http.Request) {

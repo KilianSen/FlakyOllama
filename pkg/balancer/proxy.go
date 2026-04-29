@@ -50,8 +50,18 @@ func (b *Balancer) sendToAgentWithContext(ctx context.Context, addr, path string
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if b.Config.RemoteToken != "" {
-		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
+
+	var balancerToken string
+	b.State.View(func(s ClusterState) {
+		if agent, ok := s.Agents[addr]; ok {
+			balancerToken = agent.BalancerToken
+		}
+	})
+	if balancerToken == "" {
+		balancerToken = b.Config.RemoteToken
+	}
+	if balancerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+balancerToken)
 	}
 	resp, err := b.httpClient.Do(req)
 	if err != nil {

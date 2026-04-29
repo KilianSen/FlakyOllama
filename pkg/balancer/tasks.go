@@ -299,10 +299,12 @@ func (b *Balancer) pollAgentTasks() {
 
 		// Find agent address
 		var addr string
+		var balancerToken string
 		b.State.View(func(s ClusterState) {
 			for a, n := range s.Agents {
 				if n.ID == r.NodeID {
 					addr = a
+					balancerToken = n.BalancerToken
 					break
 				}
 			}
@@ -312,7 +314,7 @@ func (b *Balancer) pollAgentTasks() {
 			continue
 		}
 
-		go func(req models.ModelRequest, agentAddr string) {
+		go func(req models.ModelRequest, agentAddr string, bToken string) {
 			scheme := "http"
 			if b.Config.TLS.Enabled {
 				scheme = "https"
@@ -322,8 +324,12 @@ func (b *Balancer) pollAgentTasks() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			hReq, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-			if b.Config.RemoteToken != "" {
-				hReq.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
+
+			if bToken == "" {
+				bToken = b.Config.RemoteToken
+			}
+			if bToken != "" {
+				hReq.Header.Set("Authorization", "Bearer "+bToken)
 			}
 
 			resp, err := b.httpClient.Do(hReq)
@@ -352,7 +358,7 @@ func (b *Balancer) pollAgentTasks() {
 					break
 				}
 			}
-		}(r, addr)
+		}(r, addr, balancerToken)
 	}
 }
 
@@ -395,9 +401,19 @@ func (b *Balancer) pollAgent(addr string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	var balancerToken string
+	b.State.View(func(s ClusterState) {
+		if agent, ok := s.Agents[addr]; ok {
+			balancerToken = agent.BalancerToken
+		}
+	})
+	if balancerToken == "" {
+		balancerToken = b.Config.RemoteToken
+	}
+
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if b.Config.RemoteToken != "" {
-		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
+	if balancerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+balancerToken)
 	}
 
 	resp, err := b.httpClient.Do(req)

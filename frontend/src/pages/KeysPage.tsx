@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2 } from 'lucide-react';
+import { Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2, KeyRound, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,9 +31,9 @@ export const KeysPage: React.FC = () => {
 
   useEffect(() => { load(); }, []);
 
-  const copy = (text: string) => {
+  const copy = (text: string, label = 'Key') => {
     navigator.clipboard.writeText(text);
-    toast.success('Key copied to clipboard');
+    toast.success(`${label} copied to clipboard`);
   };
 
   const setStatus = async (type: 'client' | 'agent', key: string, status: string) => {
@@ -172,10 +172,12 @@ export const KeysPage: React.FC = () => {
 
         <TabsContent value="agents" className="space-y-4">
            <div className="flex justify-between items-center bg-amber-500/5 p-4 rounded-xl border border-amber-500/10">
-              <p className="text-[10px] font-bold text-muted-foreground max-w-md italic">
-                Agent identities allow nodes to verify themselves with the cluster.
-              </p>
-              <CreateAgentKeyDialog onSuccess={load} />
+              <div className="space-y-1">
+                <p className="text-[10px] font-bold text-muted-foreground max-w-lg italic">
+                  Each agent identity contains a token pair: the <span className="text-amber-400 not-italic">Agent Token</span> is sent by the agent to the balancer, and the <span className="text-sky-400 not-italic">Balancer Token</span> is sent by the balancer to authenticate itself to the agent.
+                </p>
+              </div>
+              <CreateAgentKeyDialog onSuccess={load} copy={copy} />
            </div>
 
            <Card className="bg-card border-border/50 overflow-hidden shadow-xl shadow-black/20">
@@ -183,35 +185,56 @@ export const KeysPage: React.FC = () => {
                 <TableHeader>
                   <TableRow className="hover:bg-transparent border-border/50 bg-muted/20">
                     <TableHead className="text-[10px] font-black uppercase py-4 pl-6">Node / Label</TableHead>
-                    <TableHead className="text-[10px] font-black uppercase">Identity Token</TableHead>
-                    <TableHead className="text-[10px] font-black uppercase text-center">Credits Earned</TableHead>
+                    <TableHead className="text-[10px] font-black uppercase">
+                      <div className="flex items-center gap-1.5"><KeyRound size={10} className="text-amber-400" /> Agent Token</div>
+                    </TableHead>
+                    <TableHead className="text-[10px] font-black uppercase">
+                      <div className="flex items-center gap-1.5"><ShieldCheck size={10} className="text-sky-400" /> Balancer Token</div>
+                    </TableHead>
+                    <TableHead className="text-[10px] font-black uppercase text-center">Credits</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-center">Status</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-right pr-6">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {agents.length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-12 text-muted-foreground text-xs italic">No agent keys registered</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={6} className="text-center py-12 text-muted-foreground text-xs italic">No agent identities registered</TableCell></TableRow>
                   ) : agents.map(k => (
                     <TableRow key={k.key} className="border-border/40 hover:bg-muted/5 transition-colors">
                       <TableCell className="font-bold text-xs pl-6">
                         <div className="flex items-center gap-2">
-                          <Server size={14} className="text-amber-400" />
+                          <Server size={14} className="text-amber-400 shrink-0" />
                           <div className="flex flex-col">
                             <span>{k.label}</span>
-                            <span className="text-[9px] text-muted-foreground font-mono">{k.user_id ? `u_${k.user_id.split('_').pop()}` : 'SYSTEM'}</span>
+                            <span className="text-[9px] text-muted-foreground font-mono">{k.node_id || (k.user_id ? `u_${k.user_id.split('_').pop()}` : 'Global')}</span>
                           </div>
                         </div>
                       </TableCell>
+                      {/* Agent Token (ak_...) */}
                       <TableCell>
                          <div className="flex items-center gap-2 group">
-                            <code className="text-[10px] bg-muted/50 px-1.5 py-0.5 rounded font-mono text-muted-foreground">
-                              {k.key.slice(0, 12)}••••••
+                            <code className="text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded font-mono text-amber-300">
+                              {k.key.slice(0, 14)}••••
                             </code>
-                            <button onClick={() => copy(k.key)} className="opacity-0 group-hover:opacity-100 transition-opacity">
-                               <Copy size={12} className="text-muted-foreground hover:text-primary" />
+                            <button onClick={() => copy(k.key, 'Agent Token')} className="opacity-0 group-hover:opacity-100 transition-opacity">
+                               <Copy size={11} className="text-amber-400/60 hover:text-amber-400" />
                             </button>
                          </div>
+                      </TableCell>
+                      {/* Balancer Token (bt_...) */}
+                      <TableCell>
+                         {k.balancer_token ? (
+                           <div className="flex items-center gap-2 group">
+                              <code className="text-[10px] bg-sky-500/10 px-1.5 py-0.5 rounded font-mono text-sky-300">
+                                {k.balancer_token.slice(0, 14)}••••
+                              </code>
+                              <button onClick={() => copy(k.balancer_token!, 'Balancer Token')} className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                 <Copy size={11} className="text-sky-400/60 hover:text-sky-400" />
+                              </button>
+                           </div>
+                         ) : (
+                           <span className="text-[9px] text-muted-foreground/40 italic">—</span>
+                         )}
                       </TableCell>
                       <TableCell className="text-center font-mono text-xs font-black text-amber-400">
                          {k.credits_earned.toLocaleString(undefined, { minimumFractionDigits: 1 })} φ
@@ -298,49 +321,133 @@ const CreateClientKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
   );
 };
 
-const CreateAgentKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
+const TokenRevealDialog = ({ agentKey, onClose, copy }: { agentKey: AgentKey; onClose: () => void; copy: (v: string, l: string) => void }) => {
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[520px] bg-card border-border/50">
+        <DialogHeader>
+          <DialogTitle className="font-black uppercase tracking-tight text-amber-400 flex items-center gap-2">
+            <AlertTriangle size={16} /> Save Your Token Pair
+          </DialogTitle>
+          <DialogDescription className="text-xs font-bold text-muted-foreground">
+            These credentials will only be shown in full once. Copy them now and configure your agent before closing this dialog.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-4">
+          {/* Agent Token */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <KeyRound size={12} className="text-amber-400" />
+              <Label className="text-[10px] font-black uppercase text-amber-400 tracking-widest">Agent Token (AGENT_TOKEN)</Label>
+            </div>
+            <p className="text-[9px] text-muted-foreground italic">Set on the agent. Used by the agent to authenticate itself to the balancer.</p>
+            <div className="flex items-center gap-2 bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+              <code className="flex-1 text-xs font-mono text-amber-300 break-all">{agentKey.key}</code>
+              <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-amber-400" onClick={() => copy(agentKey.key, 'Agent Token')}>
+                <Copy size={13} />
+              </Button>
+            </div>
+          </div>
+
+          {/* Balancer Token */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={12} className="text-sky-400" />
+              <Label className="text-[10px] font-black uppercase text-sky-400 tracking-widest">Balancer Token (BALANCER_TOKEN)</Label>
+            </div>
+            <p className="text-[9px] text-muted-foreground italic">Set on the agent. Used by the balancer to authenticate itself when contacting this agent.</p>
+            <div className="flex items-center gap-2 bg-sky-500/5 border border-sky-500/20 rounded-lg p-3">
+              <code className="flex-1 text-xs font-mono text-sky-300 break-all">{agentKey.balancer_token || '—'}</code>
+              {agentKey.balancer_token && (
+                <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-sky-400" onClick={() => copy(agentKey.balancer_token!, 'Balancer Token')}>
+                  <Copy size={13} />
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Quick reference */}
+          <div className="bg-muted/20 border border-border/50 rounded-lg p-3 space-y-1">
+            <p className="text-[9px] font-black uppercase text-muted-foreground tracking-widest mb-2">Agent .env / Environment Config</p>
+            <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap leading-relaxed">{`AGENT_TOKEN=${agentKey.key}\nBALANCER_TOKEN=${agentKey.balancer_token || ''}`}</pre>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 text-[9px] uppercase tracking-widest mt-1 gap-1.5"
+              onClick={() => copy(`AGENT_TOKEN=${agentKey.key}\nBALANCER_TOKEN=${agentKey.balancer_token || ''}`, 'Config block')}
+            >
+              <Copy size={10} /> Copy config block
+            </Button>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button onClick={onClose} className="w-full font-black uppercase tracking-widest text-xs">I've saved both tokens</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const CreateAgentKeyDialog = ({ onSuccess, copy }: { onSuccess: () => void; copy: (v: string, l: string) => void }) => {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
   const [nodeId, setNodeId] = useState('');
+  const [createdKey, setCreatedKey] = useState<AgentKey | null>(null);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await sdk.createAgentKey({ label, node_id: nodeId });
-      toast.success('Identity generated');
+      const newKey = await sdk.createAgentKey({ label, node_id: nodeId });
       setOpen(false);
+      setLabel('');
+      setNodeId('');
+      setCreatedKey(newKey);
       onSuccess();
     } catch (err: any) { toast.error(err.message); }
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="secondary" className="h-8 text-[10px] font-black uppercase tracking-widest gap-2 border border-amber-500/20">
-          <Plus size={14} /> New Identity
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-[425px] bg-card border-border/50">
-        <form onSubmit={submit}>
-          <DialogHeader>
-            <DialogTitle className="font-black uppercase tracking-tight text-amber-400">Create System Identity</DialogTitle>
-            <DialogDescription className="text-xs font-bold text-muted-foreground">Register a persistent node identity for hardware providers.</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-6">
-            <div className="grid gap-2">
-              <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Provider Label</Label>
-              <Input placeholder="NVIDIA H100 Cluster A" value={label} onChange={e => setLabel(e.target.value)} required className="font-bold" />
+    <>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button size="sm" variant="secondary" className="h-8 text-[10px] font-black uppercase tracking-widest gap-2 border border-amber-500/20">
+            <Plus size={14} /> New Identity
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-[425px] bg-card border-border/50">
+          <form onSubmit={submit}>
+            <DialogHeader>
+              <DialogTitle className="font-black uppercase tracking-tight text-amber-400">Create Agent Identity</DialogTitle>
+              <DialogDescription className="text-xs font-bold text-muted-foreground">
+                Generates a token pair — one for the agent to authenticate to the balancer, one for the balancer to authenticate to the agent.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-6">
+              <div className="grid gap-2">
+                <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Provider Label</Label>
+                <Input placeholder="NVIDIA H100 Cluster A" value={label} onChange={e => setLabel(e.target.value)} required className="font-bold" />
+              </div>
+              <div className="grid gap-2">
+                <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Target Node ID (Optional)</Label>
+                <Input placeholder="swarm-valeria-1" value={nodeId} onChange={e => setNodeId(e.target.value)} className="font-bold" />
+              </div>
             </div>
-            <div className="grid gap-2">
-              <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Target Node ID (Optional)</Label>
-              <Input placeholder="swarm-valeria-1" value={nodeId} onChange={e => setNodeId(e.target.value)} className="font-bold" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="submit" className="w-full font-black uppercase tracking-widest text-xs bg-amber-500 hover:bg-amber-600 text-black">Generate Token</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+            <DialogFooter>
+              <Button type="submit" className="w-full font-black uppercase tracking-widest text-xs bg-amber-500 hover:bg-amber-600 text-black">Generate Token Pair</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {createdKey && (
+        <TokenRevealDialog
+          agentKey={createdKey}
+          copy={copy}
+          onClose={() => setCreatedKey(null)}
+        />
+      )}
+    </>
   );
 };

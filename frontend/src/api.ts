@@ -92,6 +92,7 @@ export interface AgentKey {
   key: string;
   label: string;
   node_id: string;
+  balancer_token?: string;
   credits_earned: number;
   reputation: number;
   active: boolean;
@@ -372,6 +373,13 @@ export class FlakyOllamaSDK {
 
   async deleteAgentKey(key: string): Promise<{ status: string }> {
     return this.request(`/api/v1/keys/agents/${key}`, { method: 'DELETE' });
+  }
+
+  async rotateAgentKey(key: string, opts?: { rotate_agent_token?: boolean; rotate_balancer_token?: boolean }): Promise<AgentKey> {
+    return this.request<AgentKey>(`/api/v1/keys/agents/${key}/rotate`, {
+      method: 'POST',
+      body: JSON.stringify(opts ?? { rotate_agent_token: true, rotate_balancer_token: true }),
+    });
   }
 
   // Policies

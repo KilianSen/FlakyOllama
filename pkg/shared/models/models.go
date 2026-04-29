@@ -29,7 +29,10 @@ func (s NodeState) String() string {
 
 type NodeStatus struct {
 	ID             string      `json:"id"`
-	AgentKey       string      `json:"agent_key"` // The token used to register
+	AgentKey       string      `json:"agent_key"`         // The token used to register
+	UserID         string      `json:"user_id,omitempty"` // ID of the user owning this node
+	IsGlobal       bool        `json:"is_global"`         // True if node is not bound to a user
+	BalancerToken  string      `json:"balancer_token"`    // The token expected by the agent
 	Address        string      `json:"address"`
 	State          NodeState   `json:"state"`
 	Tier           string      `json:"tier"`      // "dedicated" or "shared"
@@ -277,7 +280,8 @@ type QueuedRequestInfo struct {
 type AgentKey struct {
 	Key           string    `json:"key"`
 	Label         string    `json:"label"`
-	NodeID        string    `json:"node_id"` // Node associated with this key
+	NodeID        string    `json:"node_id"`        // Node associated with this key
+	BalancerToken string    `json:"balancer_token"` // Token the balancer sends to this agent
 	CreditsEarned float64   `json:"credits_earned"`
 	Reputation    float64   `json:"reputation"`
 	Active        bool      `json:"active"`

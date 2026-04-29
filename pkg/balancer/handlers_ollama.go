@@ -151,6 +151,8 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 	// 1. Check Global System Key
 	isGlobal := b.Config.RemoteToken != "" && providedToken == b.Config.RemoteToken
 	nodeID := ""
+	userID := ""
+	balancerToken := "" // For global agents, balancer uses RemoteToken directly (no per-agent token)
 
 	if isGlobal {
 		nodeID = req.ID
@@ -166,17 +168,23 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		nodeID = ak.NodeID
+		userID = ak.UserID
+		balancerToken = ak.BalancerToken // Load the per-agent balancer token from DB
 	}
 
 	// Create/Update State
 	status := models.NodeStatus{
-		ID:       nodeID,
-		Address:  req.Address,
-		Tier:     req.Tier,
-		HasGPU:   req.HasGPU,
-		GPUModel: req.GPUModel,
-		LastSeen: time.Now(),
-		State:    models.StateHealthy,
+		ID:            nodeID,
+		AgentKey:      providedToken,
+		UserID:        userID,
+		IsGlobal:      isGlobal,
+		BalancerToken: balancerToken,
+		Address:       req.Address,
+		Tier:          req.Tier,
+		HasGPU:        req.HasGPU,
+		GPUModel:      req.GPUModel,
+		LastSeen:      time.Now(),
+		State:         models.StateHealthy,
 	}
 
 	b.State.Do(func(s *ClusterState) {

@@ -30,6 +30,7 @@ import (
 type Agent struct {
 	ID               string
 	AgentKey         string
+	BalancerToken    string
 	Address          string
 	EffectiveAddress string
 	BalancerURL      string
@@ -55,12 +56,20 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
-	key := os.Getenv("AGENT_KEY")
-	if key == "" {
-		key = os.Getenv("AGENT_TOKEN")
+
+	agentToken := os.Getenv("AGENT_TOKEN")
+	if agentToken == "" {
+		agentToken = os.Getenv("AGENT_KEY")
 	}
-	if key == "" && cfg != nil {
-		key = cfg.RemoteToken
+
+	balancerToken := os.Getenv("BALANCER_TOKEN")
+	if balancerToken == "" && cfg != nil {
+		balancerToken = cfg.RemoteToken
+	}
+
+	// If no agent token is provided, assume global agent and use balancer token
+	if agentToken == "" {
+		agentToken = balancerToken
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,7 +107,8 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 
 	a := &Agent{
 		ID:               id,
-		AgentKey:         key,
+		AgentKey:         agentToken,
+		BalancerToken:    balancerToken,
 		Address:          address,
 		EffectiveAddress: address,
 		BalancerURL:      balancerURL,
@@ -157,12 +167,8 @@ func (a *Agent) Register() error {
 	agentReq, _ := http.NewRequestWithContext(a.ctx, "POST", a.BalancerURL+"/api/v1/nodes/register", bytes.NewBuffer(body))
 	agentReq.Header.Set("Content-Type", "application/json")
 
-	token := a.AgentKey
-	if token == "" {
-		token = a.Config.RemoteToken
-	}
-	if token != "" {
-		agentReq.Header.Set("Authorization", "Bearer "+token)
+	if a.AgentKey != "" {
+		agentReq.Header.Set("Authorization", "Bearer "+a.AgentKey)
 	}
 
 	resp, err := a.httpClient.Do(agentReq)
@@ -191,24 +197,25 @@ func (a *Agent) Register() error {
 	return nil
 }
 func (a *Agent) NewMux() *http.ServeMux {
-	token := os.Getenv("AGENT_AUTH_TOKEN")
-	if token == "" {
-		sharedLog.Global.Warnf("AGENT_AUTH_TOKEN is not set, using AGENT_TOKEN instead")
-		token = a.AgentKey
+	masterTokens := []string{}
+	if a.BalancerToken != "" {
+		masterTokens = append(masterTokens, a.BalancerToken)
+	}
+
+	adminToken := os.Getenv("AGENT_AUTH_TOKEN")
+	if adminToken != "" {
+		masterTokens = append(masterTokens, adminToken)
+	} else if a.AgentKey != a.BalancerToken && a.AgentKey != "" {
+		masterTokens = append(masterTokens, a.AgentKey)
 	}
 
 	tokenDisable := os.Getenv("AGENT_AUTH_TOKEN_DISABLE")
 	if tokenDisable == "true" {
-		sharedLog.Global.Warnf("AGENT_AUTH_TOKEN_DISABLE is set to true, disabling authentication")
-		token = ""
-	}
-
-	var masterTokens []string
-	if token != "" {
-		masterTokens = append(masterTokens, token)
-	}
-	if a.Config != nil && a.Config.RemoteToken != "" && a.Config.RemoteToken != token {
-		masterTokens = append(masterTokens, a.Config.RemoteToken)
+		sharedLog.Global.Warnf("****************************************************************")
+		sharedLog.Global.Warnf("SECURITY WARNING: AGENT_AUTH_TOKEN_DISABLE is true!")
+		sharedLog.Global.Warnf("Anyone with access to this port can control Ollama on this agent.")
+		sharedLog.Global.Warnf("****************************************************************")
+		masterTokens = []string{""}
 	}
 
 	mux := http.NewServeMux()

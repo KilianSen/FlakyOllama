@@ -193,6 +193,7 @@ func (b *Balancer) SetupRoutes() http.Handler {
 				r.Route("/agents", func(r chi.Router) {
 					r.Get("/", b.HandleV1AgentKeysList)
 					r.Post("/", b.HandleV1AgentKeyCreate)
+					r.Post("/{key}/rotate", b.HandleV1AgentKeyRotate)
 					r.Delete("/{key}", b.HandleV1AgentKeyDelete)
 				})
 			})
