@@ -176,10 +176,10 @@ func (b *Balancer) finalizeProxyWithAdapter(w http.ResponseWriter, resp *http.Re
 	var err error
 
 	if adapter != nil {
-		// Adapter handles writing to w and translating the stream
+		// Adapter handles its own headers and writing to w
 		input, output, err = adapter.TranslateResponse(w, finalReader)
 	} else {
-		// Standard proxy path
+		// Standard proxy path: copy headers and status code from agent
 		for k, v := range resp.Header {
 			w.Header()[k] = v
 		}

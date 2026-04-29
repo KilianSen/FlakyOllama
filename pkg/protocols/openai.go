@@ -3,7 +3,6 @@ package protocols
 import (
 	"FlakyOllama/pkg/shared/hash"
 	"FlakyOllama/pkg/shared/models"
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,25 +58,31 @@ func (a *OpenAIAdapter) TranslateResponse(w http.ResponseWriter, agentBody io.Re
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
 		return a.translateStreamingResponse(w, agentBody)
 	}
 	return a.translateNonStreamingResponse(w, agentBody)
 }
 
 func (a *OpenAIAdapter) translateStreamingResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
-	scanner := bufio.NewScanner(agentBody)
+	decoder := json.NewDecoder(agentBody)
 	var lastInput, lastOutput int
 	reqID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	for {
+		var ollamaResp models.ChatResponse
+		if err := decoder.Decode(&ollamaResp); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return lastInput, lastOutput, err
 		}
 
-		var ollamaResp models.ChatResponse
-		if err := json.Unmarshal(line, &ollamaResp); err != nil {
-			continue
+		if ollamaResp.PromptEval > 0 {
+			lastInput = ollamaResp.PromptEval
+		}
+		if ollamaResp.EvalCount > 0 {
+			lastOutput = ollamaResp.EvalCount
 		}
 
 		openAIResp := models.OpenAIChatResponse{
@@ -108,28 +113,36 @@ func (a *OpenAIAdapter) translateStreamingResponse(w http.ResponseWriter, agentB
 		}
 
 		if ollamaResp.Done {
-			lastInput, lastOutput = extractUsageFromRaw(line)
 			break
 		}
 	}
 
 	fmt.Fprint(w, "data: [DONE]\n\n")
-	return lastInput, lastOutput, scanner.Err()
+	return lastInput, lastOutput, nil
 }
 
 func (a *OpenAIAdapter) translateNonStreamingResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
+	decoder := json.NewDecoder(agentBody)
 	var lastInput, lastOutput int
 	var fullContent strings.Builder
 	var lastModel string
 	var lastCreated int64
 	reqID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 
-	scanner := bufio.NewScanner(agentBody)
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
 		var ollamaResp models.ChatResponse
-		if err := json.Unmarshal(line, &ollamaResp); err != nil {
-			continue
+		if err := decoder.Decode(&ollamaResp); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return lastInput, lastOutput, err
+		}
+
+		if ollamaResp.PromptEval > 0 {
+			lastInput = ollamaResp.PromptEval
+		}
+		if ollamaResp.EvalCount > 0 {
+			lastOutput = ollamaResp.EvalCount
 		}
 
 		fullContent.WriteString(ollamaResp.Message.Content)
@@ -137,7 +150,7 @@ func (a *OpenAIAdapter) translateNonStreamingResponse(w http.ResponseWriter, age
 		lastCreated = ollamaResp.CreatedAt.Unix()
 
 		if ollamaResp.Done {
-			lastInput, lastOutput = extractUsageFromRaw(line)
+			break
 		}
 	}
 
@@ -164,8 +177,9 @@ func (a *OpenAIAdapter) translateNonStreamingResponse(w http.ResponseWriter, age
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(openAIResp)
-	return lastInput, lastOutput, scanner.Err()
+	return lastInput, lastOutput, nil
 }
 
 type OpenAIEmbeddingAdapter struct {
@@ -184,7 +198,6 @@ func (a *OpenAIEmbeddingAdapter) TranslateRequest(r *http.Request) ([]byte, stri
 
 	model := strings.TrimPrefix(openAIReq.Model, "a.")
 
-	// OpenAI 'input' can be string or array of strings
 	var input interface{}
 	switch v := openAIReq.Input.(type) {
 	case string:
@@ -192,7 +205,6 @@ func (a *OpenAIEmbeddingAdapter) TranslateRequest(r *http.Request) ([]byte, stri
 		a.inputText = v
 	case []interface{}:
 		input = v
-		// For hash/usage estimation, concatenate first few chars
 		if len(v) > 0 {
 			if s, ok := v[0].(string); ok {
 				a.inputText = s
@@ -207,8 +219,10 @@ func (a *OpenAIEmbeddingAdapter) TranslateRequest(r *http.Request) ([]byte, stri
 		Input: input,
 	}
 
+	contextHash := hash.ComputeHash(a.inputText)
+
 	body, err := json.Marshal(ollamaReq)
-	return body, model, "", err
+	return body, model, contextHash, err
 }
 
 func (a *OpenAIEmbeddingAdapter) TranslateResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
@@ -231,7 +245,6 @@ func (a *OpenAIEmbeddingAdapter) TranslateResponse(w http.ResponseWriter, agentB
 		}
 	}
 
-	// Usage estimation for embeddings if not provided by Ollama
 	inputTokens := len(a.inputText) / 4
 	if inputTokens == 0 && len(a.inputText) > 0 {
 		inputTokens = 1
@@ -242,19 +255,9 @@ func (a *OpenAIEmbeddingAdapter) TranslateResponse(w http.ResponseWriter, agentB
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(openAIResp)
 	return inputTokens, 0, nil
-}
-
-func extractUsageFromRaw(line []byte) (input, output int) {
-	var usage struct {
-		PromptEvalCount int `json:"prompt_eval_count"`
-		EvalCount       int `json:"eval_count"`
-	}
-	if err := json.Unmarshal(line, &usage); err == nil {
-		return usage.PromptEvalCount, usage.EvalCount
-	}
-	return 0, 0
 }
 
 func strPtr(s string) *string {

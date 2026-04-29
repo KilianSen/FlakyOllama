@@ -114,11 +114,13 @@ type ChatMessage struct {
 }
 
 type ChatResponse struct {
-	Model     string      `json:"model"`
-	CreatedAt time.Time   `json:"created_at"`
-	Message   ChatMessage `json:"message"`
-	Done      bool        `json:"done"`
-	TotalDur  int64       `json:"total_duration"`
+	Model      string      `json:"model"`
+	CreatedAt  time.Time   `json:"created_at"`
+	Message    ChatMessage `json:"message"`
+	Done       bool        `json:"done"`
+	TotalDur   int64       `json:"total_duration"`
+	PromptEval int         `json:"prompt_eval_count"`
+	EvalCount  int         `json:"eval_count"`
 }
 
 type OllamaEmbeddingsRequest struct {
