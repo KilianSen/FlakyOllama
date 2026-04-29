@@ -1,66 +1,50 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/protocols"
 	"FlakyOllama/pkg/shared/models"
-	"encoding/json"
-	"io"
 	"net/http"
-	"strings"
 )
 
 func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
-	var req models.OpenAIChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		b.jsonError(w, http.StatusBadRequest, "invalid request")
+	adapter := protocols.NewOpenAIAdapter()
+	body, model, contextHash, err := adapter.TranslateRequest(r)
+	if err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-
-	// Strip prefixes for OpenAI compatibility too
-	req.Model = strings.TrimPrefix(req.Model, "a.")
 
 	priority := b.getRequestPriority(r)
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
-	contextHash := ""
-	if len(req.Messages) > 0 {
-		contextHash = b.computeHash(req.Messages[len(req.Messages)-1].Content)
-	}
-
-	body, _ := json.Marshal(req)
-	// AGENT MAPPING: Use the transparent /v1/ proxy
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), req.Model, "/v1/chat/completions", body, r.RemoteAddr, true, priority, contextHash)
+	// AGENT MAPPING: Use the internal /chat proxy (Ollama format)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), model, "/chat", body, r.RemoteAddr, true, priority, contextHash)
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
-	b.finalizeProxy(w, resp, agentAddr, req.Model, r, surge)
+	b.finalizeProxyWithAdapter(w, resp, agentAddr, model, r, surge, adapter)
 }
 
 func (b *Balancer) HandleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request) {
-	var req models.OpenAIEmbeddingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		b.jsonError(w, http.StatusBadRequest, "invalid request")
+	adapter := protocols.NewOpenAIEmbeddingAdapter()
+	body, model, contextHash, err := adapter.TranslateRequest(r)
+	if err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
 
-	req.Model = strings.TrimPrefix(req.Model, "a.")
-
-	body, _ := json.Marshal(req)
-	// AGENT MAPPING: Use the transparent /v1/ proxy
-	resp, _, _, err := b.DoHedgedRequest(r.Context(), req.Model, "/v1/embeddings", body, r.RemoteAddr, false, 10, "")
+	// AGENT MAPPING: Use the internal /api/embeddings proxy
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), model, "/api/embeddings", body, r.RemoteAddr, false, 10, contextHash)
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	b.finalizeProxyWithAdapter(w, resp, agentAddr, model, r, 1.0, adapter)
 }
 
 func (b *Balancer) HandleV1Models(w http.ResponseWriter, r *http.Request) {

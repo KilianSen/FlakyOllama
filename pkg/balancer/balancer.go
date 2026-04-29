@@ -5,10 +5,9 @@ import (
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
+	"FlakyOllama/pkg/shared/utils"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"net/http"
 	"sync"
 	"time"
@@ -323,7 +322,5 @@ func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, 
 }
 
 func (b *Balancer) computeHash(input string) string {
-	h := sha256.New()
-	h.Write([]byte(input))
-	return hex.EncodeToString(h.Sum(nil))
+	return utils.ComputeHash(input)
 }

@@ -121,6 +121,16 @@ type ChatResponse struct {
 	TotalDur  int64       `json:"total_duration"`
 }
 
+type OllamaEmbeddingsRequest struct {
+	Model string      `json:"model"`
+	Input interface{} `json:"input"`
+}
+
+type OllamaEmbeddingsResponse struct {
+	Model      string      `json:"model"`
+	Embeddings [][]float32 `json:"embeddings"`
+}
+
 type TagsResponse struct {
 	Models []ModelInfo `json:"models"`
 }

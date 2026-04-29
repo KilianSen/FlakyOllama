@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/protocols"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/metrics"
@@ -128,6 +129,10 @@ func (t *TailReader) Bytes() []byte {
 }
 
 func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64) {
+	b.finalizeProxyWithAdapter(w, resp, agentAddr, modelName, r, surge, nil)
+}
+
+func (b *Balancer) finalizeProxyWithAdapter(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64, adapter protocols.Adapter) {
 	start := time.Now()
 
 	clientKey, _ := auth.GetTokenFromContext(r.Context())
@@ -158,14 +163,6 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		},
 	}
 
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-
-	usageTail := NewTailReader(4096)
-	multiWriter := io.MultiWriter(w, usageTail)
-
 	var finalReader io.Reader = trackingReader
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		gz, err := gzip.NewReader(trackingReader)
@@ -175,7 +172,28 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		}
 	}
 
-	_, err := io.Copy(multiWriter, finalReader)
+	var input, output int
+	var err error
+
+	if adapter != nil {
+		// Adapter handles writing to w and translating the stream
+		input, output, err = adapter.TranslateResponse(w, finalReader)
+	} else {
+		// Standard proxy path
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+
+		usageTail := NewTailReader(4096)
+		multiWriter := io.MultiWriter(w, usageTail)
+
+		_, err = io.Copy(multiWriter, finalReader)
+		if err == nil {
+			input, output = extractUsage(usageTail.Bytes())
+		}
+	}
+
 	duration := time.Since(start)
 
 	if err != nil {
@@ -193,8 +211,6 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 		}
 		return
 	}
-
-	input, output := extractUsage(usageTail.Bytes())
 
 	agentID := agentAddr
 	var providerKey string
