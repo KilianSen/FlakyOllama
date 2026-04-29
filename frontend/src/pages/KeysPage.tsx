@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2, KeyRound, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2, KeyRound, ShieldCheck, AlertTriangle, RefreshCw } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,8 @@ export const KeysPage: React.FC = () => {
   const [clients, setClients] = useState<ClientKey[]>([]);
   const [agents, setAgents] = useState<AgentKey[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rotatingKey, setRotatingKey] = useState<AgentKey | null>(null);
+  const [rotatedKey, setRotatedKey] = useState<AgentKey | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -71,7 +73,7 @@ export const KeysPage: React.FC = () => {
     }
   };
 
-  return (
+  const page = (
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -210,7 +212,6 @@ export const KeysPage: React.FC = () => {
                           </div>
                         </div>
                       </TableCell>
-                      {/* Agent Token (ak_...) */}
                       <TableCell>
                          <div className="flex items-center gap-2 group">
                             <code className="text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded font-mono text-amber-300">
@@ -221,7 +222,6 @@ export const KeysPage: React.FC = () => {
                             </button>
                          </div>
                       </TableCell>
-                      {/* Balancer Token (bt_...) */}
                       <TableCell>
                          {k.balancer_token ? (
                            <div className="flex items-center gap-2 group">
@@ -254,6 +254,9 @@ export const KeysPage: React.FC = () => {
                               </Button>
                             </>
                           )}
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-sky-400 hover:text-sky-300" title="Rotate tokens" onClick={() => setRotatingKey(k)}>
+                             <RefreshCw size={13} />
+                          </Button>
                           <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDelete('agent', k.key)}>
                              <Trash2 size={14} />
                           </Button>
@@ -267,6 +270,31 @@ export const KeysPage: React.FC = () => {
         </TabsContent>
       </Tabs>
     </div>
+  );
+
+  return (
+    <>
+      {page}
+      {rotatingKey && (
+        <RotateAgentKeyDialog
+          agentKey={rotatingKey}
+          onClose={() => setRotatingKey(null)}
+          onSuccess={(updated) => {
+            setRotatingKey(null);
+            setRotatedKey(updated);
+            load();
+          }}
+        />
+      )}
+      {rotatedKey && (
+        <TokenRevealDialog
+          agentKey={rotatedKey}
+          copy={copy}
+          onClose={() => setRotatedKey(null)}
+          title="New Tokens Issued — Save These Now"
+        />
+      )}
+    </>
   );
 };
 
@@ -321,13 +349,13 @@ const CreateClientKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
   );
 };
 
-const TokenRevealDialog = ({ agentKey, onClose, copy }: { agentKey: AgentKey; onClose: () => void; copy: (v: string, l: string) => void }) => {
+const TokenRevealDialog = ({ agentKey, onClose, copy, title }: { agentKey: AgentKey; onClose: () => void; copy: (v: string, l: string) => void; title?: string }) => {
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[520px] bg-card border-border/50">
         <DialogHeader>
           <DialogTitle className="font-black uppercase tracking-tight text-amber-400 flex items-center gap-2">
-            <AlertTriangle size={16} /> Save Your Token Pair
+            <AlertTriangle size={16} /> {title ?? 'Save Your Token Pair'}
           </DialogTitle>
           <DialogDescription className="text-xs font-bold text-muted-foreground">
             These credentials will only be shown in full once. Copy them now and configure your agent before closing this dialog.
@@ -449,5 +477,85 @@ const CreateAgentKeyDialog = ({ onSuccess, copy }: { onSuccess: () => void; copy
         />
       )}
     </>
+  );
+};
+
+const RotateAgentKeyDialog = ({
+  agentKey, onClose, onSuccess,
+}: {
+  agentKey: AgentKey;
+  onClose: () => void;
+  onSuccess: (updated: AgentKey) => void;
+}) => {
+  const [rotateAgent, setRotateAgent] = useState(true);
+  const [rotateBalancer, setRotateBalancer] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    if (!rotateAgent && !rotateBalancer) {
+      toast.error('Select at least one token to rotate');
+      return;
+    }
+    setLoading(true);
+    try {
+      const updated = await sdk.rotateAgentKey(agentKey.key, {
+        rotate_agent_token: rotateAgent,
+        rotate_balancer_token: rotateBalancer,
+      });
+      toast.success('Tokens rotated — old credentials are now invalid');
+      onSuccess(updated);
+    } catch (err: any) {
+      toast.error(err.message);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[460px] bg-card border-border/50">
+        <DialogHeader>
+          <DialogTitle className="font-black uppercase tracking-tight text-sky-400 flex items-center gap-2">
+            <RefreshCw size={16} /> Rotate Token Pair
+          </DialogTitle>
+          <DialogDescription className="text-xs font-bold text-muted-foreground">
+            Rotating a token immediately invalidates the previous value. The agent must be updated with the new credentials.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-4">
+          <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest mb-3">
+            Identity: <span className="text-foreground normal-case font-bold">{agentKey.label}</span>
+          </p>
+
+          <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10 transition-colors">
+            <input type="checkbox" checked={rotateAgent} onChange={e => setRotateAgent(e.target.checked)} className="mt-0.5 accent-amber-400" />
+            <div>
+              <p className="text-[10px] font-black uppercase text-amber-400 tracking-widest flex items-center gap-1.5"><KeyRound size={10} /> Agent Token (AGENT_TOKEN)</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Generates a new identity key. The agent must restart with the new value.</p>
+            </div>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-sky-500/20 bg-sky-500/5 hover:bg-sky-500/10 transition-colors">
+            <input type="checkbox" checked={rotateBalancer} onChange={e => setRotateBalancer(e.target.checked)} className="mt-0.5 accent-sky-400" />
+            <div>
+              <p className="text-[10px] font-black uppercase text-sky-400 tracking-widest flex items-center gap-1.5"><ShieldCheck size={10} /> Balancer Token (BALANCER_TOKEN)</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Generates a new verification secret. Takes effect immediately — the agent must be updated.</p>
+            </div>
+          </label>
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button variant="ghost" onClick={onClose} className="font-black uppercase tracking-widest text-xs">Cancel</Button>
+          <Button
+            onClick={submit}
+            disabled={loading || (!rotateAgent && !rotateBalancer)}
+            className="font-black uppercase tracking-widest text-xs bg-sky-600 hover:bg-sky-500 text-white gap-2"
+          >
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            {loading ? 'Rotating...' : 'Rotate Selected'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
