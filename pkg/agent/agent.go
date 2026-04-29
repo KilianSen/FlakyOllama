@@ -126,6 +126,12 @@ func (a *Agent) Register() error {
 		tier = "dedicated"
 	}
 
+	addressOverride := os.Getenv("AGENT_ADDRESS")
+	if addressOverride != "" {
+		_, port, _ := net.SplitHostPort(addressOverride)
+		a.EffectiveAddress = net.JoinHostPort(addressOverride, port)
+	}
+
 	status, _ := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
 
 	req := models.RegisterRequest{

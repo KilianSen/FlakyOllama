@@ -3,6 +3,7 @@ package monitoring
 import (
 	"FlakyOllama/pkg/shared/models"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -30,7 +31,7 @@ func NewMonitor() *Monitor {
 	})
 
 	// Try to initialize NVML
-	if ret := nvml.Init(); ret != nvml.SUCCESS {
+	if ret := nvml.Init(); !errors.Is(ret, nvml.SUCCESS) {
 		// Not necessarily an error if we are on a CPU-only or non-NVIDIA system
 		m.nvmlInitialized = false
 	} else {
@@ -62,7 +63,7 @@ func (m *Monitor) pollLoop() {
 	defer ticker.Stop()
 
 	// Initial poll
-	m.refreshStatus(0, 0)
+	m.refreshStatus()
 
 	for {
 		select {
@@ -70,7 +71,7 @@ func (m *Monitor) pollLoop() {
 			// For now, we don't have maxVRAM/maxCPU here, so we pass 0
 			// The Agent will apply caps if needed when it reads the status,
 			// or we can pass them to Start().
-			m.refreshStatus(0, 0)
+			m.refreshStatus()
 		case <-m.ctx.Done():
 			return
 		}
@@ -95,7 +96,7 @@ func (m *Monitor) GetStatus(maxVRAM uint64, maxCPU int) (models.NodeStatus, erro
 	return status, nil
 }
 
-func (m *Monitor) refreshStatus(maxVRAM uint64, maxCPU int) {
+func (m *Monitor) refreshStatus() {
 	var status models.NodeStatus
 
 	// Get CPU cores
