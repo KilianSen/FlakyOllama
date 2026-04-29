@@ -410,6 +410,7 @@ func (b *Balancer) pollAgent(addr string) {
 	if balancerToken == "" {
 		balancerToken = b.Config.RemoteToken
 	}
+	logging.Global.Debugf("pollAgent %s: using balancerToken=%q (fell_back_to_remote=%v)", addr, balancerToken, balancerToken == b.Config.RemoteToken && b.Config.RemoteToken != "")
 
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if balancerToken != "" {

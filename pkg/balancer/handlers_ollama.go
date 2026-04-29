@@ -102,6 +102,17 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
+	var balancerToken string
+	b.State.View(func(s ClusterState) {
+		if agent, ok := s.Agents[r.RemoteAddr]; ok {
+			balancerToken = agent.BalancerToken
+		}
+	})
+	if balancerToken == "" {
+		balancerToken = b.Config.RemoteToken
+	}
+	logging.Global.Debugf("HandleChat %s: using balancerToken=%q (empty=%v)", r.RemoteAddr, balancerToken, balancerToken == "")
+
 	if b.Queue.QueueDepth() >= b.Config.MaxQueueDepth {
 		http.Error(w, "Cluster saturated", http.StatusTooManyRequests)
 		return
@@ -170,6 +181,7 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		nodeID = ak.NodeID
 		userID = ak.UserID
 		balancerToken = ak.BalancerToken // Load the per-agent balancer token from DB
+		logging.Global.Debugf("Register: agent key %s resolved balancerToken=%q nodeID=%q userID=%q", providedToken, balancerToken, nodeID, userID)
 	}
 
 	// Create/Update State

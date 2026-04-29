@@ -218,6 +218,20 @@ func (a *Agent) NewMux() *http.ServeMux {
 		masterTokens = []string{""}
 	}
 
+	if len(masterTokens) == 0 {
+		sharedLog.Global.Warnf("Agent auth: no tokens configured — all requests to agent endpoints will be REJECTED (set BALANCER_TOKEN or AGENT_AUTH_TOKEN_DISABLE=true)")
+	} else {
+		masked := make([]string, len(masterTokens))
+		for i, t := range masterTokens {
+			if len(t) > 8 {
+				masked[i] = t[:8] + "••••"
+			} else {
+				masked[i] = "••••"
+			}
+		}
+		sharedLog.Global.Infof("Agent auth: accepting %d token(s): %v", len(masterTokens), masked)
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
