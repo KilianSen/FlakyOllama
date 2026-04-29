@@ -179,11 +179,13 @@ func (a *Agent) Register() error {
 func (a *Agent) NewMux() *http.ServeMux {
 	token := os.Getenv("AGENT_AUTH_TOKEN")
 	if token == "" {
+		sharedLog.Global.Warnf("AGENT_AUTH_TOKEN is not set, using AGENT_TOKEN instead")
 		token = a.Config.AuthToken
 	}
 
 	tokenDisable := os.Getenv("AGENT_AUTH_TOKEN_DISABLE")
 	if tokenDisable == "true" {
+		sharedLog.Global.Warnf("AGENT_AUTH_TOKEN_DISABLE is set to true, disabling authentication")
 		token = ""
 	}
 
@@ -353,7 +355,7 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	} else {
 		sharedLog.Global.Warnf("Failed to list local models from Ollama: %v", err)
 	}
-
+	sharedLog.Global.Debugf("Telemetry status for agent %s: %+v", a.ID, status)
 	json.NewEncoder(w).Encode(status)
 }
 
