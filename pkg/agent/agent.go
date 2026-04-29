@@ -83,20 +83,20 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 
 	// Initialize Reverse Proxy
 	target, _ := url.Parse(ollamaURL)
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
-		pr.SetURL(target)
-		pr.Out.Host = target.Host
-	}
-
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		sharedLog.Global.Errorf("Proxy error for %s: %v", r.URL.Path, err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":  "Ollama unreachable",
-			"detail": err.Error(),
-		})
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Host = target.Host
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			sharedLog.Global.Errorf("Proxy error for %s: %v", r.URL.Path, err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":  "Ollama unreachable",
+				"detail": err.Error(),
+			})
+		},
 	}
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
