@@ -43,7 +43,7 @@ func (b *Balancer) sendToAgentWithContext(ctx context.Context, addr, path string
 		scheme = "https"
 	}
 
-	logging.Global.Debugf("Forwarding request to agent %s at path %s", addr, path)
+	logging.Global.Infof("Forwarding request to agent %s at path %s with %s", addr, path, scheme)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
 	if err != nil {
