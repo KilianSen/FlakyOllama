@@ -449,9 +449,16 @@ func (b *Balancer) pollAgent(addr string) {
 
 	b.State.Do(func(s *ClusterState) {
 		if existing, ok := s.Agents[addr]; ok {
-			// Update dynamic fields but preserve identity and persistent state
+			// Preserve identity & auth fields — the agent never sends these back in telemetry
 			status.ID = existing.ID
+			status.AgentKey = existing.AgentKey
+			status.BalancerToken = existing.BalancerToken
+			status.UserID = existing.UserID
+			status.IsGlobal = existing.IsGlobal
+			// Preserve connection metadata
 			status.Address = existing.Address
+			status.Tier = existing.Tier
+			// Update liveness fields
 			status.LastSeen = time.Now()
 			status.State = models.StateHealthy // It responded to telemetry
 			status.Errors = 0                  // Reset errors on successful poll
