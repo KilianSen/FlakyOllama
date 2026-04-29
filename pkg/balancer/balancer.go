@@ -3,9 +3,9 @@ package balancer
 import (
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/shared/hash"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
-	"FlakyOllama/pkg/shared/utils"
 	"context"
 	"crypto/tls"
 	"net/http"
@@ -322,5 +322,5 @@ func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, 
 }
 
 func (b *Balancer) computeHash(input string) string {
-	return utils.ComputeHash(input)
+	return hash.ComputeHash(input)
 }

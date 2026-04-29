@@ -1,7 +1,7 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/balancer/protocols"
+	"FlakyOllama/pkg/protocols"
 	"FlakyOllama/pkg/shared/models"
 	"net/http"
 )
