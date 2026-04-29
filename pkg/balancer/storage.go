@@ -4,6 +4,7 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -138,6 +139,20 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 	for _, q := range queries {
 		if _, err = db.Exec(q); err != nil {
 			return nil, err
+		}
+	}
+
+	// Schema migrations — attempt additive changes and ignore "duplicate column" errors
+	// so existing databases are upgraded without data loss.
+	migrations := []string{
+		`ALTER TABLE agent_keys ADD COLUMN balancer_token TEXT DEFAULT ''`,
+	}
+	for _, m := range migrations {
+		if _, err = db.Exec(m); err != nil {
+			// SQLite returns "duplicate column name" if the column already exists; that's fine.
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				return nil, fmt.Errorf("migration failed (%s): %w", m, err)
+			}
 		}
 	}
 
