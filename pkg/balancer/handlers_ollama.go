@@ -141,18 +141,9 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 0. Extract token from Header (Agent sends it as Bearer)
-	providedToken := ""
-	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		parts := strings.Fields(authHeader)
-		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-			providedToken = parts[1]
-		}
-	}
-
-	// Token Verification
-	if providedToken == "" {
+	// 0. Extract token from context (populated by AuthMiddleware)
+	providedToken, ok := auth.GetTokenFromContext(r.Context())
+	if !ok || providedToken == "" {
 		http.Error(w, "Agent key required", http.StatusUnauthorized)
 		return
 	}

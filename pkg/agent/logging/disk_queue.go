@@ -68,14 +68,17 @@ func (q *DiskQueue) FetchLogs(limit int) ([]struct {
 		ID    int64
 		Entry models.LogEntry
 	}
+	var corruptIDs []int64
 	for rows.Next() {
 		var id int64
 		var payload string
 		if err := rows.Scan(&id, &payload); err != nil {
+			corruptIDs = append(corruptIDs, id)
 			continue
 		}
 		var entry models.LogEntry
 		if err := json.Unmarshal([]byte(payload), &entry); err != nil {
+			corruptIDs = append(corruptIDs, id)
 			continue
 		}
 		logs = append(logs, struct {
@@ -83,6 +86,20 @@ func (q *DiskQueue) FetchLogs(limit int) ([]struct {
 			Entry models.LogEntry
 		}{id, entry})
 	}
+	rows.Close()
+
+	if len(corruptIDs) > 0 {
+		tx, err := q.db.Begin()
+		if err == nil {
+			stmt, _ := tx.Prepare("DELETE FROM pending_logs WHERE id = ?")
+			for _, id := range corruptIDs {
+				_, _ = stmt.Exec(id)
+			}
+			stmt.Close()
+			tx.Commit()
+		}
+	}
+
 	return logs, nil
 }
 
@@ -93,11 +110,21 @@ func (q *DiskQueue) DeleteLogs(ids []int64) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	// Simple deletion
-	for _, id := range ids {
-		_, _ = q.db.Exec("DELETE FROM pending_logs WHERE id = ?", id)
+	tx, err := q.db.Begin()
+	if err != nil {
+		return err
 	}
-	return nil
+	stmt, err := tx.Prepare("DELETE FROM pending_logs WHERE id = ?")
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+
+	for _, id := range ids {
+		_, _ = stmt.Exec(id)
+	}
+	return tx.Commit()
 }
 
 func (q *DiskQueue) Close() error {

@@ -241,7 +241,9 @@ func (c *Client) Show(ctx context.Context, model string) (map[string]interface{}
 	}
 
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode show response: %w", err)
+	}
 	return result, nil
 }
 
@@ -315,6 +317,8 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 	var result struct {
 		Version string `json:"version"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode version response: %w", err)
+	}
 	return result.Version, nil
 }

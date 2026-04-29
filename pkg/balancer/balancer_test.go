@@ -121,7 +121,7 @@ func TestBalancer_HandleRegister(t *testing.T) {
 
 	// Mock registration request from an agent
 	regBody := `{"id": "agent-0", "address": "192.168.1.50:8081"}`
-	req, _ := http.NewRequest("POST", "/register", strings.NewReader(regBody))
+	req, _ := http.NewRequest("POST", "/api/v1/nodes/register", strings.NewReader(regBody))
 	req.Header.Set("Authorization", "Bearer test-remote-token")
 
 	rr := httptest.NewRecorder()

@@ -201,6 +201,8 @@ func (m *Monitor) collectNVMLMetrics(status *models.NodeStatus) error {
 		} else {
 			status.GPUModel = finalModels[0]
 		}
+	} else {
+		status.GPUModel = "Unknown GPU"
 	}
 
 	return nil

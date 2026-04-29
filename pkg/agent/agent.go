@@ -75,14 +75,25 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 	// Initialize Reverse Proxy
 	target, _ := url.Parse(ollamaURL)
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		if pr.Out.URL.Path == "/inference" {
+			pr.Out.URL.Path = "/api/generate"
+		} else if pr.Out.URL.Path == "/chat" {
+			pr.Out.URL.Path = "/api/chat"
+		}
+		pr.Out.Host = target.Host
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.InsecureSkipVerify = cfg.TLS.InsecureSkipVerify
 
 	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
-			},
-		},
-		Timeout: 30 * time.Second,
+		Transport: transport,
+		Timeout:   30 * time.Second,
 	}
 
 	a := &Agent{
@@ -143,7 +154,7 @@ func (a *Agent) Register() error {
 	sharedLog.Global.Infof("Registering agent %s with address %s [GPU: %v (%s)]", a.ID, a.EffectiveAddress, req.HasGPU, req.GPUModel)
 
 	body, _ := json.Marshal(req)
-	agentReq, _ := http.NewRequestWithContext(a.ctx, "POST", a.BalancerURL+"/register", bytes.NewBuffer(body))
+	agentReq, _ := http.NewRequestWithContext(a.ctx, "POST", a.BalancerURL+"/api/v1/nodes/register", bytes.NewBuffer(body))
 	agentReq.Header.Set("Content-Type", "application/json")
 
 	token := a.AgentKey
@@ -162,7 +173,8 @@ func (a *Agent) Register() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		sharedLog.Global.Errorf("Balancer rejected registration for agent %s: status %d", a.ID, resp.StatusCode)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		sharedLog.Global.Errorf("Balancer rejected registration for agent %s: status %d, body: %s", a.ID, resp.StatusCode, string(bytes.TrimSpace(bodyBytes)))
 		return fmt.Errorf("failed to register with balancer: status %d", resp.StatusCode)
 	}
 
@@ -171,6 +183,8 @@ func (a *Agent) Register() error {
 		a.persistentMu.Lock()
 		a.persistentModels = result.PersistentModels
 		a.persistentMu.Unlock()
+	} else {
+		sharedLog.Global.Warnf("Registration response decode failed for agent %s: %v", a.ID, err)
 	}
 
 	sharedLog.Global.Infof("Successfully registered agent %s (persistent models: %d)", a.ID, len(a.persistentModels))
@@ -207,19 +221,19 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux.HandleFunc("/v1/", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
 	mux.HandleFunc("/inference", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
 	mux.HandleFunc("/chat", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/embeddings", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/api/embeddings", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
 
 	// Direct handlers for more control
 	mux.HandleFunc("/show", auth.Middleware(masterTokens, nil, a.HandleShow))
 	mux.HandleFunc("/version", auth.Middleware(masterTokens, nil, a.HandleVersion))
 
 	// Async Task handlers
-	mux.HandleFunc("/models/pull", auth.Middleware(masterTokens, nil, a.HandlePull))
-	mux.HandleFunc("/models/unload", auth.Middleware(masterTokens, nil, a.HandleUnload))
-	mux.HandleFunc("/models/delete", auth.Middleware(masterTokens, nil, a.HandleDelete))
-	mux.HandleFunc("/models/create", auth.Middleware(masterTokens, nil, a.HandleCreate))
-	mux.HandleFunc("/models/copy", auth.Middleware(masterTokens, nil, a.HandleCopy))
-	mux.HandleFunc("/models/push", auth.Middleware(masterTokens, nil, a.HandlePush))
+	mux.HandleFunc("/api/models/pull", auth.Middleware(masterTokens, nil, a.HandlePull))
+	mux.HandleFunc("/api/models/unload", auth.Middleware(masterTokens, nil, a.HandleUnload))
+	mux.HandleFunc("/api/models/delete", auth.Middleware(masterTokens, nil, a.HandleDelete))
+	mux.HandleFunc("/api/models/create", auth.Middleware(masterTokens, nil, a.HandleCreate))
+	mux.HandleFunc("/api/models/copy", auth.Middleware(masterTokens, nil, a.HandleCopy))
+	mux.HandleFunc("/api/models/push", auth.Middleware(masterTokens, nil, a.HandlePush))
 
 	return mux
 }
@@ -258,6 +272,8 @@ func (a *Agent) StartMaintenanceLoop() {
 			modelsToKeep := make([]string, len(a.persistentModels))
 			copy(modelsToKeep, a.persistentModels)
 			a.persistentMu.RUnlock()
+
+			a.Tasks.CleanupOldTasks(24 * time.Hour)
 
 			if len(modelsToKeep) == 0 {
 				continue
@@ -380,7 +396,9 @@ func (a *Agent) HandlePull(w http.ResponseWriter, r *http.Request) {
 	taskID := fmt.Sprintf("pull-%d", time.Now().UnixNano())
 	a.Tasks.AddTask(taskID, "pull", req.Model)
 
+	a.wg.Add(1)
 	go func() {
+		defer a.wg.Done()
 		sharedLog.Global.Infof("Task %s: Pulling model %s", taskID, req.Model)
 		err := a.Ollama.Pull(a.ctx, req.Model)
 		a.Tasks.CompleteTask(taskID, err)
@@ -486,7 +504,9 @@ func (a *Agent) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	taskID := fmt.Sprintf("create-%d", time.Now().UnixNano())
 	a.Tasks.AddTask(taskID, "create", req.Name)
 
+	a.wg.Add(1)
 	go func() {
+		defer a.wg.Done()
 		sharedLog.Global.Infof("Task %s: Creating model %s", taskID, req.Name)
 		stream, _, err := a.Ollama.Create(a.ctx, req.Name, req.Modelfile)
 		if err == nil {
@@ -539,7 +559,9 @@ func (a *Agent) HandlePush(w http.ResponseWriter, r *http.Request) {
 	taskID := fmt.Sprintf("push-%d", time.Now().UnixNano())
 	a.Tasks.AddTask(taskID, "push", req.Name)
 
+	a.wg.Add(1)
 	go func() {
+		defer a.wg.Done()
 		sharedLog.Global.Infof("Task %s: Pushing model %s", taskID, req.Name)
 		stream, _, err := a.Ollama.Push(a.ctx, req.Name)
 		if err == nil {
@@ -598,13 +620,19 @@ func (a *Agent) StartLogShipper() {
 				}
 
 				resp, err := a.httpClient.Do(req)
-				if err == nil && resp.StatusCode == http.StatusOK {
-					idsToDelete = append(idsToDelete, p.ID)
+				if err == nil {
+					if resp.StatusCode == http.StatusOK {
+						idsToDelete = append(idsToDelete, p.ID)
+					} else if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+						// Drop logs that are permanently rejected by the client
+						sharedLog.Global.Warnf("Dropping log permanently rejected by balancer (status %d)", resp.StatusCode)
+						idsToDelete = append(idsToDelete, p.ID)
+					} else {
+						resp.Body.Close()
+						break
+					}
 					resp.Body.Close()
 				} else {
-					if resp != nil {
-						resp.Body.Close()
-					}
 					break
 				}
 			}

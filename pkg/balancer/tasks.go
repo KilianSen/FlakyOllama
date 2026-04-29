@@ -402,12 +402,14 @@ func (b *Balancer) pollAgent(addr string) {
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
+		logging.Global.Debugf("Telemetry request to %s failed: %v", addr, err)
 		b.recordError(addr, "telemetry_failed")
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		logging.Global.Debugf("Telemetry to %s rejected with status %d", addr, resp.StatusCode)
 		b.recordError(addr, fmt.Sprintf("telemetry_status_%d", resp.StatusCode))
 		return
 	}

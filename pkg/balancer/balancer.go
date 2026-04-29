@@ -159,6 +159,7 @@ func (b *Balancer) SetupRoutes() http.Handler {
 		r.Get("/me", b.HandleV1Me)
 		r.Get("/status", b.HandleV1ClusterStatus)
 		r.Get("/nodes", b.HandleV1Nodes)
+		r.Post("/nodes/register", b.HandleV1Register)
 
 		r.Group(func(r chi.Router) {
 			r.Use(b.AdminOnly)
@@ -213,9 +214,6 @@ func (b *Balancer) SetupRoutes() http.Handler {
 			})
 		})
 	})
-
-	// Legacy Register endpoint
-	r.Post("/register", b.HandleV1Register)
 
 	// Auth Endpoints
 	r.Get("/auth/login", b.HandleOIDCLogin)
