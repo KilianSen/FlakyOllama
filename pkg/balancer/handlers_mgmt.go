@@ -777,9 +777,15 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	go b.captureUsage(req.NodeID, req.Model, 100, 100, 0, 0, clientKey, userID, surge)
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 400 {
+		b.jsonError(w, resp.StatusCode, string(bodyBytes))
+		return
+	}
+
 	var result models.InferenceResponse
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		b.jsonError(w, http.StatusInternalServerError, "failed to decode response")
+		b.jsonError(w, http.StatusInternalServerError, "failed to decode response: "+string(bodyBytes))
 		return
 	}
 
