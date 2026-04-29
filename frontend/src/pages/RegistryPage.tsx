@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Search, Download, Trash2, CheckCircle2, Box, RefreshCw, ShieldX, Pin, Clock, ChevronRight, TrendingUp
+  Search, Download, Trash2, CheckCircle2, Box, RefreshCw, ShieldX, Pin, Zap, Clock, ChevronRight, TrendingUp
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -266,7 +266,7 @@ export const RegistryPage: React.FC = () => {
                                >
                                  <Zap size={12} />
                                </Button>
-
+                             </div>
                           </div>
                         </TableCell>
                       );
