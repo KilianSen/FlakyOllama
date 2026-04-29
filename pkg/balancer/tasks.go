@@ -1,12 +1,14 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/shared/logging"
-	"FlakyOllama/pkg/shared/models"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
+
+	"FlakyOllama/pkg/shared/logging"
+	"FlakyOllama/pkg/shared/models"
 )
 
 func (b *Balancer) StartLogBroadcaster() {
@@ -317,13 +319,14 @@ func (b *Balancer) pollAgentTasks() {
 			}
 			url := fmt.Sprintf("%s://%s/tasks", scheme, agentAddr)
 
-			hReq, _ := http.NewRequest("GET", url, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			hReq, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 			if b.Config.RemoteToken != "" {
 				hReq.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
 			}
 
-			client := &http.Client{Timeout: 2 * time.Second}
-			resp, err := client.Do(hReq)
+			resp, err := b.httpClient.Do(hReq)
 			if err != nil {
 				return
 			}
@@ -389,13 +392,15 @@ func (b *Balancer) pollAgent(addr string) {
 	}
 	url := fmt.Sprintf("%s://%s/telemetry", scheme, addr)
 
-	req, _ := http.NewRequest("GET", url, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if b.Config.RemoteToken != "" {
 		req.Header.Set("Authorization", "Bearer "+b.Config.RemoteToken)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		b.recordError(addr, "telemetry_failed")
 		return

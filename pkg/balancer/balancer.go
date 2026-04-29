@@ -7,6 +7,7 @@ import (
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"net/http"
 	"sync"
@@ -80,6 +81,11 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		Queue:     NewRequestQueue(),
 		Jobs:      NewJobManager(),
 		httpClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
+				},
+			},
 			Timeout: 30 * time.Minute, // Long timeout for large models
 		},
 		MetricCh: make(chan metricEntry, 1000),

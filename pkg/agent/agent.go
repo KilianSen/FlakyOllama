@@ -180,7 +180,7 @@ func (a *Agent) NewMux() *http.ServeMux {
 	token := os.Getenv("AGENT_AUTH_TOKEN")
 	if token == "" {
 		sharedLog.Global.Warnf("AGENT_AUTH_TOKEN is not set, using AGENT_TOKEN instead")
-		token = a.Config.AuthToken
+		token = a.AgentKey
 	}
 
 	tokenDisable := os.Getenv("AGENT_AUTH_TOKEN_DISABLE")
@@ -191,7 +191,10 @@ func (a *Agent) NewMux() *http.ServeMux {
 
 	var masterTokens []string
 	if token != "" {
-		masterTokens = []string{token}
+		masterTokens = append(masterTokens, token)
+	}
+	if a.Config != nil && a.Config.RemoteToken != "" && a.Config.RemoteToken != token {
+		masterTokens = append(masterTokens, a.Config.RemoteToken)
 	}
 
 	mux := http.NewServeMux()

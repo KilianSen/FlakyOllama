@@ -16,14 +16,15 @@ The agent can be configured using the following environment variables:
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `AGENT_KEY` or `AGENT_TOKEN` | The authentication token used to register with the balancer and authenticate incoming requests. Overrides the `RemoteToken` in the configuration. | *None* |
+| `AGENT_KEY` or `AGENT_TOKEN` | The authentication token used to register with the balancer. Overrides the `RemoteToken` in the configuration. | *None* |
 | `AGENT_TIER` | The performance or billing tier of the agent. Used by the balancer for routing logic (e.g., prioritizing "dedicated" over "spot"). | `dedicated` |
 | `AGENT_ADDRESS` | Overrides the address reported to the balancer during registration. Useful if the agent is running behind a NAT, Docker, or external load balancer, and needs to advertise a specific external address. | Discovered Hostname/IP |
-| `AGENT_AUTH_TOKEN` | The authentication token required to access the agent's `/telemetry` and model management endpoints. Overrides `AuthToken` in the config. If both are empty, authentication is disabled. | *None* |
+| `AGENT_AUTH_TOKEN` | The authentication token required to access the agent's endpoints (`/telemetry`, `/tasks`, etc). If not set, it falls back to the agent's registration key (`AGENT_KEY`). Note: The agent also implicitly accepts the cluster's `RemoteToken` to ensure balancer connectivity. | *None* |
+| `AGENT_AUTH_TOKEN_DISABLE` | Set to `true` to disable authentication for incoming requests to the agent. | `false` |
 
 ## Configuration (Config struct)
 
 In addition to environment variables, the agent accepts a structured configuration (`config.Config`) that governs:
 - **TLS**: Paths to `CertFile` and `KeyFile` if HTTPS is enabled, and `InsecureSkipVerify` for internal calls.
 - **Hardware Allocations**: `MaxVRAMAllocated` and `MaxCPUAllocated` to cap resources reported to the balancer.
-- **AuthToken**: The bearer token used for authenticating incoming API requests to the agent's `/telemetry`, `/tasks`, and model management endpoints.
+- **Tokens**: The `RemoteToken` used to authenticate with the balancer (and accepted for incoming cluster requests).
