@@ -177,30 +177,39 @@ func (a *Agent) Register() error {
 	return nil
 }
 func (a *Agent) NewMux() *http.ServeMux {
-	token := a.Config.AuthToken
+	token := os.Getenv("AGENT_AUTH_TOKEN")
+	if token == "" {
+		token = a.Config.AuthToken
+	}
+
+	var masterTokens []string
+	if token != "" {
+		masterTokens = []string{token}
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("/telemetry", auth.Middleware([]string{token}, nil, a.HandleTelemetry))
-	mux.HandleFunc("/tasks", auth.Middleware([]string{token}, nil, a.HandleTasks))
+	mux.HandleFunc("/telemetry", auth.Middleware(masterTokens, nil, a.HandleTelemetry))
+	mux.HandleFunc("/tasks", auth.Middleware(masterTokens, nil, a.HandleTasks))
 
 	// Proxy routes using ReverseProxy
-	mux.HandleFunc("/v1/", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/inference", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/chat", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/embeddings", auth.Middleware([]string{token}, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/v1/", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/inference", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/chat", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/embeddings", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
 
 	// Direct handlers for more control
-	mux.HandleFunc("/show", auth.Middleware([]string{token}, nil, a.HandleShow))
-	mux.HandleFunc("/version", auth.Middleware([]string{token}, nil, a.HandleVersion))
+	mux.HandleFunc("/show", auth.Middleware(masterTokens, nil, a.HandleShow))
+	mux.HandleFunc("/version", auth.Middleware(masterTokens, nil, a.HandleVersion))
 
 	// Async Task handlers
-	mux.HandleFunc("/models/pull", auth.Middleware([]string{token}, nil, a.HandlePull))
-	mux.HandleFunc("/models/unload", auth.Middleware([]string{token}, nil, a.HandleUnload))
-	mux.HandleFunc("/models/delete", auth.Middleware([]string{token}, nil, a.HandleDelete))
-	mux.HandleFunc("/models/create", auth.Middleware([]string{token}, nil, a.HandleCreate))
-	mux.HandleFunc("/models/copy", auth.Middleware([]string{token}, nil, a.HandleCopy))
-	mux.HandleFunc("/models/push", auth.Middleware([]string{token}, nil, a.HandlePush))
+	mux.HandleFunc("/models/pull", auth.Middleware(masterTokens, nil, a.HandlePull))
+	mux.HandleFunc("/models/unload", auth.Middleware(masterTokens, nil, a.HandleUnload))
+	mux.HandleFunc("/models/delete", auth.Middleware(masterTokens, nil, a.HandleDelete))
+	mux.HandleFunc("/models/create", auth.Middleware(masterTokens, nil, a.HandleCreate))
+	mux.HandleFunc("/models/copy", auth.Middleware(masterTokens, nil, a.HandleCopy))
+	mux.HandleFunc("/models/push", auth.Middleware(masterTokens, nil, a.HandlePush))
 
 	return mux
 }
