@@ -86,6 +86,7 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
 		pr.SetURL(target)
+		pr.Out.Host = target.Host
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
