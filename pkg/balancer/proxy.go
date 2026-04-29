@@ -42,6 +42,9 @@ func (b *Balancer) sendToAgentWithContext(ctx context.Context, addr, path string
 	if b.Config.TLS.Enabled {
 		scheme = "https"
 	}
+
+	logging.Global.Debugf("Forwarding request to agent %s at path %s", addr, path)
+
 	req, err := http.NewRequestWithContext(ctx, "POST", scheme+"://"+addr+path, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
