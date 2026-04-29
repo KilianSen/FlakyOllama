@@ -182,6 +182,11 @@ func (a *Agent) NewMux() *http.ServeMux {
 		token = a.Config.AuthToken
 	}
 
+	tokenDisable := os.Getenv("AGENT_AUTH_TOKEN_DISABLE")
+	if tokenDisable == "true" {
+		token = ""
+	}
+
 	var masterTokens []string
 	if token != "" {
 		masterTokens = []string{token}
