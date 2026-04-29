@@ -433,7 +433,7 @@ export class FlakyOllamaSDK {
   }
 
   async testInference(req: any): Promise<any> {
-      return this.request('/api/v1/test', {
+      return this.request('/api/v1/nodes/test', {
           method: 'POST',
           body: JSON.stringify(req)
       });

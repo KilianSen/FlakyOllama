@@ -94,6 +94,16 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 		pr.Out.Host = target.Host
 	}
 
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		sharedLog.Global.Errorf("Proxy error for %s: %v", r.URL.Path, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":  "Ollama unreachable",
+			"detail": err.Error(),
+		})
+	}
+
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if transport.TLSClientConfig == nil {
 		transport.TLSClientConfig = &tls.Config{}
@@ -384,16 +394,26 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	var ollamaErr error
 	if active, err := a.Ollama.GetLoadedModels(ctx); err == nil {
 		status.ActiveModels = active
 	} else {
 		sharedLog.Global.Warnf("Failed to fetch active models from Ollama: %v", err)
+		ollamaErr = err
 	}
 
 	if local, err := a.Ollama.ListLocalModels(ctx); err == nil {
 		status.LocalModels = local
 	} else {
 		sharedLog.Global.Warnf("Failed to list local models from Ollama: %v", err)
+		if ollamaErr == nil {
+			ollamaErr = err
+		}
+	}
+
+	if ollamaErr != nil {
+		http.Error(w, "Ollama unreachable: "+ollamaErr.Error(), http.StatusServiceUnavailable)
+		return
 	}
 	sharedLog.Global.Debugf("Telemetry status for agent %s: %+v", a.ID, status)
 	json.NewEncoder(w).Encode(status)
