@@ -294,7 +294,7 @@ func (b *Balancer) recordError(addr string, reason string) {
 			if a.Errors >= b.Config.CircuitBreaker.ErrorThreshold {
 				a.State = models.StateBroken
 				a.CooloffUntil = time.Now().Add(time.Duration(b.Config.CircuitBreaker.CooloffSec) * time.Second)
-				a.Message = "Broken: too many errors (" + reason + ")"
+				a.Message = "Broken: " + reason
 			} else {
 				a.State = models.StateDegraded
 			}

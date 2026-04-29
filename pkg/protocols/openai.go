@@ -58,6 +58,9 @@ func (a *OpenAIAdapter) TranslateResponse(w http.ResponseWriter, agentBody io.Re
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		// WriteHeader(StatusOK) should be called by the caller if they want,
+		// but proxy.go does it before calling us or we do it.
+		// Actually, proxy.go was updated to let adapter handle it.
 		w.WriteHeader(http.StatusOK)
 		return a.translateStreamingResponse(w, agentBody)
 	}
@@ -135,6 +138,8 @@ func (a *OpenAIAdapter) translateNonStreamingResponse(w http.ResponseWriter, age
 			if err == io.EOF {
 				break
 			}
+			// If we got some content but then an error, we should probably still try to return what we have?
+			// But a 502/503 is likely a connection drop.
 			return lastInput, lastOutput, err
 		}
 
@@ -146,12 +151,20 @@ func (a *OpenAIAdapter) translateNonStreamingResponse(w http.ResponseWriter, age
 		}
 
 		fullContent.WriteString(ollamaResp.Message.Content)
-		lastModel = ollamaResp.Model
-		lastCreated = ollamaResp.CreatedAt.Unix()
+		if ollamaResp.Model != "" {
+			lastModel = ollamaResp.Model
+		}
+		if !ollamaResp.CreatedAt.IsZero() {
+			lastCreated = ollamaResp.CreatedAt.Unix()
+		}
 
 		if ollamaResp.Done {
 			break
 		}
+	}
+
+	if lastCreated == 0 {
+		lastCreated = time.Now().Unix()
 	}
 
 	openAIResp := models.OpenAIChatResponse{

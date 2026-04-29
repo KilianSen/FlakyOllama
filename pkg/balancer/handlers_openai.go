@@ -17,8 +17,8 @@ func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	priority := b.getRequestPriority(r)
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 
-	// AGENT MAPPING: Use the internal /chat proxy (Ollama format)
-	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), model, "/chat", body, r.RemoteAddr, true, priority, contextHash)
+	// AGENT MAPPING: Use the internal /api/chat proxy (Ollama format)
+	resp, _, agentAddr, err := b.DoHedgedRequest(r.Context(), model, "/api/chat", body, r.RemoteAddr, true, priority, contextHash)
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
 		return

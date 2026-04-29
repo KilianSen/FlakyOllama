@@ -70,6 +70,16 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 				cancel() // Stop the other request
 				return res.resp, p90, res.agentAddr, nil
 			}
+
+			// Record error if something went wrong
+			if res.agentAddr != "" {
+				if res.err != nil {
+					b.recordError(res.agentAddr, "agent_error")
+				} else if res.resp != nil && res.resp.StatusCode >= 400 {
+					b.recordError(res.agentAddr, fmt.Sprintf("status_%d", res.resp.StatusCode))
+				}
+			}
+
 			if res.err != nil && firstErr == nil {
 				firstErr = res.err
 			} else if res.resp != nil && res.resp.StatusCode >= 400 && firstErr == nil {

@@ -86,12 +86,6 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
 		pr.SetURL(target)
-		if pr.Out.URL.Path == "/inference" {
-			pr.Out.URL.Path = "/api/generate"
-		} else if pr.Out.URL.Path == "/chat" {
-			pr.Out.URL.Path = "/api/chat"
-		}
-		pr.Out.Host = target.Host
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
@@ -250,8 +244,8 @@ func (a *Agent) NewMux() *http.ServeMux {
 
 	// Proxy routes using ReverseProxy
 	mux.HandleFunc("/v1/", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/inference", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/chat", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/api/generate", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/api/chat", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
 	mux.HandleFunc("/api/embeddings", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
 
 	// Direct handlers for more control

@@ -460,8 +460,17 @@ func (b *Balancer) pollAgent(addr string) {
 			status.Tier = existing.Tier
 			// Update liveness fields
 			status.LastSeen = time.Now()
-			status.State = models.StateHealthy // It responded to telemetry
-			status.Errors = 0                  // Reset errors on successful poll
+
+			// Only reset to Healthy if we aren't currently Broken and cooling off
+			if existing.State == models.StateBroken && existing.CooloffUntil.After(time.Now()) {
+				status.State = models.StateBroken
+				status.CooloffUntil = existing.CooloffUntil
+				status.Message = existing.Message
+			} else {
+				status.State = models.StateHealthy // It responded to telemetry
+				status.Errors = 0                  // Reset errors on successful poll
+				status.Message = "Ready"
+			}
 
 			s.Agents[addr] = &status
 		}
