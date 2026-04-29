@@ -128,8 +128,7 @@ func (a *Agent) Register() error {
 
 	addressOverride := os.Getenv("AGENT_ADDRESS")
 	if addressOverride != "" {
-		_, port, _ := net.SplitHostPort(addressOverride)
-		a.EffectiveAddress = net.JoinHostPort(addressOverride, port)
+		a.EffectiveAddress = addressOverride
 	}
 
 	status, _ := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
