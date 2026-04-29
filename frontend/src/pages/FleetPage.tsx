@@ -305,7 +305,7 @@ export const FleetPage: React.FC = () => {
                     <div className="space-y-3">
                       {selectedNode.active_models?.length || selectedNode.local_models?.length ? (
                         <>
-                          {selectedNode.active_models?.map((m: string) => {
+                          {[...(selectedNode.active_models || [])].sort().map((m: string) => {
                             const caps = inferCapabilities(m);
                             return (
                               <div key={m} className="p-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5">
@@ -335,7 +335,7 @@ export const FleetPage: React.FC = () => {
                               </div>
                             );
                           })}
-                          {selectedNode.local_models?.filter((lm: {model:string}) => !selectedNode.active_models?.includes(lm.model)).map((lm: {model:string, size: number}) => {
+                          {[...(selectedNode.local_models || [])].sort((a,b) => a.model.localeCompare(b.model)).filter((lm: {model:string}) => !selectedNode.active_models?.includes(lm.model)).map((lm: {model:string, size: number}) => {
                             const caps = inferCapabilities(lm.model);
                             return (
                               <div key={lm.model} className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 opacity-80">

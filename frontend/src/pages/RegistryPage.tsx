@@ -30,7 +30,7 @@ export const RegistryPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState('matrix');
 
   const nodes = useMemo(() => Object.values(status?.nodes || {}), [status]);
-  const allModelNames = useMemo(() => status?.all_models || [], [status]);
+  const allModelNames = useMemo(() => [...(status?.all_models || [])].sort(), [status]);
   
   const loadRequests = async () => {
     try {

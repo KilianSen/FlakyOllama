@@ -3,7 +3,7 @@ import { useCluster } from './ClusterContext';
 import {
   LayoutDashboard, Server, Database, Terminal, ScrollText,
   Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare, Key,
-  User as UserIcon, LogOut, Shield, UserCog,
+  User as UserIcon, LogOut, Shield, UserCog, ListOrdered,
 } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -27,6 +27,7 @@ const baseNavItems = [
   { to: '/keys', label: 'Access', icon: Key, admin: true },
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
+  { to: '/queue', label: 'Queue', icon: ListOrdered, admin: true },
   { to: '/logs', label: 'Logs', icon: ScrollText, admin: true },
   { to: '/profile', label: 'Profile', icon: UserIcon },
   { to: '/config', label: 'Configuration', icon: Settings, admin: true },
@@ -73,7 +74,6 @@ const App = () => {
   )?.label ?? 'Dashboard';
 
   const isConfigPage = location.pathname === '/config';
-  const isPortalPage = location.pathname === '/portal';
 
   if (authLoading) {
     return (
@@ -83,7 +83,8 @@ const App = () => {
     );
   }
 
-  if (!user && status?.oidc_enabled && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage) {
+  const isPortalPage = location.pathname === '/portal';
+  if (!user && status?.oidc_enabled && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage && !isPortalPage) {
     // Redirect to OIDC login via proxy to maintain cookie context
     window.location.href = `/auth/login`;
     return null;
@@ -210,6 +211,18 @@ const App = () => {
               );
             })}
           </nav>
+
+          {/* Login prompt for unauthenticated users */}
+          {!user && status?.oidc_enabled && (
+            <div className="px-4 py-3 border-t border-sidebar-border">
+              <Button
+                className="w-full h-8 text-[10px] font-black uppercase tracking-widest gap-2"
+                onClick={() => { window.location.href = `/auth/login`; }}
+              >
+                <LogOut size={12} className="rotate-180" /> Sign In
+              </Button>
+            </div>
+          )}
 
           {/* Stats footer */}
           <div className="px-4 py-3 border-t border-sidebar-border space-y-1.5">
