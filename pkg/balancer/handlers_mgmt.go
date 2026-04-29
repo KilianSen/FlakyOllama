@@ -759,7 +759,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	body, _ := json.Marshal(testPrompt)
 
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
-	resp, err := b.sendToAgentWithContext(r.Context(), agentAddr, "/inference", body)
+	resp, err := b.sendToAgentWithContext(r.Context(), agentAddr, "/api/generate", body)
 	if err != nil {
 		b.jsonError(w, http.StatusServiceUnavailable, err.Error())
 		return
