@@ -263,6 +263,7 @@ type ClusterStatus struct {
 		Requests    int     `json:"requests"`
 	} `json:"performance"`
 
+	ModelRewardFactors     map[string]float64            `json:"model_reward_factors"`
 	ModelCostFactors       map[string]float64            `json:"model_cost_factors"`
 	GlobalRewardMultiplier float64                       `json:"global_reward_multiplier"`
 	GlobalCostMultiplier   float64                       `json:"global_cost_multiplier"`
