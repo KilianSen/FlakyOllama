@@ -19,17 +19,19 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import sdk, { type ClusterStatus, type User } from './api';
 
-const publicNavItems = [
+type NavItemDef = { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; end?: boolean };
+
+const publicNavItems: NavItemDef[] = [
   { to: '/portal', label: 'Marketplace', icon: Zap },
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
 ];
 
-const userNavItems = [
+const userNavItems: NavItemDef[] = [
   { to: '/profile', label: 'Profile', icon: UserIcon },
 ];
 
-const adminNavItems = [
+const adminNavItems: NavItemDef[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/fleet', label: 'Fleet', icon: Server },
   { to: '/registry', label: 'Registry', icon: Database },
@@ -40,13 +42,11 @@ const adminNavItems = [
   { to: '/config', label: 'Configuration', icon: Settings },
 ];
 
-const baseNavItems = [
+const baseNavItems: NavItemDef[] = [
   ...publicNavItems,
   ...userNavItems,
-  ...adminNavItems.map(i => ({ ...i, admin: true })),
+  ...adminNavItems,
 ];
-
-type NavItemDef = { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; end?: boolean };
 
 function NavItem({ item, status }: { item: NavItemDef; status: ClusterStatus | null }) {
   const offlineN = (status && item.to === '/fleet') ? getOfflineCount(status) : 0;
