@@ -28,35 +28,35 @@ func (s NodeState) String() string {
 }
 
 type NodeStatus struct {
-	ID             string      `json:"id"`
-	AgentKey       string      `json:"agent_key"`         // The token used to register
-	UserID         string      `json:"user_id,omitempty"` // ID of the user owning this node
-	IsGlobal       bool        `json:"is_global"`         // True if node is not bound to a user
-	BalancerToken  string      `json:"balancer_token"`    // The token expected by the agent
-	Address        string      `json:"address"`
-	State          NodeState   `json:"state"`
-	Tier           string      `json:"tier"`      // "dedicated" or "shared"
-	CPUUsage       float64     `json:"cpu_usage"` // Percentage
-	CPUCores       int         `json:"cpu_cores"`
-	MemoryUsage    float64     `json:"memory_usage"` // Percentage
-	MemoryTotal    uint64      `json:"memory_total"` // Bytes
-	VRAMTotal      uint64      `json:"vram_total"`   // Bytes
-	VRAMUsed       uint64      `json:"vram_used"`    // Bytes
-	GPUModel       string      `json:"gpu_model"`
-	GPUTemperature float64     `json:"gpu_temp"`      // Celsius
-	ActiveModels   []string    `json:"active_models"` // List of currently loaded models
-	LocalModels    []ModelInfo `json:"local_models"`  // Models present on disk
-	InputTokens      int64       `json:"input_tokens"`
-	OutputTokens     int64       `json:"output_tokens"`
-	TokenReward      float64     `json:"token_reward"`
-	TokensPerSecond  float64     `json:"tokens_per_second"`
-	Reputation     float64     `json:"reputation"` // Score 0.1 - 5.0
-	Errors         int         `json:"errors"`
-	Message        string      `json:"message"`
-	Draining       bool        `json:"draining"`
-	HasGPU         bool        `json:"has_gpu"`
-	LastSeen       time.Time   `json:"last_seen"`
-	CooloffUntil   time.Time   `json:"cooloff_until"`
+	ID              string      `json:"id"`
+	AgentKey        string      `json:"agent_key"`         // The token used to register
+	UserID          string      `json:"user_id,omitempty"` // ID of the user owning this node
+	IsGlobal        bool        `json:"is_global"`         // True if node is not bound to a user
+	BalancerToken   string      `json:"balancer_token"`    // The token expected by the agent
+	Address         string      `json:"address"`
+	State           NodeState   `json:"state"`
+	Tier            string      `json:"tier"`      // "dedicated" or "shared"
+	CPUUsage        float64     `json:"cpu_usage"` // Percentage
+	CPUCores        int         `json:"cpu_cores"`
+	MemoryUsage     float64     `json:"memory_usage"` // Percentage
+	MemoryTotal     uint64      `json:"memory_total"` // Bytes
+	VRAMTotal       uint64      `json:"vram_total"`   // Bytes
+	VRAMUsed        uint64      `json:"vram_used"`    // Bytes
+	GPUModel        string      `json:"gpu_model"`
+	GPUTemperature  float64     `json:"gpu_temp"`      // Celsius
+	ActiveModels    []string    `json:"active_models"` // List of currently loaded models
+	LocalModels     []ModelInfo `json:"local_models"`  // Models present on disk
+	InputTokens     int64       `json:"input_tokens"`
+	OutputTokens    int64       `json:"output_tokens"`
+	TokenReward     float64     `json:"token_reward"`
+	TokensPerSecond float64     `json:"tokens_per_second"`
+	Reputation      float64     `json:"reputation"` // Score 0.1 - 5.0
+	Errors          int         `json:"errors"`
+	Message         string      `json:"message"`
+	Draining        bool        `json:"draining"`
+	HasGPU          bool        `json:"has_gpu"`
+	LastSeen        time.Time   `json:"last_seen"`
+	CooloffUntil    time.Time   `json:"cooloff_until"`
 }
 
 type ModelInfo struct {
@@ -263,13 +263,13 @@ type ClusterStatus struct {
 		Requests    int     `json:"requests"`
 	} `json:"performance"`
 
-	ModelRewardFactors     map[string]float64 `json:"model_reward_factors"`
-	ModelCostFactors       map[string]float64 `json:"model_cost_factors"`
-	GlobalRewardMultiplier float64            `json:"global_reward_multiplier"`
-	GlobalCostMultiplier   float64            `json:"global_cost_multiplier"`
-	OIDCEnabled            bool               `json:"oidc_enabled"`
-	QueueDepth             int                `json:"queue_depth"`
-	NodeWorkloads          map[string]int     `json:"node_workloads"`
+	ModelCostFactors       map[string]float64            `json:"model_cost_factors"`
+	GlobalRewardMultiplier float64                       `json:"global_reward_multiplier"`
+	GlobalCostMultiplier   float64                       `json:"global_cost_multiplier"`
+	VirtualModels          map[string]VirtualModelConfig `json:"virtual_models"`
+	OIDCEnabled            bool                          `json:"oidc_enabled"`
+	QueueDepth             int                           `json:"queue_depth"`
+	NodeWorkloads          map[string]int                `json:"node_workloads"`
 }
 
 type Catalog struct {

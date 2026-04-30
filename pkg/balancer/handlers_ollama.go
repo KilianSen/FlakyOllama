@@ -126,6 +126,33 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 		req.Priority = priority
 	}
 
+	// 1. Check Virtual Models
+	var vConfig models.VirtualModelConfig
+	found := false
+
+	b.configMu.RLock()
+	if cfg, ok := b.Config.VirtualModels[req.Model]; ok {
+		vConfig = cfg
+		found = true
+	}
+	b.configMu.RUnlock()
+
+	if found && vConfig.Type == "pipeline" {
+		output, err := b.ExecutePipeline(ctx, req, vConfig, r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp := models.ChatResponse{
+			Model:     req.Model,
+			CreatedAt: time.Now(),
+			Message:   models.ChatMessage{Role: "assistant", Content: output},
+			Done:      true,
+		}
+		b.jsonResponse(w, http.StatusOK, resp)
+		return
+	}
+
 	surge := 1.0 + (float64(b.Queue.QueueDepth()) * 0.02)
 	contextHash := ""
 	if len(req.Messages) > 0 {

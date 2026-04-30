@@ -174,3 +174,66 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 
 	return bestAgent, nil
 }
+
+func (b *Balancer) resolveVirtualModel(modelName string) string {
+	b.configMu.RLock()
+	vConfig, ok := b.Config.VirtualModels[modelName]
+	b.configMu.RUnlock()
+
+	if !ok || vConfig.Type != "metric" {
+		return modelName
+	}
+
+	if len(vConfig.Targets) == 0 {
+		return modelName
+	}
+
+	switch vConfig.Strategy {
+	case "fastest":
+		bestTarget := vConfig.Targets[0]
+		minLat := 1e18
+		b.cacheMu.RLock()
+		for _, t := range vConfig.Targets {
+			if p, ok := b.perfCache[t]; ok && p.AvgDuration > 0 && p.AvgDuration < minLat {
+				minLat = p.AvgDuration
+				bestTarget = t
+			}
+		}
+		b.cacheMu.RUnlock()
+		return bestTarget
+
+	case "cheapest":
+		bestTarget := vConfig.Targets[0]
+		minCost := 1e18
+		for _, t := range vConfig.Targets {
+			cost := 1.0
+			if f, ok := b.Config.ModelCostFactors[t]; ok {
+				cost = f
+			}
+			if cost < minCost {
+				minCost = cost
+				bestTarget = t
+			}
+		}
+		return bestTarget
+
+	case "most_reliable":
+		// For now, same as fastest but could incorporate success rate if we tracked it per model
+		bestTarget := vConfig.Targets[0]
+		minLat := 1e18
+		b.cacheMu.RLock()
+		for _, t := range vConfig.Targets {
+			if p, ok := b.perfCache[t]; ok && p.AvgDuration > 0 && p.AvgDuration < minLat {
+				minLat = p.AvgDuration
+				bestTarget = t
+			}
+		}
+		b.cacheMu.RUnlock()
+		return bestTarget
+
+	case "random":
+		return vConfig.Targets[rand.Intn(len(vConfig.Targets))]
+	}
+
+	return vConfig.Targets[0]
+}

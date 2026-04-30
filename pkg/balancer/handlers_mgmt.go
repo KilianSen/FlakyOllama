@@ -107,6 +107,7 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 		ModelCostFactors:       b.Config.ModelCostFactors,
 		GlobalRewardMultiplier: b.Config.GlobalRewardMultiplier,
 		GlobalCostMultiplier:   b.Config.GlobalCostMultiplier,
+		VirtualModels:          b.Config.VirtualModels,
 		OIDCEnabled:            b.Config.OIDC.Enabled,
 		QueueDepth:             b.Queue.QueueDepth(),
 		NodeWorkloads:          snap.NodeWorkloads,

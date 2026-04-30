@@ -128,6 +128,19 @@ func (t *TailReader) Bytes() []byte {
 	return res
 }
 
+func (b *Balancer) updateBodyModel(body []byte, model string) []byte {
+	var m map[string]interface{}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return body
+	}
+	m["model"] = model
+	newBody, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return newBody
+}
+
 func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64) {
 	b.finalizeProxyWithAdapter(w, resp, agentAddr, modelName, r, surge, nil)
 }

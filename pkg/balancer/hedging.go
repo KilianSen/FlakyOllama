@@ -41,7 +41,15 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 			if res.Err != nil {
 				return nil, p90, "", res.Err
 			}
-			resp, err := b.sendToAgentWithContext(ctx, res.AgentAddr, path, body)
+
+			// If it was a virtual model, we MUST update the body so the agent knows which
+			// actual model to use.
+			finalBody := body
+			if res.ResolvedModel != "" && res.ResolvedModel != model {
+				finalBody = b.updateBodyModel(body, res.ResolvedModel)
+			}
+
+			resp, err := b.sendToAgentWithContext(ctx, res.AgentAddr, path, finalBody)
 			if err != nil {
 				b.recordError(res.AgentAddr, "agent_error")
 				return nil, p90, res.AgentAddr, err
@@ -69,7 +77,13 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 				resultCh <- hedgeResult{err: res.Err}
 				return
 			}
-			resp, err := b.sendToAgentWithContext(reqCtx, res.AgentAddr, path, body)
+
+			finalBody := body
+			if res.ResolvedModel != "" && res.ResolvedModel != model {
+				finalBody = b.updateBodyModel(body, res.ResolvedModel)
+			}
+
+			resp, err := b.sendToAgentWithContext(reqCtx, res.AgentAddr, path, finalBody)
 			// Pass cancel along so the caller can cancel the loser but not the winner.
 			resultCh <- hedgeResult{resp: resp, agentAddr: res.AgentAddr, cancel: cancel, err: err}
 		case <-reqCtx.Done():

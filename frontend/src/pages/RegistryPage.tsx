@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Search, Download, Trash2, CheckCircle2, Box, RefreshCw, ShieldX, Pin, Zap, Clock, ChevronRight, TrendingUp
+  Search, Download, Trash2, CheckCircle2, Box, RefreshCw, ShieldX, Pin, Zap, Clock, ChevronRight, TrendingUp, Cpu
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -30,7 +30,14 @@ export const RegistryPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState('matrix');
 
   const nodes = useMemo(() => Object.values(status?.nodes || {}), [status]);
-  const allModelNames = useMemo(() => [...(status?.all_models || [])].sort(), [status]);
+  const virtualModels = useMemo(() => status?.virtual_models || {}, [status]);
+  const virtualModelNames = useMemo(() => Object.keys(virtualModels).sort(), [virtualModels]);
+  
+  // Physical models are all_models minus virtual_models
+  const physicalModelNames = useMemo(() => {
+    const all = status?.all_models || [];
+    return all.filter(m => !virtualModels[m]).sort();
+  }, [status, virtualModels]);
   
   const loadRequests = async () => {
     try {
@@ -107,7 +114,8 @@ export const RegistryPage: React.FC = () => {
     return { isLoaded, isOnDisk, isBanned: policy.Banned, isPinned: policy.Pinned, isPersistent: policy.Persistent };
   };
 
-  const filteredModels = allModelNames.filter(m => m.toLowerCase().includes(search.toLowerCase()));
+  const filteredPhysicalModels = physicalModelNames.filter(m => m.toLowerCase().includes(search.toLowerCase()));
+  const filteredVirtualModels = virtualModelNames.filter(m => m.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-6 space-y-6">
@@ -130,13 +138,14 @@ export const RegistryPage: React.FC = () => {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <div className="flex bg-muted/30 p-1 rounded-lg border border-border/50 w-fit">
-           {['matrix', 'browser', 'requests'].map(t => (
+           {['matrix', 'virtual', 'browser', 'requests'].map(t => (
              <button 
               key={t}
               onClick={() => setActiveTab(t)}
               className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-md transition-all flex items-center gap-2 ${activeTab === t ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
              >
                {t === 'matrix' && <Layers size={12} />}
+               {t === 'virtual' && <Cpu size={12} />}
                {t === 'browser' && <Search size={12} />}
                {t === 'requests' && <Clock size={12} />}
                {t}
@@ -145,20 +154,20 @@ export const RegistryPage: React.FC = () => {
            ))}
         </div>
 
-        {/* ── Tab: Matrix ── */}
+        {/* ── Tab: Matrix (Physical Models) ── */}
         <TabsContent value="matrix" className="m-0 border border-border/50 rounded-xl overflow-hidden bg-card">
           <div className="p-4 border-b border-border/50 flex items-center justify-between bg-muted/20">
             <div className="relative w-64">
               <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
               <Input 
-                placeholder="Filter models..." 
+                placeholder="Filter physical models..." 
                 className="pl-8 h-8 text-[10px] bg-background border-border/50" 
                 value={search}
                 onChange={e => setSearch(e.target.value)}
               />
             </div>
             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-              {nodes.length} Nodes · {allModelNames.length} Models
+              {nodes.length} Nodes · {physicalModelNames.length} Physical Models
             </p>
           </div>
           
@@ -186,13 +195,13 @@ export const RegistryPage: React.FC = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredModels.length === 0 ? (
+                {filteredPhysicalModels.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={nodes.length + 1} className="h-32 text-center text-muted-foreground text-xs font-bold italic">
-                      No models discovered in fleet
+                      No physical models discovered in fleet
                     </TableCell>
                   </TableRow>
-                ) : filteredModels.map(model => (
+                ) : filteredPhysicalModels.map(model => (
                   <TableRow key={model} className="border-border/40 hover:bg-muted/5 group">
                     <TableCell className="font-mono text-[11px] font-black pl-6 py-4">
                       <div className="flex flex-col gap-1">
@@ -275,6 +284,96 @@ export const RegistryPage: React.FC = () => {
                 ))}
               </TableBody>
             </Table>
+          </div>
+        </TabsContent>
+
+        {/* ── Tab: Virtual Models ── */}
+        <TabsContent value="virtual" className="m-0 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="relative w-64">
+              <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
+              <Input 
+                placeholder="Filter virtual models..." 
+                className="pl-8 h-8 text-[10px] bg-background border-border/50" 
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            </div>
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+              {virtualModelNames.length} Virtual Configurations
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {filteredVirtualModels.map(name => {
+              const cfg = virtualModels[name];
+              return (
+                <Card key={name} className="bg-card border-border/50 overflow-hidden group hover:border-primary/30 transition-colors">
+                  <div className={`h-1 w-full ${cfg.type === 'pipeline' ? 'bg-purple-500' : cfg.type === 'metric' ? 'bg-blue-500' : 'bg-amber-500'}`} />
+                  <CardContent className="p-5">
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg ${cfg.type === 'pipeline' ? 'bg-purple-500/10 text-purple-400' : cfg.type === 'metric' ? 'bg-blue-500/10 text-blue-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                          {cfg.type === 'pipeline' ? <RefreshCw size={18} /> : <Zap size={18} />}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                             <h3 className="text-sm font-black tracking-tight">{name}</h3>
+                             <Badge variant="outline" className="text-[8px] h-3.5 px-1 uppercase font-black">{cfg.type}</Badge>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground font-bold mt-0.5 uppercase tracking-tighter">
+                            {cfg.type === 'metric' ? `Strategy: ${cfg.strategy}` : cfg.type === 'pipeline' ? `${cfg.steps?.length || 0} Steps Pipeline` : 'Arena'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                         <Badge variant="outline" className="text-[7px] h-3.5 px-1 border-amber-500/20 text-amber-500 uppercase">
+                           R: {(status?.model_reward_factors?.[name] || 1.0).toFixed(1)}x
+                         </Badge>
+                         <Badge variant="outline" className="text-[7px] h-3.5 px-1 border-blue-500/20 text-blue-400 uppercase">
+                           C: {(status?.model_cost_factors?.[name] || 1.0).toFixed(1)}x
+                         </Badge>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-[9px] font-black uppercase text-muted-foreground mb-1.5 tracking-widest">Target Models</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {cfg.targets?.map(t => (
+                            <Badge key={t} variant="secondary" className="text-[10px] font-mono h-5 px-1.5 bg-muted/50 border-border/50">
+                              {t}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+
+                      {cfg.type === 'pipeline' && cfg.steps && (
+                        <div>
+                          <p className="text-[9px] font-black uppercase text-muted-foreground mb-1.5 tracking-widest">Flow</p>
+                          <div className="space-y-1.5">
+                            {cfg.steps.map((s, idx) => (
+                              <div key={idx} className="flex items-center gap-2 text-[10px] font-bold">
+                                <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center text-[8px] font-black">{idx + 1}</div>
+                                <span className="text-muted-foreground uppercase">{s.action}:</span>
+                                <span className="font-mono">{s.model}</span>
+                                {idx < cfg.steps!.length - 1 && <ChevronRight size={10} className="text-muted-foreground/30" />}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+            {filteredVirtualModels.length === 0 && (
+               <div className="col-span-full h-40 flex flex-col items-center justify-center bg-muted/10 border border-dashed border-border rounded-xl opacity-50">
+                <ShieldX size={32} className="mb-2 text-muted-foreground" />
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">No virtual models configured</p>
+              </div>
+            )}
           </div>
         </TabsContent>
 

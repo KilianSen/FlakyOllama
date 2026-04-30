@@ -211,7 +211,8 @@ func (b *Balancer) ProcessQueue() {
 			break
 		}
 
-		addr, err := b.SelectAgent(req.Request.Model, req.UserID)
+		resolvedModel := b.resolveVirtualModel(req.Request.Model)
+		addr, err := b.SelectAgent(resolvedModel, req.UserID)
 		if err != nil {
 			// If we couldn't find a node right now, put it back
 			b.Queue.Requeue(req)
@@ -222,7 +223,7 @@ func (b *Balancer) ProcessQueue() {
 
 		// Non-blocking send to the waiting request
 		select {
-		case req.Response <- QueuedResponse{AgentAddr: addr}:
+		case req.Response <- QueuedResponse{AgentAddr: addr, ResolvedModel: resolvedModel}:
 		default:
 			// If no one is listening anymore (client disconnected), decrement the workload
 			b.decrementWorkload(addr)

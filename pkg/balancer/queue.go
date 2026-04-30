@@ -25,9 +25,10 @@ type QueuedRequest struct {
 }
 
 type QueuedResponse struct {
-	AgentID   string
-	AgentAddr string
-	Err       error
+	AgentID       string
+	AgentAddr     string
+	ResolvedModel string
+	Err           error
 }
 
 // PriorityQueue implements heap.Interface and holds QueuedRequests.
