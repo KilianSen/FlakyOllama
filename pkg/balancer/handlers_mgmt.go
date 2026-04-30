@@ -113,10 +113,13 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 		aks = []models.AgentKey{}
 	}
 
+	usage, _ := b.Storage.GetUserQuotaUsage(user.ID)
+
 	b.jsonResponse(w, http.StatusOK, models.ProfileResponse{
 		User:       user,
 		ClientKeys: cks,
 		AgentKeys:  aks,
+		QuotaUsage: usage,
 	})
 }
 
@@ -628,25 +631,50 @@ func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) HandleV1UserUpdateQuota(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req struct {
-		QuotaLimit int64 `json:"quota_limit"`
+		QuotaTier         *string `json:"quota_tier,omitempty"`
+		QuotaLimit        *int64  `json:"quota_limit,omitempty"`
+		DailyQuotaLimit   *int64  `json:"daily_quota_limit,omitempty"`
+		WeeklyQuotaLimit  *int64  `json:"weekly_quota_limit,omitempty"`
+		MonthlyQuotaLimit *int64  `json:"monthly_quota_limit,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-
 	u, err := b.Storage.GetUserByID(id)
 	if err != nil {
 		b.jsonError(w, http.StatusNotFound, "user not found")
 		return
 	}
-
-	u.QuotaLimit = req.QuotaLimit
+	if req.QuotaTier != nil {
+		tier := models.QuotaTier(*req.QuotaTier)
+		if limits, ok := models.DefaultTiers[tier]; ok {
+			u.QuotaTier = tier
+			u.QuotaLimit = limits.Total
+			u.DailyQuotaLimit = limits.Daily
+			u.WeeklyQuotaLimit = limits.Weekly
+			u.MonthlyQuotaLimit = limits.Monthly
+		}
+	}
+	if req.QuotaLimit != nil {
+		u.QuotaLimit = *req.QuotaLimit
+	}
+	if req.DailyQuotaLimit != nil {
+		u.DailyQuotaLimit = *req.DailyQuotaLimit
+	}
+	if req.WeeklyQuotaLimit != nil {
+		u.WeeklyQuotaLimit = *req.WeeklyQuotaLimit
+	}
+	if req.MonthlyQuotaLimit != nil {
+		u.MonthlyQuotaLimit = *req.MonthlyQuotaLimit
+	}
+	if req.QuotaTier == nil || models.QuotaTier(*req.QuotaTier) == models.QuotaTierCustom {
+		u.QuotaTier = models.QuotaTierCustom
+	}
 	if err := b.Storage.UpdateUser(u); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, "failed to update quota: "+err.Error())
 		return
 	}
-
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "quota updated"})
 }
 
