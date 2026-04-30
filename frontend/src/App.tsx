@@ -4,7 +4,7 @@ import { useCluster } from './ClusterContext';
 import {
   LayoutDashboard, Server, Database, Terminal, ScrollText,
   Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare, Key,
-  User as UserIcon, LogOut, Shield, UserCog, ListOrdered,
+  User as UserIcon, LogOut, Shield, UserCog, ListOrdered, HomeIcon,
 } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -21,7 +21,8 @@ import sdk, { type ClusterStatus, type User } from './api';
 
 type NavItemDef = { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; end?: boolean };
 
-const publicNavItems: NavItemDef[] = [
+const publicOnlyNavItems: NavItemDef[] = [
+  { to: '/', label: 'Home', icon: HomeIcon },
   { to: '/portal', label: 'Marketplace', icon: Zap },
 ];
 
@@ -43,7 +44,7 @@ const adminNavItems: NavItemDef[] = [
 ];
 
 const baseNavItems: NavItemDef[] = [
-  ...publicNavItems,
+  ...publicOnlyNavItems,
   ...userNavItems,
   ...adminNavItems,
 ];
@@ -223,11 +224,11 @@ const App = () => {
           {/* Navigation */}
           <nav className="flex-1 px-2 py-3 overflow-y-auto flex flex-col gap-4">
             {/* Public */}
-            <div className="space-y-0.5">
-              {publicNavItems.map(item => (
-                <NavItem key={item.to} item={item} status={status} />
+            {!user && <div className="space-y-0.5">
+              {publicOnlyNavItems.map(item => (
+                  <NavItem key={item.to} item={item} status={status}/>
               ))}
-            </div>
+            </div>}
 
             {/* Authenticated user items */}
             {user && (
