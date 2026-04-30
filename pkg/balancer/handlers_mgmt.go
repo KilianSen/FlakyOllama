@@ -16,6 +16,32 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+func (b *Balancer) HandlePublicInfo(w http.ResponseWriter, r *http.Request) {
+	snap := b.State.GetSnapshot()
+	healthyNodes := 0
+	uniqueModels := make(map[string]bool)
+	for _, n := range snap.Agents {
+		if n.State != models.StateBroken && !n.Draining {
+			healthyNodes++
+			for _, m := range n.LocalModels {
+				uniqueModels[m.Name] = true
+			}
+		}
+	}
+	b.configMu.RLock()
+	for m := range b.Config.VirtualModels {
+		uniqueModels[m] = true
+	}
+	b.configMu.RUnlock()
+
+	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"oidc_enabled":     b.Config.OIDC.Enabled,
+		"healthy_nodes":    healthyNodes,
+		"model_count":      len(uniqueModels),
+		"active_workloads": snap.ActiveWorkloads,
+	})
+}
+
 func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 	uniqueModels := make(map[string]bool)

@@ -203,6 +203,17 @@ func (b *Balancer) HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+func (b *Balancer) HandleOIDCLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "flaky_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
 func (b *Balancer) generateState() string {
 	b2 := make([]byte, 16)
 	rand.Read(b2)

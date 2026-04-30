@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { 
+import {
   Key, Coins, User, Box,
-  Info, TrendingUp, CheckCircle2
+  Info, TrendingUp, CheckCircle2, LogIn
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -20,7 +20,7 @@ export const PublicPortal: React.FC = () => {
 
   const loadCatalog = async () => {
     try {
-      const data = await sdk.getCatalog();
+      const data = await sdk.getPublicCatalog();
       setCatalog(data);
     } catch (err) {
       console.error('Catalog failed');
@@ -55,7 +55,7 @@ export const PublicPortal: React.FC = () => {
   return (
     <div className="min-h-screen bg-background text-foreground p-6 md:p-12 max-w-5xl mx-auto space-y-12">
       {/* Header */}
-      <div className="space-y-2">
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
             <Coins className="text-primary" size={24} />
@@ -65,6 +65,12 @@ export const PublicPortal: React.FC = () => {
             <p className="text-xs text-muted-foreground font-bold uppercase tracking-widest">Self-Service Portal & Catalog</p>
           </div>
         </div>
+        <Button
+          className="h-9 px-5 font-black uppercase text-xs tracking-widest gap-2 shadow-lg shadow-primary/20"
+          onClick={() => { window.location.href = '/auth/login'; }}
+        >
+          <LogIn size={13} /> Sign In
+        </Button>
       </div>
 
       {/* Identity Login */}

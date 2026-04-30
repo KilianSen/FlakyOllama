@@ -1,20 +1,28 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink } from 'react-router';
-import { Zap } from 'lucide-react';
+import { Zap, LogIn } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
-import { useCluster } from '../ClusterContext';
+import sdk from '../api';
+
+interface PublicInfo {
+  oidc_enabled: boolean;
+  healthy_nodes: number;
+  model_count: number;
+  active_workloads: number;
+}
 
 export const LandingPage: React.FC = () => {
-  const { status } = useCluster();
+  const [info, setInfo] = useState<PublicInfo | null>(null);
 
-  const nodes = status ? Object.values(status.nodes) as any[] : [];
-  const healthyCount = nodes.filter(n => n.state === 0 && !n.draining).length;
+  useEffect(() => {
+    sdk.getPublicInfo().then(setInfo).catch(() => {});
+  }, []);
 
   const stats = [
-    { label: 'Active Nodes', value: status ? healthyCount : null },
-    { label: 'Models Available', value: status ? status.all_models.length : null },
-    { label: 'Active Workloads', value: status ? status.active_workloads : null },
+    { label: 'Active Nodes', value: info?.healthy_nodes ?? null },
+    { label: 'Models Available', value: info?.model_count ?? null },
+    { label: 'Active Workloads', value: info?.active_workloads ?? null },
   ];
 
   return (
@@ -56,12 +64,12 @@ export const LandingPage: React.FC = () => {
 
       {/* CTA buttons */}
       <div className="flex items-center gap-3 mb-6">
-        {status?.oidc_enabled && (
+        {(!info || info.oidc_enabled) && (
           <Button
-            className="h-10 px-6 font-black uppercase text-xs tracking-widest shadow-lg shadow-primary/20"
+            className="h-10 px-6 font-black uppercase text-xs tracking-widest shadow-lg shadow-primary/20 gap-2"
             onClick={() => { window.location.href = '/auth/login'; }}
           >
-            Sign In
+            <LogIn size={14} /> Sign In
           </Button>
         )}
         <NavLink to="/portal">
@@ -74,7 +82,6 @@ export const LandingPage: React.FC = () => {
         </NavLink>
       </div>
 
-      {/* Tagline */}
       <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
         Connect your compute, access high-performance models, earn credits.
       </p>

@@ -410,6 +410,15 @@ export class FlakyOllamaSDK {
     return this.request(`/api/v1/queue/${id}`, { method: 'DELETE' });
   }
 
+  // Public (no auth required)
+  async getPublicInfo(): Promise<{ oidc_enabled: boolean; healthy_nodes: number; model_count: number; active_workloads: number }> {
+    return this.request('/api/public/info');
+  }
+
+  async getPublicCatalog(): Promise<Catalog> {
+    return this.request<Catalog>('/api/public/catalog');
+  }
+
   // Public / Self-service
   async getCatalog(): Promise<Catalog> {
     return this.request<Catalog>('/api/v1/catalog');
