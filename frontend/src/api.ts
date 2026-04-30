@@ -144,6 +144,7 @@ export interface User {
   sub: string;
   email: string;
   name: string;
+  picture?: string;
   is_admin: boolean;
   quota_limit: number;
   quota_used: number;
@@ -416,6 +417,10 @@ export class FlakyOllamaSDK {
 
   async getMe(): Promise<ProfileResponse> {
     return this.request<ProfileResponse>('/api/v1/me');
+  }
+
+  async getMeWithToken(token: string): Promise<ProfileResponse> {
+    return this.request<ProfileResponse>('/api/v1/me', {}, token);
   }
 
   // User Management (Admin)

@@ -23,16 +23,16 @@ type NavItemDef = { to: string; label: string; icon: React.ComponentType<{ size?
 
 const publicNavItems: NavItemDef[] = [
   { to: '/portal', label: 'Marketplace', icon: Zap },
-  { to: '/playground', label: 'Playground', icon: Terminal },
-  { to: '/chat', label: 'Chat', icon: MessageSquare },
 ];
 
 const userNavItems: NavItemDef[] = [
+  { to: '/playground', label: 'Playground', icon: Terminal },
+  { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/profile', label: 'Profile', icon: UserIcon },
 ];
 
 const adminNavItems: NavItemDef[] = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/overview', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/fleet', label: 'Fleet', icon: Server },
   { to: '/registry', label: 'Registry', icon: Database },
   { to: '/users', label: 'Users', icon: UserCog },
@@ -100,14 +100,12 @@ const App = () => {
     sdk.getMe()
       .then(res => {
         setUser(res.user);
-        // Redirect non-admins away from index if they land there
-        if (location.pathname === '/' && !res.user.is_admin) {
-          navigate('/portal');
+        if (location.pathname === '/' && res.user.is_admin) {
+          navigate('/overview');
         }
       })
       .catch(() => {
-        // If not authenticated, we don't redirect yet to allow playground/chat if they have tokens
-        // But for dashboard access, we might want to redirect
+        // Unauthenticated — let them see the landing page / portal
       })
       .finally(() => setAuthLoading(false));
   }, []);
@@ -115,8 +113,6 @@ const App = () => {
   const pageName = baseNavItems.find(n =>
     n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)
   )?.label ?? 'Dashboard';
-
-  const isConfigPage = location.pathname === '/config';
 
   if (authLoading) {
     return (
@@ -126,14 +122,13 @@ const App = () => {
     );
   }
 
-  const isPortalPage = location.pathname === '/portal';
-  if (!user && status?.oidc_enabled && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage && !isPortalPage) {
-    // Redirect to OIDC login via proxy to maintain cookie context
-    window.location.href = `/auth/login`;
+  const isPublicPath = ['/', '/portal', '/config'].some(p => location.pathname === p || location.pathname.startsWith(p));
+  if (!user && status?.oidc_enabled && !isPublicPath) {
+    window.location.href = '/auth/login';
     return null;
   }
 
-  if (!status && !isConfigPage && !isPortalPage) {
+  if (!status && !isPublicPath) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
         <Toaster position="top-right" theme="dark" richColors />
@@ -258,17 +253,40 @@ const App = () => {
             )}
           </nav>
 
-          {/* Login prompt for unauthenticated users */}
-          {!user && status?.oidc_enabled && (
+          {/* Login / logout block */}
+          {user ? (
+            <div className="px-4 py-3 border-t border-sidebar-border">
+              <div className="flex items-center gap-2 mb-2">
+                <Avatar className="h-6 w-6 border border-border shrink-0">
+                  {user.picture && <AvatarImage src={user.picture} alt={user.name} />}
+                  <AvatarFallback className="bg-primary/10 text-primary text-[9px] font-black">
+                    {user.name?.substring(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-black truncate">{user.name}</p>
+                  <p className="text-[9px] text-muted-foreground truncate">{user.email}</p>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full h-7 text-[9px] font-black uppercase tracking-widest gap-1.5 text-muted-foreground hover:text-destructive"
+                onClick={() => { window.location.href = '/auth/logout'; }}
+              >
+                <LogOut size={10} /> Sign Out
+              </Button>
+            </div>
+          ) : status?.oidc_enabled ? (
             <div className="px-4 py-3 border-t border-sidebar-border">
               <Button
                 className="w-full h-8 text-[10px] font-black uppercase tracking-widest gap-2"
-                onClick={() => { window.location.href = `/auth/login`; }}
+                onClick={() => { window.location.href = '/auth/login'; }}
               >
                 <LogOut size={12} className="rotate-180" /> Sign In
               </Button>
             </div>
-          )}
+          ) : null}
 
           {/* Stats footer */}
           <div className="px-4 py-3 border-t border-sidebar-border space-y-1.5">
@@ -328,7 +346,7 @@ const App = () => {
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                       <Avatar className="h-8 w-8 border border-border shadow-sm">
-                        <AvatarImage src={`https://avatar.vercel.sh/${user?.sub}.png`} alt={user?.name} />
+                        {user?.picture && <AvatarImage src={user.picture} alt={user?.name} />}
                         <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-black">
                           {user?.name?.substring(0, 2).toUpperCase()}
                         </AvatarFallback>

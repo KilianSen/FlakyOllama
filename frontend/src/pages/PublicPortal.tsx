@@ -32,13 +32,13 @@ export const PublicPortal: React.FC = () => {
   const fetchIdentity = async () => {
     setLoading(true);
     try {
-      const data = await sdk.getMe();
+      localStorage.setItem('MY_PORTAL_TOKEN', token);
+      const data = await sdk.getMeWithToken(token);
       setProfile(data);
       toast.success('Identity verified');
     } catch (err: any) {
       setProfile(null);
-      // If unauthorized, redirect to login via proxy
-      window.location.href = `/auth/login`;
+      toast.error('Invalid token');
     } finally {
       setLoading(false);
     }
@@ -46,7 +46,10 @@ export const PublicPortal: React.FC = () => {
 
   useEffect(() => {
     loadCatalog();
-    if (token) fetchIdentity();
+    const saved = localStorage.getItem('MY_PORTAL_TOKEN');
+    if (saved) {
+      sdk.getMeWithToken(saved).then(setProfile).catch(() => {});
+    }
   }, []);
 
   return (
