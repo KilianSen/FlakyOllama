@@ -343,11 +343,11 @@ const App = () => {
                   <TooltipContent className="text-[10px] font-bold">Refresh cluster state</TooltipContent>
                 </Tooltip>
 
-                <DropdownMenu>
+                {user && <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                       <Avatar className="h-8 w-8 border border-border shadow-sm">
-                        {user?.picture && <AvatarImage src={user.picture} alt={user?.name} />}
+                        {user?.picture && <AvatarImage src={user.picture} alt={user?.name}/>}
                         <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-black">
                           {user?.name?.substring(0, 2).toUpperCase()}
                         </AvatarFallback>
@@ -361,33 +361,33 @@ const App = () => {
                         <p className="text-xs leading-none text-muted-foreground">{user?.email}</p>
                       </div>
                     </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
+                    <DropdownMenuSeparator/>
                     <DropdownMenuItem asChild className="cursor-pointer font-bold">
                       <NavLink to="/profile" className="flex items-center w-full">
-                        <UserIcon className="mr-2 h-4 w-4" />
+                        <UserIcon className="mr-2 h-4 w-4"/>
                         <span>Profile</span>
                       </NavLink>
                     </DropdownMenuItem>
                     {user?.is_admin && (
-                      <DropdownMenuItem asChild className="cursor-pointer font-bold text-primary">
-                        <NavLink to="/config" className="flex items-center w-full">
-                          <Shield className="mr-2 h-4 w-4" />
-                          <span>Admin Console</span>
-                        </NavLink>
-                      </DropdownMenuItem>
+                        <DropdownMenuItem asChild className="cursor-pointer font-bold text-primary">
+                          <NavLink to="/config" className="flex items-center w-full">
+                            <Shield className="mr-2 h-4 w-4"/>
+                            <span>Admin Console</span>
+                          </NavLink>
+                        </DropdownMenuItem>
                     )}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem 
-                      className="cursor-pointer font-bold text-destructive"
-                      onClick={() => {
-                        window.location.href = `/auth/logout`;
-                      }}
+                    <DropdownMenuSeparator/>
+                    <DropdownMenuItem
+                        className="cursor-pointer font-bold text-destructive"
+                        onClick={() => {
+                          window.location.href = `/auth/logout`;
+                        }}
                     >
-                      <LogOut className="mr-2 h-4 w-4" />
+                      <LogOut className="mr-2 h-4 w-4"/>
                       <span>Log out</span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
-                </DropdownMenu>
+                </DropdownMenu>}
               </div>
             </div>
           </header>
