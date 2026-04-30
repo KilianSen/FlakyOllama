@@ -187,17 +187,19 @@ const App = () => {
         {/* Sidebar */}
         <aside className="w-56 shrink-0 flex flex-col bg-sidebar border-r border-sidebar-border h-full">
           {/* Logo */}
-          <div className="px-4 py-4 border-b border-sidebar-border">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-                <Zap size={16} className="text-primary" fill="currentColor" fillOpacity={0.3} />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-tight leading-none">FlakyOllama</p>
-                <p className="text-[9px] text-muted-foreground/60 font-bold uppercase tracking-widest mt-0.5">Console v1</p>
+          <NavLink to={user ? (user.is_admin?"/dashboard":"/portal") : "/"}>
+            <div className="px-4 py-4 border-b border-sidebar-border">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
+                  <Zap size={16} className="text-primary" fill="currentColor" fillOpacity={0.3} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase tracking-tight leading-none">FlakyOllama</p>
+                  <p className="text-[9px] text-muted-foreground/60 font-bold uppercase tracking-widest mt-0.5">Console v1</p>
+                </div>
               </div>
             </div>
-          </div>
+          </NavLink>
 
           {/* Cluster vitals */}
           <div className="px-4 py-3 border-b border-sidebar-border">
