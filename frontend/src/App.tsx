@@ -1,3 +1,4 @@
+import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useCluster } from './ClusterContext';
 import {
@@ -18,20 +19,64 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import sdk, { type ClusterStatus, type User } from './api';
 
-const baseNavItems = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, admin: true },
+const publicNavItems = [
   { to: '/portal', label: 'Marketplace', icon: Zap },
-  { to: '/fleet', label: 'Fleet', icon: Server, admin: true },
-  { to: '/registry', label: 'Registry', icon: Database, admin: true },
-  { to: '/users', label: 'Users', icon: UserCog, admin: true },
-  { to: '/keys', label: 'Access', icon: Key, admin: true },
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
-  { to: '/queue', label: 'Queue', icon: ListOrdered, admin: true },
-  { to: '/logs', label: 'Logs', icon: ScrollText, admin: true },
-  { to: '/profile', label: 'Profile', icon: UserIcon },
-  { to: '/config', label: 'Configuration', icon: Settings, admin: true },
 ];
+
+const userNavItems = [
+  { to: '/profile', label: 'Profile', icon: UserIcon },
+];
+
+const adminNavItems = [
+  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/fleet', label: 'Fleet', icon: Server },
+  { to: '/registry', label: 'Registry', icon: Database },
+  { to: '/users', label: 'Users', icon: UserCog },
+  { to: '/keys', label: 'Access', icon: Key },
+  { to: '/queue', label: 'Queue', icon: ListOrdered },
+  { to: '/logs', label: 'Logs', icon: ScrollText },
+  { to: '/config', label: 'Configuration', icon: Settings },
+];
+
+const baseNavItems = [
+  ...publicNavItems,
+  ...userNavItems,
+  ...adminNavItems.map(i => ({ ...i, admin: true })),
+];
+
+type NavItemDef = { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; end?: boolean };
+
+function NavItem({ item, status }: { item: NavItemDef; status: ClusterStatus | null }) {
+  const offlineN = (status && item.to === '/fleet') ? getOfflineCount(status) : 0;
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      className={({ isActive }) =>
+        `w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all duration-150 group ${
+          isActive
+            ? 'bg-sidebar-accent text-sidebar-accent-foreground font-black'
+            : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground font-bold'
+        }`
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <item.icon size={15} className={isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'} />
+          <span className="text-xs uppercase tracking-widest flex-1">{item.label}</span>
+          {offlineN > 0 && (
+            <Badge className="text-[8px] font-black h-4 px-1.5 bg-destructive/20 text-destructive border-destructive/30 min-w-[1rem] justify-center">
+              {offlineN}
+            </Badge>
+          )}
+          {isActive && <ChevronRight size={12} className="text-primary shrink-0" />}
+        </>
+      )}
+    </NavLink>
+  );
+}
 
 function formatUptime(s: number) {
   if (!s || isNaN(s)) return '0h 0m';
@@ -67,8 +112,6 @@ const App = () => {
       .finally(() => setAuthLoading(false));
   }, []);
 
-  const navItems = baseNavItems.filter(item => !item.admin || (user?.is_admin));
-
   const pageName = baseNavItems.find(n =>
     n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)
   )?.label ?? 'Dashboard';
@@ -91,7 +134,6 @@ const App = () => {
   }
 
   if (!status && !isConfigPage && !isPortalPage) {
-// ... (rest of the loading/error view)
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
         <Toaster position="top-right" theme="dark" richColors />
@@ -125,6 +167,11 @@ const App = () => {
             <RefreshCw size={12} className="animate-spin" /> Syncing compute fabric...
           </div>
         )}
+        <NavLink to="/portal">
+          <Button variant="ghost" size="sm" className="text-xs font-black uppercase gap-2 text-muted-foreground">
+            <Zap size={12} /> Browse Marketplace
+          </Button>
+        </NavLink>
       </div>
     );
   }
@@ -179,37 +226,36 @@ const App = () => {
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
-            {navItems.map(item => {
-              const offlineN = (status && item.to === '/fleet') ? getOfflineCount(status) : 0;
-              return (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  className={({ isActive }) => `
-                    w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all duration-150 group
-                    ${isActive
-                      ? 'bg-sidebar-accent text-sidebar-accent-foreground font-black'
-                      : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground font-bold'
-                    }
-                  `}
-                >
-                  {({ isActive }) => (
-                    <>
-                      <item.icon size={15} className={isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'} />
-                      <span className="text-xs uppercase tracking-widest flex-1">{item.label}</span>
-                      {offlineN > 0 && (
-                        <Badge className="text-[8px] font-black h-4 px-1.5 bg-destructive/20 text-destructive border-destructive/30 min-w-[1rem] justify-center">
-                          {offlineN}
-                        </Badge>
-                      )}
-                      {isActive && <ChevronRight size={12} className="text-primary shrink-0" />}
-                    </>
-                  )}
-                </NavLink>
-              );
-            })}
+          <nav className="flex-1 px-2 py-3 overflow-y-auto flex flex-col gap-4">
+            {/* Public */}
+            <div className="space-y-0.5">
+              {publicNavItems.map(item => (
+                <NavItem key={item.to} item={item} status={status} />
+              ))}
+            </div>
+
+            {/* Authenticated user items */}
+            {user && (
+              <div className="space-y-0.5">
+                <p className="px-3 mb-1 text-[9px] font-black uppercase tracking-widest text-muted-foreground/50">Account</p>
+                {userNavItems.map(item => (
+                  <NavItem key={item.to} item={item} status={status} />
+                ))}
+              </div>
+            )}
+
+            {/* Admin section */}
+            {user?.is_admin && (
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2 px-3 mb-1">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-primary/70">Admin</p>
+                  <div className="flex-1 h-px bg-primary/20" />
+                </div>
+                {adminNavItems.map(item => (
+                  <NavItem key={item.to} item={item} status={status} />
+                ))}
+              </div>
+            )}
           </nav>
 
           {/* Login prompt for unauthenticated users */}
