@@ -3,6 +3,7 @@ package agent_test
 import (
 	"FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/agent/capabilities"
+	"FlakyOllama/pkg/agent/monitoring"
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
@@ -138,6 +139,63 @@ func TestAgentCapabilities(t *testing.T) {
 	resp, _ = client.Do(req)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200 for high priority model under load, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// 7. Test model health rejection
+	healthPolicy := capabilities.Policy{
+		MaxErrorRate: 0.3,
+	}
+	body, _ = json.Marshal(healthPolicy)
+	req, _ = http.NewRequest("POST", agentSrv.URL+"/capabilities", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, _ = client.Do(req)
+	resp.Body.Close()
+
+	// Record some errors to trigger health rejection
+	for i := 0; i < 6; i++ {
+		a.Metrics.Record(monitoring.RequestSample{
+			Model: "unhealthy-model",
+			Error: true,
+		})
+	}
+
+	// Model should be rejected now
+	reqBody = `{"model": "unhealthy-model", "prompt": "hi"}`
+	req, _ = http.NewRequest("POST", agentSrv.URL+"/api/generate", bytes.NewBufferString(reqBody))
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503 for unhealthy model, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// 8. Test TPS health rejection
+	tpsPolicy := capabilities.Policy{
+		MinTPS: 10.0,
+	}
+	body, _ = json.Marshal(tpsPolicy)
+	req, _ = http.NewRequest("POST", agentSrv.URL+"/capabilities", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, _ = client.Do(req)
+	resp.Body.Close()
+
+	// Record slow TPS (5 tokens in 1s = 5 TPS)
+	for i := 0; i < 6; i++ {
+		a.Metrics.Record(monitoring.RequestSample{
+			Model:        "slow-model",
+			DurationMs:   1000,
+			OutputTokens: 5,
+		})
+	}
+
+	// Model should be rejected now
+	reqBody = `{"model": "slow-model", "prompt": "hi"}`
+	req, _ = http.NewRequest("POST", agentSrv.URL+"/api/generate", bytes.NewBufferString(reqBody))
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503 for slow model (TPS), got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 }

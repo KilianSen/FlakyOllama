@@ -1,6 +1,10 @@
 package capabilities
 
 import (
+	"FlakyOllama/pkg/shared/models"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -13,6 +17,9 @@ type Policy struct {
 	MaxMemoryThreshold   float64         `json:"max_memory_threshold"` // Reject requests if Memory usage > this
 	RejectOnHighLoad     bool            `json:"reject_on_high_load"`
 	MinPriorityUnderLoad int             `json:"min_priority_under_load"` // Minimum priority required when under high load
+	MaxErrorRate         float64         `json:"max_error_rate"`          // Reject if error rate > this (e.g., 0.5)
+	MaxP95LatencyMs      float64         `json:"max_p95_latency_ms"`      // Reject if P95 latency > this
+	MinTPS               float64         `json:"min_tps"`                 // Reject if tokens per second < this
 }
 
 // Manager handles local capability policies.
@@ -22,7 +29,7 @@ type Manager struct {
 }
 
 func NewManager() *Manager {
-	return &Manager{
+	m := &Manager{
 		policy: Policy{
 			AllowedModels:      make(map[string]bool),
 			DenyList:           make(map[string]bool),
@@ -31,6 +38,77 @@ func NewManager() *Manager {
 			MaxMemoryThreshold: 90.0,
 			RejectOnHighLoad:   false,
 		},
+	}
+	m.LoadFromEnv()
+	return m
+}
+
+func (m *Manager) LoadFromEnv() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if v := os.Getenv("AGENT_ALLOWED_MODELS"); v != "" {
+		for _, s := range strings.Split(v, ",") {
+			m.policy.AllowedModels[strings.TrimSpace(s)] = true
+		}
+	}
+
+	if v := os.Getenv("AGENT_DENY_MODELS"); v != "" {
+		for _, s := range strings.Split(v, ",") {
+			m.policy.DenyList[strings.TrimSpace(s)] = true
+		}
+	}
+
+	if v := os.Getenv("AGENT_MODEL_PRIORITIES"); v != "" {
+		// format: model1=10,model2=20
+		for _, pair := range strings.Split(v, ",") {
+			parts := strings.Split(pair, "=")
+			if len(parts) == 2 {
+				model := strings.TrimSpace(parts[0])
+				prio, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+				m.policy.ModelPriorities[model] = prio
+			}
+		}
+	}
+
+	if v := os.Getenv("AGENT_MAX_CPU_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			m.policy.MaxCPUThreshold = f
+		}
+	}
+
+	if v := os.Getenv("AGENT_MAX_MEM_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			m.policy.MaxMemoryThreshold = f
+		}
+	}
+
+	if v := os.Getenv("AGENT_REJECT_ON_HIGH_LOAD"); v != "" {
+		m.policy.RejectOnHighLoad = v == "true"
+	}
+
+	if v := os.Getenv("AGENT_MIN_PRIORITY_UNDER_LOAD"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			m.policy.MinPriorityUnderLoad = i
+		}
+	}
+
+	if v := os.Getenv("AGENT_MAX_ERROR_RATE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			m.policy.MaxErrorRate = f
+		}
+	}
+
+	if v := os.Getenv("AGENT_MAX_P95_LATENCY"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			m.policy.MaxP95LatencyMs = f
+		}
+	}
+
+	if v := os.Getenv("AGENT_MIN_TPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			m.policy.MinTPS = f
+		}
 	}
 }
 
@@ -68,6 +146,30 @@ func (m *Manager) IsModelAllowed(model string) bool {
 	}
 
 	return true
+}
+
+func (m *Manager) IsModelHealthy(model string, stats models.ModelCapabilityStats) (bool, string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Only check if we have enough samples (e.g., > 5) to avoid jitter on first few requests
+	if stats.RequestCount < 5 {
+		return true, ""
+	}
+
+	if m.policy.MaxErrorRate > 0 && stats.ErrorRate > m.policy.MaxErrorRate {
+		return false, "high error rate"
+	}
+
+	if m.policy.MaxP95LatencyMs > 0 && stats.P95DurationMs > m.policy.MaxP95LatencyMs {
+		return false, "high p95 latency"
+	}
+
+	if m.policy.MinTPS > 0 && stats.AvgTPS < m.policy.MinTPS {
+		return false, "low throughput (tps)"
+	}
+
+	return true, ""
 }
 
 func (m *Manager) GetPriority(model string) int {

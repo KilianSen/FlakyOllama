@@ -447,6 +447,22 @@ func (a *Agent) checkCapabilities(w http.ResponseWriter, r *http.Request, model 
 		return false
 	}
 
+	// 1b. Check if model is healthy (based on local metrics)
+	if model != "" {
+		stats := a.Metrics.Snapshot()[model]
+		if ok, reason := a.Capabilities.IsModelHealthy(model, stats); !ok {
+			sharedLog.Global.Warnf("Rejecting request: model %s is unhealthy locally (%s)", model, reason)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":  "model unhealthy locally",
+				"reason": reason,
+				"model":  model,
+			})
+			return false
+		}
+	}
+
 	// 2. Check system load
 	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
 	if err == nil {

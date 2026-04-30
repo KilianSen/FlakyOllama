@@ -29,6 +29,18 @@ func TestIntegration(t *testing.T) {
 			})
 			return
 		}
+		if r.URL.Path == "/api/tags" {
+			json.NewEncoder(w).Encode(struct {
+				Models []struct {
+					Name string `json:"name"`
+				} `json:"models"`
+			}{
+				Models: []struct {
+					Name string `json:"name"`
+				}{{Name: "llama2"}},
+			})
+			return
+		}
 		if r.URL.Path == "/api/generate" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(struct {
@@ -49,7 +61,7 @@ func TestIntegration(t *testing.T) {
 	bCfg.RemoteToken = "test-token"
 	bCfg.PollIntervalMs = 100 // Fast polling for test
 	b, _ := balancer.NewBalancer("localhost:8080", ":memory:", bCfg)
-	balancerSrv := httptest.NewServer(b.NewMux())
+	balancerSrv := httptest.NewServer(b.SetupRoutes())
 	defer balancerSrv.Close()
 
 	// 3. Start Agent
