@@ -96,6 +96,10 @@ func (m *Monitor) GetStatus(maxVRAM uint64, maxCPU int) (models.NodeStatus, erro
 	return status, nil
 }
 
+func (m *Monitor) InjectStatus(status models.NodeStatus) {
+	m.status.Store(status)
+}
+
 func (m *Monitor) refreshStatus() {
 	var status models.NodeStatus
 
