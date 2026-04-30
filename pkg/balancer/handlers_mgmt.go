@@ -178,14 +178,32 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 	}
 	b.cacheMu.RUnlock()
 
-	// Totals
-	stats, _ := b.Storage.GetTotalTokenStats()
-	for _, s := range stats {
+	// Totals + per-node stats
+	tokenStats, _ := b.Storage.GetTotalTokenStats()
+	tpsStats, _ := b.Storage.GetRecentThroughput(60)
+	for _, s := range tokenStats {
 		status.TotalInputTokens += s.Input
 		status.TotalOutputTokens += s.Output
 		status.TotalReward += s.Reward
 		status.TotalCost += s.Cost
 	}
+
+	// Populate per-node stats by matching AgentKey to token_usage node_id.
+	// Work on a fresh copy map so we never mutate shared ClusterState pointers.
+	enriched := make(map[string]*models.NodeStatus, len(status.Nodes))
+	for addr, n := range status.Nodes {
+		nc := *n
+		if s, ok := tokenStats[nc.AgentKey]; ok {
+			nc.InputTokens = s.Input
+			nc.OutputTokens = s.Output
+			nc.TokenReward = s.Reward
+		}
+		if tps, ok := tpsStats[nc.AgentKey]; ok {
+			nc.TokensPerSecond = tps
+		}
+		enriched[addr] = &nc
+	}
+	status.Nodes = enriched
 
 	b.jsonResponse(w, http.StatusOK, status)
 }
@@ -571,7 +589,12 @@ func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
 		if len(cks) > 0 {
 			key = cks[0]
 		}
-		res = append(res, models.UserWithKey{User: u, Key: key})
+		aks, _ := b.Storage.GetAgentKeysByUserID(u.ID)
+		var agentEarnings float64
+		for _, ak := range aks {
+			agentEarnings += ak.CreditsEarned
+		}
+		res = append(res, models.UserWithKey{User: u, Key: key, AgentEarnings: agentEarnings})
 	}
 	b.jsonResponse(w, http.StatusOK, res)
 }

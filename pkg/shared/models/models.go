@@ -46,9 +46,10 @@ type NodeStatus struct {
 	GPUTemperature float64     `json:"gpu_temp"`      // Celsius
 	ActiveModels   []string    `json:"active_models"` // List of currently loaded models
 	LocalModels    []ModelInfo `json:"local_models"`  // Models present on disk
-	InputTokens    int64       `json:"input_tokens"`
-	OutputTokens   int64       `json:"output_tokens"`
-	TokenReward    float64     `json:"token_reward"`
+	InputTokens      int64       `json:"input_tokens"`
+	OutputTokens     int64       `json:"output_tokens"`
+	TokenReward      float64     `json:"token_reward"`
+	TokensPerSecond  float64     `json:"tokens_per_second"`
 	Reputation     float64     `json:"reputation"` // Score 0.1 - 5.0
 	Errors         int         `json:"errors"`
 	Message        string      `json:"message"`
@@ -223,8 +224,9 @@ type User struct {
 }
 
 type UserWithKey struct {
-	User User      `json:"user"`
-	Key  ClientKey `json:"key"`
+	User          User      `json:"user"`
+	Key           ClientKey `json:"key"`
+	AgentEarnings float64   `json:"agent_earnings"`
 }
 
 type ProfileResponse struct {

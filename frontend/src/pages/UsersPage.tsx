@@ -93,8 +93,8 @@ export const UsersPage: React.FC = () => {
             <TableRow className="border-border/50 hover:bg-transparent">
               <TableHead className="text-[10px] font-black uppercase tracking-widest py-4 pl-6">User</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Role</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Current Quota</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Credits</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Tokens Used</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Spent / Earned</TableHead>
               <TableHead className="text-right text-[10px] font-black uppercase tracking-widest py-4 pr-6">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -132,17 +132,25 @@ export const UsersPage: React.FC = () => {
                 <TableCell>
                   <div className="flex flex-col gap-0.5">
                     <span className="text-[11px] font-black">
-                      {u.key.quota_limit === -1 ? '∞ UNLIMITED' : `${(u.key.quota_limit / 1e6).toFixed(1)}M tokens`}
+                      {(u.user.quota_used / 1e6).toFixed(2)}M
                     </span>
                     <span className="text-[9px] text-muted-foreground font-bold uppercase">
-                      {((u.key.quota_used || 0) / 1e6).toFixed(1)}M used
+                      {u.user.quota_limit === -1 ? '∞ limit' : `/ ${(u.user.quota_limit / 1e6).toFixed(1)}M limit`}
                     </span>
                   </div>
                 </TableCell>
                 <TableCell>
-                  <div className="flex items-center gap-1.5 text-amber-400">
-                    <Coins size={12} />
-                    <span className="text-[11px] font-black">{(u.key.credits || 0).toLocaleString()} φ</span>
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1 text-red-400">
+                      <Coins size={10} />
+                      <span className="text-[10px] font-black">{Math.abs(u.key?.credits || 0).toFixed(2)} φ spent</span>
+                    </div>
+                    {(u.agent_earnings || 0) > 0 && (
+                      <div className="flex items-center gap-1 text-amber-400">
+                        <Coins size={10} />
+                        <span className="text-[10px] font-black">{(u.agent_earnings).toFixed(2)} φ earned</span>
+                      </div>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className="text-right pr-6">

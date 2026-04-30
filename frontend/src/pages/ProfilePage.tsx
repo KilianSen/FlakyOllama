@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { 
+import {
   Key, User as UserIcon, Shield, Copy, Check, AlertTriangle,
-  Zap, RefreshCw, Server, Plus, KeyRound, ShieldCheck
+  Zap, RefreshCw, Server, Plus, KeyRound, ShieldCheck, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -208,6 +208,28 @@ const ProfilePage = () => {
     }
   };
 
+  const handleDeleteClientKey = async (key: string) => {
+    if (!confirm('Permanently delete this API key? This cannot be undone.')) return;
+    try {
+      await sdk.deleteClientKey(key);
+      toast.success('API key deleted');
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleDeleteAgentKey = async (key: string) => {
+    if (!confirm('Permanently delete this agent identity? This cannot be undone.')) return;
+    try {
+      await sdk.deleteAgentKey(key);
+      toast.success('Agent identity deleted');
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
   const requestAgentKey = async () => {
     setIsApplying(true);
     try {
@@ -238,6 +260,7 @@ const ProfilePage = () => {
   const agents = rawAgents || [];
   const globalQuotaPercent = user.quota_limit > 0 ? (user.quota_used / user.quota_limit) * 100 : 0;
   const isOverGlobalQuota = user.quota_limit > 0 && user.quota_used >= user.quota_limit;
+  const totalEarned = agents.reduce((sum: number, ak: AgentKey) => sum + (ak.credits_earned || 0), 0);
 
   return (
     <>
@@ -278,12 +301,24 @@ const ProfilePage = () => {
                   </div>
                 </div>
                 <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-muted/30 border border-border/50">
-                  <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Global Compute Credits</span>
-                  <div className="flex items-center gap-1.5 text-emerald-400">
+                  <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Compute Usage</span>
+                  <div className="flex items-center gap-1.5 text-amber-400">
                      <Zap size={14} />
-                     <span className="text-sm font-black">{(user.quota_used / 100).toFixed(2)} φ earned</span>
+                     <span className="text-sm font-black">{(user.quota_used / 100).toFixed(2)} φ spent</span>
                   </div>
                 </div>
+                {totalEarned > 0 && (
+                  <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
+                    <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Total Earned</span>
+                    <div className="flex items-center gap-1.5 text-emerald-400">
+                       <Zap size={14} />
+                       <span className="text-sm font-black">{totalEarned.toFixed(2)} φ</span>
+                    </div>
+                    {totalEarned > (user.quota_used / 100) && (
+                      <span className="text-[9px] text-emerald-400/70 font-bold">Net positive contributor</span>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -373,6 +408,14 @@ const ProfilePage = () => {
                          </div>
                          <Progress value={k.quota_limit === -1 ? 0 : keyPercent} className="h-1" />
                       </div>
+                      <Button
+                        size="icon" variant="ghost"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                        title="Delete key"
+                        onClick={() => handleDeleteClientKey(k.key)}
+                      >
+                        <Trash2 size={13} />
+                      </Button>
                     </CardContent>
                   </Card>
                 );
@@ -426,6 +469,14 @@ const ProfilePage = () => {
                         onClick={() => setRotatingKey(ak)}
                       >
                         <RefreshCw size={12} />
+                      </Button>
+                      <Button
+                        size="icon" variant="ghost"
+                        className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                        title="Delete identity"
+                        onClick={() => handleDeleteAgentKey(ak.key)}
+                      >
+                        <Trash2 size={12} />
                       </Button>
                     </div>
                   </div>

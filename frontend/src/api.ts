@@ -29,6 +29,7 @@ export interface NodeStatus {
   input_tokens: number;
   output_tokens: number;
   token_reward: number;
+  tokens_per_second: number;
   reputation: number;
   errors: number;
   message: string;
@@ -151,6 +152,7 @@ export interface User {
 export interface UserWithKey {
   user: User;
   key: ClientKey;
+  agent_earnings: number;
 }
 
 export type Identity = {

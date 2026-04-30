@@ -300,6 +300,20 @@ func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, 
 		}
 	}
 
+	// If the requesting user owns the agent serving this request, cost is zero.
+	var agentOwnerID string
+	b.State.View(func(s ClusterState) {
+		for _, node := range s.Agents {
+			if node.AgentKey == agentID {
+				agentOwnerID = node.UserID
+				break
+			}
+		}
+	})
+	if agentOwnerID != "" && agentOwnerID == targetUserID {
+		costFactor = 0
+	}
+
 	reward := float64(input+output) * 0.001 * rewardFactor * b.Config.GlobalRewardMultiplier
 	cost := float64(input+output) * 0.001 * costFactor * b.Config.GlobalCostMultiplier * surge
 

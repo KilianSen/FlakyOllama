@@ -73,7 +73,8 @@ export const FleetPage: React.FC = () => {
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">CPU</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">VRAM / RAM</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Reputation</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground text-center">Throughput</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground text-center">Tokens</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground text-center">TPS</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground text-right">Rewards</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Models</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Status</TableHead>
@@ -144,6 +145,13 @@ export const FleetPage: React.FC = () => {
                        <span className="text-[10px] font-black">{((node.input_tokens || 0) + (node.output_tokens || 0)).toLocaleString()}</span>
                        <span className="text-[8px] font-bold text-muted-foreground uppercase">{(node.output_tokens || 0).toLocaleString()} out</span>
                     </div>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {(node.tokens_per_second || 0) > 0 ? (
+                      <span className="text-[10px] font-black text-emerald-400">{(node.tokens_per_second).toFixed(1)}<span className="text-[8px] text-muted-foreground font-bold">/s</span></span>
+                    ) : (
+                      <span className="text-[9px] text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-right">
                     <span className="text-[10px] font-black text-amber-400">{node.token_reward?.toLocaleString(undefined, { maximumFractionDigits: 1 }) || 0} φ</span>
@@ -261,7 +269,13 @@ export const FleetPage: React.FC = () => {
                          <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Output Tokens</p>
                          <p className="text-xs font-black text-blue-400">{selectedNode.output_tokens?.toLocaleString() || 0}</p>
                       </div>
-                      <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/10 col-span-2">
+                      <div className="p-3 rounded-lg bg-purple-500/5 border border-purple-500/10">
+                         <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Throughput (60s avg)</p>
+                         <p className="text-xs font-black text-purple-400">
+                           {(selectedNode.tokens_per_second || 0) > 0 ? `${selectedNode.tokens_per_second.toFixed(1)} tok/s` : '—'}
+                         </p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
                          <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Earned Credits</p>
                          <p className="text-xs font-black text-amber-400">{selectedNode.token_reward?.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) || 0} φ</p>
                       </div>

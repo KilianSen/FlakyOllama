@@ -348,6 +348,30 @@ func (s *SQLiteStorage) GetTotalTokenStats() (map[string]struct {
 	return stats, nil
 }
 
+// GetRecentThroughput returns tokens/sec per node over the last windowSeconds seconds.
+func (s *SQLiteStorage) GetRecentThroughput(windowSeconds int64) (map[string]float64, error) {
+	rows, err := s.db.Query(`
+		SELECT node_id, CAST(SUM(input_tokens + output_tokens) AS REAL) / ?
+		FROM token_usage
+		WHERE timestamp > datetime('now', '-' || ? || ' seconds')
+		GROUP BY node_id`,
+		windowSeconds, windowSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]float64)
+	for rows.Next() {
+		var nodeID string
+		var tps float64
+		if err := rows.Scan(&nodeID, &tps); err != nil {
+			return nil, err
+		}
+		result[nodeID] = tps
+	}
+	return result, nil
+}
+
 func (s *SQLiteStorage) GetPerformanceAnalytics() (map[string]struct {
 	AvgTTFT     float64
 	AvgDuration float64
