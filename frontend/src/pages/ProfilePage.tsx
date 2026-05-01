@@ -462,12 +462,15 @@ const ProfilePage = () => {
                       {/* Settings row */}
                       <div className="flex items-center gap-3 pt-1 border-t border-border/30">
                         <span className="text-[9px] font-black uppercase text-muted-foreground tracking-widest shrink-0">Error Format</span>
-                        <Select value={k.error_format || ''} onValueChange={(val) => handleUpdateClientKeyFormat(k.key, val)}>
+                        <Select
+                          value={k.error_format || 'standard'}
+                          onValueChange={(val) => handleUpdateClientKeyFormat(k.key, val === 'standard' ? '' : val)}
+                        >
                           <SelectTrigger className="h-6 text-[9px] font-black w-44 border-border/40 bg-muted/30">
-                            <SelectValue placeholder="Standard" />
+                            <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="" className="text-[10px]">Standard (flat JSON)</SelectItem>
+                            <SelectItem value="standard" className="text-[10px]">Standard (flat JSON)</SelectItem>
                             <SelectItem value="openai" className="text-[10px]">OpenAI-Compatible (nested)</SelectItem>
                           </SelectContent>
                         </Select>
