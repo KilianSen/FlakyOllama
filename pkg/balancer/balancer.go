@@ -160,6 +160,21 @@ func (b *Balancer) SetupRoutes() http.Handler {
 		r.Get("/nodes", b.HandleV1Nodes)
 		r.Post("/nodes/register", b.HandleV1Register)
 
+		// User self-service key management (ownership enforced, no admin required)
+		r.Route("/user/keys", func(r chi.Router) {
+			r.Route("/clients", func(r chi.Router) {
+				r.Post("/", b.HandleV1UserClientKeyCreate)
+				r.Delete("/{key}", b.HandleV1UserClientKeyDelete)
+				r.Patch("/{key}/settings", b.HandleV1UserClientKeyUpdateSettings)
+			})
+			r.Route("/agents", func(r chi.Router) {
+				r.Post("/", b.HandleV1UserAgentKeyCreate)
+				r.Delete("/{key}", b.HandleV1UserAgentKeyDelete)
+				r.Post("/{key}/rotate", b.HandleV1UserAgentKeyRotate)
+				r.Patch("/{key}/settings", b.HandleV1UserAgentKeyUpdateSettings)
+			})
+		})
+
 		r.Group(func(r chi.Router) {
 			r.Use(b.AdminOnly)
 			r.Get("/logs", b.HandleV1Logs)

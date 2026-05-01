@@ -746,6 +746,208 @@ func (b *Balancer) HandleV1AgentKeyDelete(w http.ResponseWriter, r *http.Request
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// ─── User-scoped key management (ownership enforced, no admin required) ───────
+
+func (b *Balancer) requireUser(w http.ResponseWriter, r *http.Request) (models.User, bool) {
+	val := r.Context().Value(auth.ContextKeyUser)
+	if val == nil {
+		b.jsonError(w, http.StatusUnauthorized, "authentication required")
+		return models.User{}, false
+	}
+	u, ok := val.(models.User)
+	if !ok {
+		b.jsonError(w, http.StatusUnauthorized, "authentication required")
+		return models.User{}, false
+	}
+	return u, true
+}
+
+func (b *Balancer) HandleV1UserClientKeyCreate(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var k models.ClientKey
+	if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	k.UserID = user.ID
+	if k.Key == "" {
+		k.Key = "ck_" + b.computeHash(fmt.Sprintf("%d_%s", time.Now().UnixNano(), k.Label))[:24]
+	}
+	k.Active = true
+	k.Status = models.KeyStatusActive
+	if err := b.Storage.CreateClientKey(k); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusCreated, k)
+}
+
+func (b *Balancer) HandleV1UserClientKeyDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	key := chi.URLParam(r, "key")
+	k, err := b.Storage.GetClientKey(key)
+	if err != nil || k.UserID != user.ID {
+		b.jsonError(w, http.StatusNotFound, "key not found")
+		return
+	}
+	if err := b.Storage.DeleteClientKey(key); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (b *Balancer) HandleV1UserClientKeyUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	key := chi.URLParam(r, "key")
+	k, err := b.Storage.GetClientKey(key)
+	if err != nil || k.UserID != user.ID {
+		b.jsonError(w, http.StatusNotFound, "key not found")
+		return
+	}
+	var req struct {
+		ErrorFormat string `json:"error_format"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	k.ErrorFormat = req.ErrorFormat
+	if err := b.Storage.UpdateClientKey(k); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, k)
+}
+
+func (b *Balancer) HandleV1UserAgentKeyCreate(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var k models.AgentKey
+	if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	k.UserID = user.ID
+	if k.Key == "" {
+		k.Key = "ak_" + b.computeHash(fmt.Sprintf("%d_%s_key", time.Now().UnixNano(), k.Label))[:24]
+	}
+	if k.BalancerToken == "" {
+		k.BalancerToken = "bt_" + b.computeHash(fmt.Sprintf("%d_%s_bt", time.Now().UnixNano(), k.Label))[:24]
+	}
+	k.Active = true
+	k.Status = models.KeyStatusActive
+	k.Reputation = 1.0
+	if err := b.Storage.CreateAgentKey(k); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusCreated, k)
+}
+
+func (b *Balancer) HandleV1UserAgentKeyDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	key := chi.URLParam(r, "key")
+	k, err := b.Storage.GetAgentKey(key)
+	if err != nil || k.UserID != user.ID {
+		b.jsonError(w, http.StatusNotFound, "key not found")
+		return
+	}
+	if err := b.Storage.DeleteAgentKey(key); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (b *Balancer) HandleV1UserAgentKeyRotate(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	oldKey := chi.URLParam(r, "key")
+	existing, err := b.Storage.GetAgentKey(oldKey)
+	if err != nil || existing.UserID != user.ID {
+		b.jsonError(w, http.StatusNotFound, "key not found")
+		return
+	}
+
+	var req struct {
+		RotateAgentToken    bool `json:"rotate_agent_token"`
+		RotateBalancerToken bool `json:"rotate_balancer_token"`
+	}
+	req.RotateAgentToken = true
+	req.RotateBalancerToken = true
+	json.NewDecoder(r.Body).Decode(&req)
+
+	newKey := oldKey
+	if req.RotateAgentToken {
+		newKey = "ak_" + b.computeHash(fmt.Sprintf("%d_%s_rotated_key", time.Now().UnixNano(), existing.Label))[:24]
+	}
+	newBalancerToken := existing.BalancerToken
+	if req.RotateBalancerToken {
+		newBalancerToken = "bt_" + b.computeHash(fmt.Sprintf("%d_%s_rotated_bt", time.Now().UnixNano(), existing.Label))[:24]
+	}
+
+	updated, err := b.Storage.RotateAgentKey(oldKey, newKey, newBalancerToken)
+	if err != nil {
+		b.jsonError(w, http.StatusInternalServerError, "failed to rotate key: "+err.Error())
+		return
+	}
+	b.State.Do(func(s *ClusterState) {
+		for _, node := range s.Agents {
+			if node.AgentKey == oldKey {
+				node.AgentKey = newKey
+				node.BalancerToken = newBalancerToken
+				break
+			}
+		}
+	})
+	b.jsonResponse(w, http.StatusOK, updated)
+}
+
+func (b *Balancer) HandleV1UserAgentKeyUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	key := chi.URLParam(r, "key")
+	k, err := b.Storage.GetAgentKey(key)
+	if err != nil || k.UserID != user.ID {
+		b.jsonError(w, http.StatusNotFound, "key not found")
+		return
+	}
+	var req struct {
+		ModelVisibility string `json:"model_visibility"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	k.ModelVisibility = req.ModelVisibility
+	if err := b.Storage.UpdateAgentKey(k); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, k)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 func (b *Balancer) HandleV1UserDelete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := b.Storage.DeleteUser(id); err != nil {

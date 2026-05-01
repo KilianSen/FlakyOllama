@@ -430,6 +430,50 @@ export class FlakyOllamaSDK {
     });
   }
 
+  // User self-service key management (works for non-admin users, scoped to their own keys)
+  async myCreateClientKey(k: Partial<ClientKey>): Promise<ClientKey> {
+    return this.request<ClientKey>('/api/v1/user/keys/clients', {
+      method: 'POST',
+      body: JSON.stringify(k),
+    });
+  }
+
+  async myDeleteClientKey(key: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/user/keys/clients/${key}`, { method: 'DELETE' });
+  }
+
+  async myUpdateClientKeySettings(key: string, settings: { error_format: string }): Promise<ClientKey> {
+    return this.request<ClientKey>(`/api/v1/user/keys/clients/${key}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
+    });
+  }
+
+  async myCreateAgentKey(k: Partial<AgentKey>): Promise<AgentKey> {
+    return this.request<AgentKey>('/api/v1/user/keys/agents', {
+      method: 'POST',
+      body: JSON.stringify(k),
+    });
+  }
+
+  async myDeleteAgentKey(key: string): Promise<{ status: string }> {
+    return this.request(`/api/v1/user/keys/agents/${key}`, { method: 'DELETE' });
+  }
+
+  async myRotateAgentKey(key: string, opts?: { rotate_agent_token?: boolean; rotate_balancer_token?: boolean }): Promise<AgentKey> {
+    return this.request<AgentKey>(`/api/v1/user/keys/agents/${key}/rotate`, {
+      method: 'POST',
+      body: JSON.stringify(opts ?? { rotate_agent_token: true, rotate_balancer_token: true }),
+    });
+  }
+
+  async myUpdateAgentKeySettings(key: string, settings: { model_visibility: string }): Promise<AgentKey> {
+    return this.request<AgentKey>(`/api/v1/user/keys/agents/${key}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
+    });
+  }
+
   // Policies
   async setModelPolicy(model: string, nodeId: string, banned: boolean, pinned: boolean, persistent: boolean): Promise<{status: string}> {
       return this.request('/api/v1/policies', {

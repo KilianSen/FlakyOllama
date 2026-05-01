@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Key, User as UserIcon, Shield, Copy, Check, AlertTriangle,
-  Zap, RefreshCw, Server, Plus, KeyRound, ShieldCheck, Trash2
+  Zap, RefreshCw, Server, Plus, KeyRound, ShieldCheck, Trash2, Globe, Lock
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import sdk, { type ProfileResponse, setToken, type ClientKey, type AgentKey, type QuotaTier } from '@/api';
 
@@ -117,7 +118,7 @@ const RotateAgentKeyDialog = ({
     if (!rotateAgent && !rotateBalancer) { toast.error('Select at least one token'); return; }
     setLoading(true);
     try {
-      const updated = await sdk.rotateAgentKey(agentKey.key, {
+      const updated = await sdk.myRotateAgentKey(agentKey.key, {
         rotate_agent_token: rotateAgent,
         rotate_balancer_token: rotateBalancer,
       });
@@ -219,7 +220,7 @@ const ProfilePage = () => {
   const handleCreateClientKey = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await sdk.createClientKey({ label: newKeyLabel, quota_limit: parseInt(newKeyQuota) });
+      await sdk.myCreateClientKey({ label: newKeyLabel, quota_limit: parseInt(newKeyQuota) });
       toast.success('API Key created');
       setIsNewKeyOpen(false);
       setNewKeyLabel('');
@@ -232,8 +233,18 @@ const ProfilePage = () => {
   const handleDeleteClientKey = async (key: string) => {
     if (!confirm('Permanently delete this API key? This cannot be undone.')) return;
     try {
-      await sdk.deleteClientKey(key);
+      await sdk.myDeleteClientKey(key);
       toast.success('API key deleted');
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleUpdateClientKeyFormat = async (key: string, format: string) => {
+    try {
+      await sdk.myUpdateClientKeySettings(key, { error_format: format });
+      toast.success('Error format updated');
       load();
     } catch (err: any) {
       toast.error(err.message);
@@ -243,8 +254,18 @@ const ProfilePage = () => {
   const handleDeleteAgentKey = async (key: string) => {
     if (!confirm('Permanently delete this agent identity? This cannot be undone.')) return;
     try {
-      await sdk.deleteAgentKey(key);
+      await sdk.myDeleteAgentKey(key);
       toast.success('Agent identity deleted');
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleUpdateAgentVisibility = async (key: string, visibility: string) => {
+    try {
+      await sdk.myUpdateAgentKeySettings(key, { model_visibility: visibility });
+      toast.success('Visibility updated');
       load();
     } catch (err: any) {
       toast.error(err.message);
@@ -254,7 +275,7 @@ const ProfilePage = () => {
   const requestAgentKey = async () => {
     setIsApplying(true);
     try {
-      const newKey = await sdk.createAgentKey({ label: `Agent for ${profile?.user.name}` });
+      const newKey = await sdk.myCreateAgentKey({ label: `Agent for ${profile?.user.name}` });
       toast.success('Agent identity generated — save your tokens!');
       setRevealTitle('Save Your New Token Pair');
       setRevealKey(newKey);
@@ -403,40 +424,54 @@ const ProfilePage = () => {
                 const keyPercent = k.quota_limit > 0 ? (k.quota_used / k.quota_limit) * 100 : 0;
                 return (
                   <Card key={k.key} className="bg-card/30 border-border/40 hover:border-primary/30 transition-colors group">
-                    <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-4">
-                      <div className="flex-1 min-w-0 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-black uppercase tracking-tight truncate">{k.label}</span>
-                          {!k.active && <Badge variant="destructive" className="text-[8px] h-4">INACTIVE</Badge>}
+                    <CardContent className="p-4 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black uppercase tracking-tight truncate">{k.label}</span>
+                            {!k.active && <Badge variant="destructive" className="text-[8px] h-4">INACTIVE</Badge>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <code className="text-[10px] font-mono text-muted-foreground bg-black/20 px-1.5 py-0.5 rounded truncate max-w-[200px]">
+                              {k.key}
+                            </code>
+                            <Button
+                              size="icon" variant="ghost" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                              onClick={() => copyToClipboard(k.key, 'API Key')}
+                            >
+                              {copiedKey === k.key ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                            </Button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <code className="text-[10px] font-mono text-muted-foreground bg-black/20 px-1.5 py-0.5 rounded truncate max-w-[200px]">
-                            {k.key}
-                          </code>
-                          <Button 
-                            size="icon" variant="ghost" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={() => copyToClipboard(k.key, 'API Key')}
-                          >
-                            {copiedKey === k.key ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                          </Button>
-                        </div>
-                      </div>
-                      
-                      <div className="w-full sm:w-32 space-y-1">
-                         <div className="flex justify-between text-[8px] font-black uppercase text-muted-foreground">
+                        <div className="w-full sm:w-32 space-y-1">
+                          <div className="flex justify-between text-[8px] font-black uppercase text-muted-foreground">
                             <span>Usage</span>
                             <span>{k.quota_limit === -1 ? '∞' : `${Math.round(keyPercent)}%`}</span>
-                         </div>
-                         <Progress value={k.quota_limit === -1 ? 0 : keyPercent} className="h-1" />
+                          </div>
+                          <Progress value={k.quota_limit === -1 ? 0 : keyPercent} className="h-1" />
+                        </div>
+                        <Button
+                          size="icon" variant="ghost"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                          title="Delete key"
+                          onClick={() => handleDeleteClientKey(k.key)}
+                        >
+                          <Trash2 size={13} />
+                        </Button>
                       </div>
-                      <Button
-                        size="icon" variant="ghost"
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
-                        title="Delete key"
-                        onClick={() => handleDeleteClientKey(k.key)}
-                      >
-                        <Trash2 size={13} />
-                      </Button>
+                      {/* Settings row */}
+                      <div className="flex items-center gap-3 pt-1 border-t border-border/30">
+                        <span className="text-[9px] font-black uppercase text-muted-foreground tracking-widest shrink-0">Error Format</span>
+                        <Select value={k.error_format || ''} onValueChange={(val) => handleUpdateClientKeyFormat(k.key, val)}>
+                          <SelectTrigger className="h-6 text-[9px] font-black w-44 border-border/40 bg-muted/30">
+                            <SelectValue placeholder="Standard" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="" className="text-[10px]">Standard (flat JSON)</SelectItem>
+                            <SelectItem value="openai" className="text-[10px]">OpenAI-Compatible (nested)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </CardContent>
                   </Card>
                 );
@@ -547,6 +582,27 @@ const ProfilePage = () => {
                       <span className="text-[8px] font-black uppercase text-muted-foreground">Reputation</span>
                       <span className="text-xs font-black text-blue-400">{ak.reputation.toFixed(1)}x</span>
                     </div>
+                  </div>
+
+                  {/* Visibility setting */}
+                  <div className="flex items-center gap-3 pt-2 border-t border-border/30">
+                    <span className="text-[9px] font-black uppercase text-muted-foreground tracking-widest shrink-0">Model Access</span>
+                    <Select
+                      value={ak.model_visibility || 'public'}
+                      onValueChange={(val) => handleUpdateAgentVisibility(ak.key, val)}
+                    >
+                      <SelectTrigger className="h-6 text-[9px] font-black flex-1 border-border/40 bg-muted/30">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="public" className="text-[10px]">
+                          <div className="flex items-center gap-1.5"><Globe size={10} className="text-emerald-400" /> Public — all users</div>
+                        </SelectItem>
+                        <SelectItem value="private" className="text-[10px]">
+                          <div className="flex items-center gap-1.5"><Lock size={10} className="text-red-400" /> Private — my account only</div>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </CardContent>
               </Card>
