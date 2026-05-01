@@ -145,7 +145,7 @@ function TargetsEditor({
 }
 
 function PipelineStepEditor({
-  step, idx, total, availableModels, onChange, onRemove, onMoveUp, onMoveDown,
+  step, idx, availableModels, onChange, onRemove, onMoveUp, onMoveDown,
 }: {
   step: any;
   idx: number;
