@@ -1,6 +1,7 @@
 import { createBrowserRouter } from 'react-router';
 import App from './App';
 import { OverviewPage } from './pages/OverviewPage';
+import { LandingPage } from './pages/LandingPage';
 import { FleetPage } from './pages/FleetPage';
 import { RegistryPage } from './pages/RegistryPage';
 import { KeysPage } from './pages/KeysPage';
@@ -19,7 +20,8 @@ export const router = createBrowserRouter([
     path: '/',
     element: <App />,
     children: [
-      { index: true, element: <OverviewPage /> },
+      { index: true, element: <LandingPage /> },
+      { path: 'overview', element: <OverviewPage /> },
       { path: 'fleet', element: <FleetPage /> },
       { path: 'registry', element: <RegistryPage /> },
       { path: 'users', element: <UsersPage /> },

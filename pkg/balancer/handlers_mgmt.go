@@ -16,6 +16,32 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+func (b *Balancer) HandlePublicInfo(w http.ResponseWriter, r *http.Request) {
+	snap := b.State.GetSnapshot()
+	healthyNodes := 0
+	uniqueModels := make(map[string]bool)
+	for _, n := range snap.Agents {
+		if n.State != models.StateBroken && !n.Draining {
+			healthyNodes++
+			for _, m := range n.LocalModels {
+				uniqueModels[m.Name] = true
+			}
+		}
+	}
+	b.configMu.RLock()
+	for m := range b.Config.VirtualModels {
+		uniqueModels[m] = true
+	}
+	b.configMu.RUnlock()
+
+	b.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"oidc_enabled":     b.Config.OIDC.Enabled,
+		"healthy_nodes":    healthyNodes,
+		"model_count":      len(uniqueModels),
+		"active_workloads": snap.ActiveWorkloads,
+	})
+}
+
 func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 	uniqueModels := make(map[string]bool)
@@ -87,10 +113,13 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 		aks = []models.AgentKey{}
 	}
 
+	usage, _ := b.Storage.GetUserQuotaUsage(user.ID)
+
 	b.jsonResponse(w, http.StatusOK, models.ProfileResponse{
 		User:       user,
 		ClientKeys: cks,
 		AgentKeys:  aks,
+		QuotaUsage: usage,
 	})
 }
 
@@ -603,25 +632,50 @@ func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) HandleV1UserUpdateQuota(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req struct {
-		QuotaLimit int64 `json:"quota_limit"`
+		QuotaTier         *string `json:"quota_tier,omitempty"`
+		QuotaLimit        *int64  `json:"quota_limit,omitempty"`
+		DailyQuotaLimit   *int64  `json:"daily_quota_limit,omitempty"`
+		WeeklyQuotaLimit  *int64  `json:"weekly_quota_limit,omitempty"`
+		MonthlyQuotaLimit *int64  `json:"monthly_quota_limit,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-
 	u, err := b.Storage.GetUserByID(id)
 	if err != nil {
 		b.jsonError(w, http.StatusNotFound, "user not found")
 		return
 	}
-
-	u.QuotaLimit = req.QuotaLimit
+	if req.QuotaTier != nil {
+		tier := models.QuotaTier(*req.QuotaTier)
+		if limits, ok := models.DefaultTiers[tier]; ok {
+			u.QuotaTier = tier
+			u.QuotaLimit = limits.Total
+			u.DailyQuotaLimit = limits.Daily
+			u.WeeklyQuotaLimit = limits.Weekly
+			u.MonthlyQuotaLimit = limits.Monthly
+		}
+	}
+	if req.QuotaLimit != nil {
+		u.QuotaLimit = *req.QuotaLimit
+	}
+	if req.DailyQuotaLimit != nil {
+		u.DailyQuotaLimit = *req.DailyQuotaLimit
+	}
+	if req.WeeklyQuotaLimit != nil {
+		u.WeeklyQuotaLimit = *req.WeeklyQuotaLimit
+	}
+	if req.MonthlyQuotaLimit != nil {
+		u.MonthlyQuotaLimit = *req.MonthlyQuotaLimit
+	}
+	if req.QuotaTier == nil || models.QuotaTier(*req.QuotaTier) == models.QuotaTierCustom {
+		u.QuotaTier = models.QuotaTierCustom
+	}
 	if err := b.Storage.UpdateUser(u); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, "failed to update quota: "+err.Error())
 		return
 	}
-
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "quota updated"})
 }
 

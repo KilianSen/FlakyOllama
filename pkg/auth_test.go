@@ -22,7 +22,7 @@ func TestAgentRegistrationWithToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create balancer: %v", err)
 	}
-	balancerSrv := httptest.NewServer(b.NewMux())
+	balancerSrv := httptest.NewServer(b.SetupRoutes())
 	defer balancerSrv.Close()
 
 	// 2. Setup Agent Config (matching what main.go should do now)
@@ -58,7 +58,7 @@ func TestAgentRegistrationWithToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("Registration should have failed with balancer token (the bug scenario)")
 	}
-	if !strings.Contains(err.Error(), "status 401") {
-		t.Fatalf("Expected status 401, got: %v", err)
+	if !strings.Contains(err.Error(), "status 403") {
+		t.Fatalf("Expected status 403, got: %v", err)
 	}
 }

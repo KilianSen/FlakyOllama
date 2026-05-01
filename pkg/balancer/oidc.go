@@ -35,10 +35,30 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 				if claims, ok := token.Claims.(*Claims); ok {
 					user, err := b.Storage.GetUserBySub(claims.Sub)
 					if err == nil {
-						// Quota Check
-						if user.QuotaLimit != -1 && user.QuotaUsed >= user.QuotaLimit {
-							http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
-							return
+						// Multi-window quota check with credit offset
+						if usage, err := b.Storage.GetUserQuotaUsage(user.ID); err == nil {
+							creditOffset := int64(usage.AgentCreditsEarned)
+							effectiveOf := func(raw int64) int64 {
+								if e := raw - creditOffset; e > 0 {
+									return e
+								}
+								return 0
+							}
+							var quotaMsg string
+							switch {
+							case user.DailyQuotaLimit != -1 && effectiveOf(usage.DailyUsed) >= user.DailyQuotaLimit:
+								quotaMsg = "Daily quota exceeded"
+							case user.WeeklyQuotaLimit != -1 && effectiveOf(usage.WeeklyUsed) >= user.WeeklyQuotaLimit:
+								quotaMsg = "Weekly quota exceeded"
+							case user.MonthlyQuotaLimit != -1 && effectiveOf(usage.MonthlyUsed) >= user.MonthlyQuotaLimit:
+								quotaMsg = "Monthly quota exceeded"
+							case user.QuotaLimit != -1 && effectiveOf(user.QuotaUsed) >= user.QuotaLimit:
+								quotaMsg = "Total quota exceeded"
+							}
+							if quotaMsg != "" {
+								http.Error(w, quotaMsg, http.StatusForbidden)
+								return
+							}
 						}
 						// Ensure Admin status is synced from JWT if it changed
 						if user.IsAdmin != claims.Admin {
@@ -157,12 +177,16 @@ func (b *Balancer) HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	user, err := b.Storage.GetUserBySub(sub)
 	if err != nil {
 		user = models.User{
-			ID:         "u_" + b.computeHash(sub)[:12],
-			Sub:        sub,
-			Email:      email,
-			Name:       name,
-			IsAdmin:    isAdmin,
-			QuotaLimit: 1000000,
+			ID:                "u_" + b.computeHash(sub)[:12],
+			Sub:               sub,
+			Email:             email,
+			Name:              name,
+			IsAdmin:           isAdmin,
+			QuotaTier:         models.QuotaTierFree,
+			QuotaLimit:        models.DefaultTiers[models.QuotaTierFree].Total,
+			DailyQuotaLimit:   models.DefaultTiers[models.QuotaTierFree].Daily,
+			WeeklyQuotaLimit:  models.DefaultTiers[models.QuotaTierFree].Weekly,
+			MonthlyQuotaLimit: models.DefaultTiers[models.QuotaTierFree].Monthly,
 		}
 		b.Storage.CreateUser(user)
 	} else {
@@ -200,6 +224,17 @@ func (b *Balancer) HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   86400 * 7,
 	})
 
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (b *Balancer) HandleOIDCLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "flaky_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

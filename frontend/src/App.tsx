@@ -1,9 +1,10 @@
+import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useCluster } from './ClusterContext';
 import {
   LayoutDashboard, Server, Database, Terminal, ScrollText,
   Settings, RefreshCw, Zap, ChevronRight, AlertCircle, MessageSquare, Key,
-  User as UserIcon, LogOut, Shield, UserCog, ListOrdered,
+  User as UserIcon, LogOut, Shield, UserCog, ListOrdered, HomeIcon,
 } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -18,20 +19,65 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import sdk, { type ClusterStatus, type User } from './api';
 
-const baseNavItems = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, admin: true },
+type NavItemDef = { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; end?: boolean };
+
+const publicOnlyNavItems: NavItemDef[] = [
+  { to: '/', label: 'Home', icon: HomeIcon },
   { to: '/portal', label: 'Marketplace', icon: Zap },
-  { to: '/fleet', label: 'Fleet', icon: Server, admin: true },
-  { to: '/registry', label: 'Registry', icon: Database, admin: true },
-  { to: '/users', label: 'Users', icon: UserCog, admin: true },
-  { to: '/keys', label: 'Access', icon: Key, admin: true },
+];
+
+const userNavItems: NavItemDef[] = [
   { to: '/playground', label: 'Playground', icon: Terminal },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
-  { to: '/queue', label: 'Queue', icon: ListOrdered, admin: true },
-  { to: '/logs', label: 'Logs', icon: ScrollText, admin: true },
   { to: '/profile', label: 'Profile', icon: UserIcon },
-  { to: '/config', label: 'Configuration', icon: Settings, admin: true },
 ];
+
+const adminNavItems: NavItemDef[] = [
+  { to: '/overview', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/fleet', label: 'Fleet', icon: Server },
+  { to: '/registry', label: 'Registry', icon: Database },
+  { to: '/users', label: 'Users', icon: UserCog },
+  { to: '/keys', label: 'Access', icon: Key },
+  { to: '/queue', label: 'Queue', icon: ListOrdered },
+  { to: '/logs', label: 'Logs', icon: ScrollText },
+  { to: '/config', label: 'Configuration', icon: Settings },
+];
+
+const baseNavItems: NavItemDef[] = [
+  ...publicOnlyNavItems,
+  ...userNavItems,
+  ...adminNavItems,
+];
+
+function NavItem({ item, status }: { item: NavItemDef; status: ClusterStatus | null }) {
+  const offlineN = (status && item.to === '/fleet') ? getOfflineCount(status) : 0;
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      className={({ isActive }) =>
+        `w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all duration-150 group ${
+          isActive
+            ? 'bg-sidebar-accent text-sidebar-accent-foreground font-black'
+            : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground font-bold'
+        }`
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <item.icon size={15} className={isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'} />
+          <span className="text-xs uppercase tracking-widest flex-1">{item.label}</span>
+          {offlineN > 0 && (
+            <Badge className="text-[8px] font-black h-4 px-1.5 bg-destructive/20 text-destructive border-destructive/30 min-w-[1rem] justify-center">
+              {offlineN}
+            </Badge>
+          )}
+          {isActive && <ChevronRight size={12} className="text-primary shrink-0" />}
+        </>
+      )}
+    </NavLink>
+  );
+}
 
 function formatUptime(s: number) {
   if (!s || isNaN(s)) return '0h 0m';
@@ -55,25 +101,19 @@ const App = () => {
     sdk.getMe()
       .then(res => {
         setUser(res.user);
-        // Redirect non-admins away from index if they land there
-        if (location.pathname === '/' && !res.user.is_admin) {
-          navigate('/portal');
+        if (location.pathname === '/' && res.user.is_admin) {
+          navigate('/overview');
         }
       })
       .catch(() => {
-        // If not authenticated, we don't redirect yet to allow playground/chat if they have tokens
-        // But for dashboard access, we might want to redirect
+        // Unauthenticated — let them see the landing page / portal
       })
       .finally(() => setAuthLoading(false));
   }, []);
 
-  const navItems = baseNavItems.filter(item => !item.admin || (user?.is_admin));
-
   const pageName = baseNavItems.find(n =>
     n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)
   )?.label ?? 'Dashboard';
-
-  const isConfigPage = location.pathname === '/config';
 
   if (authLoading) {
     return (
@@ -83,15 +123,13 @@ const App = () => {
     );
   }
 
-  const isPortalPage = location.pathname === '/portal';
-  if (!user && status?.oidc_enabled && !location.pathname.startsWith('/chat') && !location.pathname.startsWith('/playground') && !isConfigPage && !isPortalPage) {
-    // Redirect to OIDC login via proxy to maintain cookie context
-    window.location.href = `/auth/login`;
+  const isPublicPath = ['/', '/portal', '/config'].some(p => location.pathname === p || location.pathname.startsWith(p));
+  if (!user && status?.oidc_enabled && !isPublicPath) {
+    window.location.href = '/auth/login';
     return null;
   }
 
-  if (!status && !isConfigPage && !isPortalPage) {
-// ... (rest of the loading/error view)
+  if (!status && !isPublicPath) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-5 bg-background">
         <Toaster position="top-right" theme="dark" richColors />
@@ -125,6 +163,11 @@ const App = () => {
             <RefreshCw size={12} className="animate-spin" /> Syncing compute fabric...
           </div>
         )}
+        <NavLink to="/portal">
+          <Button variant="ghost" size="sm" className="text-xs font-black uppercase gap-2 text-muted-foreground">
+            <Zap size={12} /> Browse Marketplace
+          </Button>
+        </NavLink>
       </div>
     );
   }
@@ -144,17 +187,19 @@ const App = () => {
         {/* Sidebar */}
         <aside className="w-56 shrink-0 flex flex-col bg-sidebar border-r border-sidebar-border h-full">
           {/* Logo */}
-          <div className="px-4 py-4 border-b border-sidebar-border">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-                <Zap size={16} className="text-primary" fill="currentColor" fillOpacity={0.3} />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-tight leading-none">FlakyOllama</p>
-                <p className="text-[9px] text-muted-foreground/60 font-bold uppercase tracking-widest mt-0.5">Console v1</p>
+          <NavLink to={user ? (user.is_admin?"/overview":"/portal") : "/"}>
+            <div className="px-4 py-4 border-b border-sidebar-border">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
+                  <Zap size={16} className="text-primary" fill="currentColor" fillOpacity={0.3} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase tracking-tight leading-none">FlakyOllama</p>
+                  <p className="text-[9px] text-muted-foreground/60 font-bold uppercase tracking-widest mt-0.5">Console v1</p>
+                </div>
               </div>
             </div>
-          </div>
+          </NavLink>
 
           {/* Cluster vitals */}
           <div className="px-4 py-3 border-b border-sidebar-border">
@@ -179,50 +224,72 @@ const App = () => {
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
-            {navItems.map(item => {
-              const offlineN = (status && item.to === '/fleet') ? getOfflineCount(status) : 0;
-              return (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  className={({ isActive }) => `
-                    w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all duration-150 group
-                    ${isActive
-                      ? 'bg-sidebar-accent text-sidebar-accent-foreground font-black'
-                      : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground font-bold'
-                    }
-                  `}
-                >
-                  {({ isActive }) => (
-                    <>
-                      <item.icon size={15} className={isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'} />
-                      <span className="text-xs uppercase tracking-widest flex-1">{item.label}</span>
-                      {offlineN > 0 && (
-                        <Badge className="text-[8px] font-black h-4 px-1.5 bg-destructive/20 text-destructive border-destructive/30 min-w-[1rem] justify-center">
-                          {offlineN}
-                        </Badge>
-                      )}
-                      {isActive && <ChevronRight size={12} className="text-primary shrink-0" />}
-                    </>
-                  )}
-                </NavLink>
-              );
-            })}
+          <nav className="flex-1 px-2 py-3 overflow-y-auto flex flex-col gap-4">
+            {/* Public */}
+            {!user && <div className="space-y-0.5">
+              {publicOnlyNavItems.map(item => (
+                  <NavItem key={item.to} item={item} status={status}/>
+              ))}
+            </div>}
+
+            {/* Authenticated user items */}
+            {user && (
+              <div className="space-y-0.5">
+                <p className="px-3 mb-1 text-[9px] font-black uppercase tracking-widest text-muted-foreground/50">Account</p>
+                {userNavItems.map(item => (
+                  <NavItem key={item.to} item={item} status={status} />
+                ))}
+              </div>
+            )}
+
+            {/* Admin section */}
+            {user?.is_admin && (
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2 px-3 mb-1">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-primary/70">Admin</p>
+                  <div className="flex-1 h-px bg-primary/20" />
+                </div>
+                {adminNavItems.map(item => (
+                  <NavItem key={item.to} item={item} status={status} />
+                ))}
+              </div>
+            )}
           </nav>
 
-          {/* Login prompt for unauthenticated users */}
-          {!user && status?.oidc_enabled && (
+          {/* Login / logout block */}
+          {user ? (
+            <div className="px-4 py-3 border-t border-sidebar-border">
+              <div className="flex items-center gap-2 mb-2">
+                <Avatar className="h-6 w-6 border border-border shrink-0">
+                  {user.picture && <AvatarImage src={user.picture} alt={user.name} />}
+                  <AvatarFallback className="bg-primary/10 text-primary text-[9px] font-black">
+                    {user.name?.substring(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-black truncate">{user.name}</p>
+                  <p className="text-[9px] text-muted-foreground truncate">{user.email}</p>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full h-7 text-[9px] font-black uppercase tracking-widest gap-1.5 text-muted-foreground hover:text-destructive"
+                onClick={() => { window.location.href = '/auth/logout'; }}
+              >
+                <LogOut size={10} /> Sign Out
+              </Button>
+            </div>
+          ) : status?.oidc_enabled ? (
             <div className="px-4 py-3 border-t border-sidebar-border">
               <Button
                 className="w-full h-8 text-[10px] font-black uppercase tracking-widest gap-2"
-                onClick={() => { window.location.href = `/auth/login`; }}
+                onClick={() => { window.location.href = '/auth/login'; }}
               >
                 <LogOut size={12} className="rotate-180" /> Sign In
               </Button>
             </div>
-          )}
+          ) : null}
 
           {/* Stats footer */}
           <div className="px-4 py-3 border-t border-sidebar-border space-y-1.5">
@@ -278,11 +345,11 @@ const App = () => {
                   <TooltipContent className="text-[10px] font-bold">Refresh cluster state</TooltipContent>
                 </Tooltip>
 
-                <DropdownMenu>
+                {user && <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                       <Avatar className="h-8 w-8 border border-border shadow-sm">
-                        <AvatarImage src={`https://avatar.vercel.sh/${user?.sub}.png`} alt={user?.name} />
+                        {user?.picture && <AvatarImage src={user.picture} alt={user?.name}/>}
                         <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-black">
                           {user?.name?.substring(0, 2).toUpperCase()}
                         </AvatarFallback>
@@ -296,33 +363,33 @@ const App = () => {
                         <p className="text-xs leading-none text-muted-foreground">{user?.email}</p>
                       </div>
                     </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
+                    <DropdownMenuSeparator/>
                     <DropdownMenuItem asChild className="cursor-pointer font-bold">
                       <NavLink to="/profile" className="flex items-center w-full">
-                        <UserIcon className="mr-2 h-4 w-4" />
+                        <UserIcon className="mr-2 h-4 w-4"/>
                         <span>Profile</span>
                       </NavLink>
                     </DropdownMenuItem>
                     {user?.is_admin && (
-                      <DropdownMenuItem asChild className="cursor-pointer font-bold text-primary">
-                        <NavLink to="/config" className="flex items-center w-full">
-                          <Shield className="mr-2 h-4 w-4" />
-                          <span>Admin Console</span>
-                        </NavLink>
-                      </DropdownMenuItem>
+                        <DropdownMenuItem asChild className="cursor-pointer font-bold text-primary">
+                          <NavLink to="/config" className="flex items-center w-full">
+                            <Shield className="mr-2 h-4 w-4"/>
+                            <span>Admin Console</span>
+                          </NavLink>
+                        </DropdownMenuItem>
                     )}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem 
-                      className="cursor-pointer font-bold text-destructive"
-                      onClick={() => {
-                        window.location.href = `/auth/logout`;
-                      }}
+                    <DropdownMenuSeparator/>
+                    <DropdownMenuItem
+                        className="cursor-pointer font-bold text-destructive"
+                        onClick={() => {
+                          window.location.href = `/auth/logout`;
+                        }}
                     >
-                      <LogOut className="mr-2 h-4 w-4" />
+                      <LogOut className="mr-2 h-4 w-4"/>
                       <span>Log out</span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
-                </DropdownMenu>
+                </DropdownMenu>}
               </div>
             </div>
           </header>

@@ -218,6 +218,11 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	// Auth Endpoints
 	r.Get("/auth/login", b.HandleOIDCLogin)
 	r.Get("/auth/callback", b.HandleOIDCCallback)
+	r.Get("/auth/logout", b.HandleOIDCLogout)
+
+	// Public (no auth)
+	r.Get("/api/public/info", b.HandlePublicInfo)
+	r.Get("/api/public/catalog", b.HandleV1Catalog)
 
 	return r
 }

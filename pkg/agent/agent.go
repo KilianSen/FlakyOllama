@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"FlakyOllama/pkg/agent/capabilities"
 	agentLogging "FlakyOllama/pkg/agent/logging"
 	"FlakyOllama/pkg/agent/monitoring"
 	"FlakyOllama/pkg/agent/ollama"
@@ -26,6 +27,64 @@ import (
 	"time"
 )
 
+// metricsResponseWriter wraps http.ResponseWriter to capture first-byte time and
+// the tail of the response body so we can parse Ollama's final eval chunk.
+type metricsResponseWriter struct {
+	http.ResponseWriter
+	startTime  time.Time
+	ttft       time.Duration
+	firstWrite bool
+	// ring buffer keeping last 2 KB of response for final-chunk parsing
+	tail    [2048]byte
+	tailPos int
+	tailLen int
+	status  int
+}
+
+func (m *metricsResponseWriter) WriteHeader(code int) {
+	m.status = code
+	m.ResponseWriter.WriteHeader(code)
+}
+
+func (m *metricsResponseWriter) Write(b []byte) (int, error) {
+	if !m.firstWrite && len(b) > 0 {
+		m.ttft = time.Since(m.startTime)
+		m.firstWrite = true
+	}
+	for _, c := range b {
+		m.tail[m.tailPos%len(m.tail)] = c
+		m.tailPos++
+		if m.tailLen < len(m.tail) {
+			m.tailLen++
+		}
+	}
+	return m.ResponseWriter.Write(b)
+}
+
+func (m *metricsResponseWriter) Flush() {
+	if f, ok := m.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// tailString returns the buffered tail as a string (handles wrap-around).
+func (m *metricsResponseWriter) tailString() string {
+	if m.tailLen < len(m.tail) {
+		return string(m.tail[:m.tailLen])
+	}
+	start := m.tailPos % len(m.tail)
+	return string(m.tail[start:]) + string(m.tail[:start])
+}
+
+// ollamaFinalChunk is what we look for in the tail to extract token counts.
+type ollamaFinalChunk struct {
+	Done            bool   `json:"done"`
+	Model           string `json:"model"`
+	EvalCount       int64  `json:"eval_count"`
+	EvalDuration    int64  `json:"eval_duration"` // nanoseconds
+	PromptEvalCount int64  `json:"prompt_eval_count"`
+}
+
 // Agent handles local telemetry and proxies requests to Ollama.
 type Agent struct {
 	ID               string
@@ -35,9 +94,11 @@ type Agent struct {
 	EffectiveAddress string
 	BalancerURL      string
 	Monitor          *monitoring.Monitor
+	Metrics          *monitoring.ModelMetricsTracker
 	Ollama           *ollama.Client
 	Config           *config.Config
 	Tasks            *tasks.TaskManager
+	Capabilities     *capabilities.Manager
 	Logs             *agentLogging.DiskQueue
 
 	ctx    context.Context
@@ -118,9 +179,11 @@ func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *A
 		EffectiveAddress: address,
 		BalancerURL:      balancerURL,
 		Monitor:          monitoring.NewMonitor(),
+		Metrics:          monitoring.NewModelMetricsTracker(),
 		Ollama:           ollama.NewClient(ollamaURL),
 		Config:           cfg,
 		Tasks:            tasks.NewTaskManager(),
+		Capabilities:     capabilities.NewManager(),
 		Logs:             dq,
 		ctx:              ctx,
 		cancel:           cancel,
@@ -241,13 +304,14 @@ func (a *Agent) NewMux() *http.ServeMux {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/telemetry", auth.Middleware(masterTokens, nil, a.HandleTelemetry))
+	mux.HandleFunc("/capabilities", auth.Middleware(masterTokens, nil, a.HandleCapabilities))
 	mux.HandleFunc("/tasks", auth.Middleware(masterTokens, nil, a.HandleTasks))
 
 	// Proxy routes using ReverseProxy
-	mux.HandleFunc("/v1/", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/api/generate", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/api/chat", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
-	mux.HandleFunc("/api/embeddings", auth.Middleware(masterTokens, nil, a.proxy.ServeHTTP))
+	mux.HandleFunc("/v1/", auth.Middleware(masterTokens, nil, a.genericProxy))
+	mux.HandleFunc("/api/generate", auth.Middleware(masterTokens, nil, a.metricsProxy))
+	mux.HandleFunc("/api/chat", auth.Middleware(masterTokens, nil, a.metricsProxy))
+	mux.HandleFunc("/api/embeddings", auth.Middleware(masterTokens, nil, a.genericProxy))
 
 	// Direct handlers for more control
 	mux.HandleFunc("/show", auth.Middleware(masterTokens, nil, a.HandleShow))
@@ -373,6 +437,154 @@ func (a *Agent) StartRegistrationLoop() {
 	}
 }
 
+func (a *Agent) checkCapabilities(w http.ResponseWriter, r *http.Request, model string) bool {
+	// 1. Check if model is allowed
+	if model != "" && !a.Capabilities.IsModelAllowed(model) {
+		sharedLog.Global.Warnf("Rejecting request: model %s is disallowed by local policy", model)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "model disallowed by agent local policy"})
+		return false
+	}
+
+	// 1b. Check if model is healthy (based on local metrics)
+	if model != "" {
+		stats := a.Metrics.Snapshot()[model]
+		if ok, reason := a.Capabilities.IsModelHealthy(model, stats); !ok {
+			sharedLog.Global.Warnf("Rejecting request: model %s is unhealthy locally (%s)", model, reason)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":  "model unhealthy locally",
+				"reason": reason,
+				"model":  model,
+			})
+			return false
+		}
+	}
+
+	// 2. Check system load
+	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
+	if err == nil {
+		priority := a.Capabilities.GetPriority(model)
+		if a.Capabilities.ShouldRejectLoad(status.CPUUsage, status.MemoryUsage, priority) {
+			sharedLog.Global.Warnf("Rejecting request for %s: high system load (CPU: %.1f%%, Mem: %.1f%%, Priority: %d)", model, status.CPUUsage, status.MemoryUsage, priority)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "agent too busy",
+				"cpu":   fmt.Sprintf("%.1f%%", status.CPUUsage),
+				"mem":   fmt.Sprintf("%.1f%%", status.MemoryUsage),
+			})
+			return false
+		}
+	}
+
+	return true
+}
+
+// metricsProxy wraps the reverse proxy for /api/generate and /api/chat,
+// capturing TTFT, duration, and token counts from Ollama's final eval chunk.
+func (a *Agent) metricsProxy(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	// Peek at the request body to extract the model name, then restore it.
+	var model string
+	if r.Body != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		if err == nil {
+			var peek struct {
+				Model string `json:"model"`
+			}
+			_ = json.Unmarshal(bodyBytes, &peek)
+			model = peek.Model
+		}
+	}
+
+	if !a.checkCapabilities(w, r, model) {
+		return
+	}
+
+	mrw := &metricsResponseWriter{
+		ResponseWriter: w,
+		startTime:      start,
+	}
+
+	a.proxy.ServeHTTP(mrw, r)
+
+	totalMs := float64(time.Since(start).Milliseconds())
+	ttftMs := float64(mrw.ttft.Milliseconds())
+	isError := mrw.status >= 400
+
+	sample := monitoring.RequestSample{
+		Model:      model,
+		TTFTMs:     ttftMs,
+		DurationMs: totalMs,
+		Error:      isError,
+	}
+
+	if !isError {
+		// Parse Ollama's final streaming chunk from the tail buffer.
+		tail := mrw.tailString()
+		// Find last occurrence of "done":true
+		lastDone := strings.LastIndex(tail, `"done":true`)
+		if lastDone == -1 {
+			lastDone = strings.LastIndex(tail, `"done": true`)
+		}
+		if lastDone > 0 {
+			// Walk back to find the opening brace
+			start := strings.LastIndex(tail[:lastDone], "{")
+			if start >= 0 {
+				fragment := tail[start:]
+				// Find closing brace
+				end := strings.Index(fragment, "}")
+				if end >= 0 {
+					var chunk ollamaFinalChunk
+					if err := json.Unmarshal([]byte(fragment[:end+1]), &chunk); err == nil && chunk.Done {
+						sample.InputTokens = chunk.PromptEvalCount
+						sample.OutputTokens = chunk.EvalCount
+						if chunk.EvalDuration > 0 && chunk.EvalCount > 0 {
+							// Use Ollama's own measurement for more accurate TPS
+							evalSec := float64(chunk.EvalDuration) / 1e9
+							sample.DurationMs = evalSec * 1000
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if model != "" {
+		a.Metrics.Record(sample)
+	}
+}
+
+// genericProxy wraps the reverse proxy for non-metrics routes,
+// performing capability checks.
+func (a *Agent) genericProxy(w http.ResponseWriter, r *http.Request) {
+	var model string
+	if r.Body != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		if err == nil {
+			var peek struct {
+				Model string `json:"model"`
+			}
+			_ = json.Unmarshal(bodyBytes, &peek)
+			model = peek.Model
+		}
+	}
+
+	if !a.checkCapabilities(w, r, model) {
+		return
+	}
+
+	a.proxy.ServeHTTP(w, r)
+}
+
 func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
 	if err != nil {
@@ -410,8 +622,34 @@ func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Ollama unreachable: "+ollamaErr.Error(), http.StatusServiceUnavailable)
 		return
 	}
+
+	// Attach the locally-measured capability map
+	if caps := a.Metrics.Snapshot(); len(caps) > 0 {
+		status.ModelCapabilities = caps
+	}
+
 	sharedLog.Global.Debugf("Telemetry status for agent %s: %+v", a.ID, status)
 	json.NewEncoder(w).Encode(status)
+}
+
+func (a *Agent) HandleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		json.NewEncoder(w).Encode(a.Capabilities.GetPolicy())
+		return
+	}
+
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		var p capabilities.Policy
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		a.Capabilities.UpdatePolicy(p)
+		json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func (a *Agent) HandleTasks(w http.ResponseWriter, r *http.Request) {

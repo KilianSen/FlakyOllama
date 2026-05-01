@@ -27,6 +27,20 @@ func (s NodeState) String() string {
 	}
 }
 
+// ModelCapabilityStats holds per-model performance statistics measured locally by the agent.
+type ModelCapabilityStats struct {
+	RequestCount    int64   `json:"request_count"`
+	ErrorCount      int64   `json:"error_count"`
+	ErrorRate       float64 `json:"error_rate"`
+	AvgTPS          float64 `json:"avg_tps"`         // output tokens / second
+	AvgTTFTMs       float64 `json:"avg_ttft_ms"`     // time to first token (ms)
+	AvgDurationMs   float64 `json:"avg_duration_ms"` // wall-clock request duration (ms)
+	AvgInputTokens  float64 `json:"avg_input_tokens"`
+	AvgOutputTokens float64 `json:"avg_output_tokens"`
+	P95DurationMs   float64 `json:"p95_duration_ms"`
+	LastUsedAt      string  `json:"last_used_at,omitempty"`
+}
+
 type NodeStatus struct {
 	ID              string      `json:"id"`
 	AgentKey        string      `json:"agent_key"`         // The token used to register
@@ -57,6 +71,9 @@ type NodeStatus struct {
 	HasGPU          bool        `json:"has_gpu"`
 	LastSeen        time.Time   `json:"last_seen"`
 	CooloffUntil    time.Time   `json:"cooloff_until"`
+
+	// Capability map: per-model performance stats measured by this agent
+	ModelCapabilities map[string]ModelCapabilityStats `json:"model_capabilities,omitempty"`
 }
 
 type ModelInfo struct {
@@ -202,6 +219,38 @@ const (
 	KeyStatusRejected KeyStatus = "rejected"
 )
 
+type QuotaTier string
+
+const (
+	QuotaTierFree      QuotaTier = "free"
+	QuotaTierStandard  QuotaTier = "standard"
+	QuotaTierPro       QuotaTier = "pro"
+	QuotaTierUnlimited QuotaTier = "unlimited"
+	QuotaTierCustom    QuotaTier = "custom"
+)
+
+type TierLimits struct {
+	Total   int64
+	Daily   int64
+	Weekly  int64
+	Monthly int64
+}
+
+var DefaultTiers = map[QuotaTier]TierLimits{
+	QuotaTierFree:      {Total: 2_000_000, Daily: 50_000, Weekly: 200_000, Monthly: 500_000},
+	QuotaTierStandard:  {Total: -1, Daily: 500_000, Weekly: 2_000_000, Monthly: 6_000_000},
+	QuotaTierPro:       {Total: -1, Daily: 2_000_000, Weekly: 8_000_000, Monthly: 20_000_000},
+	QuotaTierUnlimited: {Total: -1, Daily: -1, Weekly: -1, Monthly: -1},
+	QuotaTierCustom:    {Total: -1, Daily: -1, Weekly: -1, Monthly: -1},
+}
+
+type QuotaUsage struct {
+	DailyUsed          int64   `json:"daily_used"`
+	WeeklyUsed         int64   `json:"weekly_used"`
+	MonthlyUsed        int64   `json:"monthly_used"`
+	AgentCreditsEarned float64 `json:"agent_credits_earned"`
+}
+
 type ClientKey struct {
 	Key        string    `json:"key"`
 	Label      string    `json:"label"`
@@ -214,13 +263,17 @@ type ClientKey struct {
 }
 
 type User struct {
-	ID         string `json:"id"`
-	Sub        string `json:"sub"` // OIDC Subject
-	Email      string `json:"email"`
-	Name       string `json:"name"`
-	IsAdmin    bool   `json:"is_admin"`
-	QuotaLimit int64  `json:"quota_limit"`
-	QuotaUsed  int64  `json:"quota_used"`
+	ID                string    `json:"id"`
+	Sub               string    `json:"sub"` // OIDC Subject
+	Email             string    `json:"email"`
+	Name              string    `json:"name"`
+	IsAdmin           bool      `json:"is_admin"`
+	QuotaLimit        int64     `json:"quota_limit"`
+	QuotaUsed         int64     `json:"quota_used"`
+	QuotaTier         QuotaTier `json:"quota_tier"`
+	DailyQuotaLimit   int64     `json:"daily_quota_limit"`
+	WeeklyQuotaLimit  int64     `json:"weekly_quota_limit"`
+	MonthlyQuotaLimit int64     `json:"monthly_quota_limit"`
 }
 
 type UserWithKey struct {
@@ -233,6 +286,7 @@ type ProfileResponse struct {
 	User       User        `json:"user"`
 	ClientKeys []ClientKey `json:"client_keys"`
 	AgentKeys  []AgentKey  `json:"agent_keys"`
+	QuotaUsage QuotaUsage  `json:"quota_usage"`
 }
 
 type UserModelPolicy struct {

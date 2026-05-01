@@ -12,7 +12,28 @@ import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import sdk, { type ProfileResponse, setToken, type ClientKey, type AgentKey } from '@/api';
+import sdk, { type ProfileResponse, setToken, type ClientKey, type AgentKey, type QuotaTier } from '@/api';
+
+const TIER_LABELS: Record<QuotaTier, string> = {
+  free: 'Free', standard: 'Standard', pro: 'Pro', unlimited: 'Unlimited', custom: 'Custom',
+};
+
+function quotaBar(used: number, limit: number, creditOffset: number, label: string) {
+  const effective = Math.max(0, used - creditOffset);
+  const pct = limit === -1 ? 0 : Math.min(100, (effective / limit) * 100);
+  const over = limit !== -1 && effective >= limit;
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between items-center">
+        <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">{label}</span>
+        <span className={`text-[9px] font-black ${over ? 'text-destructive' : 'text-muted-foreground'}`}>
+          {effective.toLocaleString()} / {limit === -1 ? '∞' : limit.toLocaleString()}
+        </span>
+      </div>
+      <Progress value={pct} className={`h-1 ${over ? '[&>div]:bg-destructive' : ''}`} />
+    </div>
+  );
+}
 
 /* ─── helpers ─────────────────────────────────────────── */
 
@@ -258,9 +279,10 @@ const ProfilePage = () => {
   const { user, client_keys: rawKeys, agent_keys: rawAgents } = profile;
   const keys = rawKeys || [];
   const agents = rawAgents || [];
-  const globalQuotaPercent = user.quota_limit > 0 ? (user.quota_used / user.quota_limit) * 100 : 0;
-  const isOverGlobalQuota = user.quota_limit > 0 && user.quota_used >= user.quota_limit;
   const totalEarned = agents.reduce((sum: number, ak: AgentKey) => sum + (ak.credits_earned || 0), 0);
+  const usage = profile.quota_usage ?? { daily_used: 0, weekly_used: 0, monthly_used: 0, agent_credits_earned: 0 };
+  const creditOffset = Math.floor(usage.agent_credits_earned);
+  const tier = (user.quota_tier || 'custom') as QuotaTier;
 
   return (
     <>
@@ -324,17 +346,16 @@ const ProfilePage = () => {
 
             <Card className="border-border/40 bg-primary/5">
               <CardContent className="p-4 space-y-3">
-                <div className="flex justify-between items-end">
-                  <label className="text-[10px] font-black uppercase text-primary tracking-widest">Account Quota</label>
-                  <span className={`text-[10px] font-black ${isOverGlobalQuota ? 'text-destructive' : 'text-primary'}`}>
-                    {Math.round(globalQuotaPercent)}%
-                  </span>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-black uppercase text-primary tracking-widest">Quota — {TIER_LABELS[tier]}</label>
+                  {creditOffset > 0 && (
+                    <span className="text-[9px] font-black text-emerald-400">-{creditOffset.toLocaleString()} credit offset</span>
+                  )}
                 </div>
-                <Progress value={user.quota_limit === -1 ? 0 : globalQuotaPercent} className="h-1.5" />
-                <div className="flex justify-between text-[9px] font-bold text-muted-foreground uppercase">
-                   <span>{user.quota_used.toLocaleString()} used</span>
-                   <span>{user.quota_limit === -1 ? 'Unlimited' : user.quota_limit.toLocaleString()} total</span>
-                </div>
+                {quotaBar(usage.daily_used, user.daily_quota_limit, creditOffset, 'Daily')}
+                {quotaBar(usage.weekly_used, user.weekly_quota_limit, creditOffset, 'Weekly')}
+                {quotaBar(usage.monthly_used, user.monthly_quota_limit, creditOffset, 'Monthly')}
+                {quotaBar(user.quota_used, user.quota_limit, creditOffset, 'Total (lifetime)')}
               </CardContent>
             </Card>
           </div>

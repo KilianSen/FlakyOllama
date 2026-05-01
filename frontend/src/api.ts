@@ -135,8 +135,33 @@ export interface Catalog {
 
 export interface ProfileResponse {
   user: User;
-  client_keys: ClientKey[]; 
+  client_keys: ClientKey[];
   agent_keys: AgentKey[];
+  quota_usage: QuotaUsage;
+}
+
+export type QuotaTier = 'free' | 'standard' | 'pro' | 'unlimited' | 'custom';
+
+export interface TierLimits {
+  total: number;
+  daily: number;
+  weekly: number;
+  monthly: number;
+}
+
+export const DEFAULT_TIERS: Record<QuotaTier, TierLimits> = {
+  free:      { total: 2_000_000,  daily: 50_000,    weekly: 200_000,   monthly: 500_000 },
+  standard:  { total: -1,         daily: 500_000,   weekly: 2_000_000, monthly: 6_000_000 },
+  pro:       { total: -1,         daily: 2_000_000, weekly: 8_000_000, monthly: 20_000_000 },
+  unlimited: { total: -1,         daily: -1,        weekly: -1,        monthly: -1 },
+  custom:    { total: -1,         daily: -1,        weekly: -1,        monthly: -1 },
+};
+
+export interface QuotaUsage {
+  daily_used: number;
+  weekly_used: number;
+  monthly_used: number;
+  agent_credits_earned: number;
 }
 
 export interface User {
@@ -144,9 +169,14 @@ export interface User {
   sub: string;
   email: string;
   name: string;
+  picture?: string;
   is_admin: boolean;
+  quota_tier: QuotaTier;
   quota_limit: number;
   quota_used: number;
+  daily_quota_limit: number;
+  weekly_quota_limit: number;
+  monthly_quota_limit: number;
 }
 
 export interface UserWithKey {
@@ -409,6 +439,15 @@ export class FlakyOllamaSDK {
     return this.request(`/api/v1/queue/${id}`, { method: 'DELETE' });
   }
 
+  // Public (no auth required)
+  async getPublicInfo(): Promise<{ oidc_enabled: boolean; healthy_nodes: number; model_count: number; active_workloads: number }> {
+    return this.request('/api/public/info');
+  }
+
+  async getPublicCatalog(): Promise<Catalog> {
+    return this.request<Catalog>('/api/public/catalog');
+  }
+
   // Public / Self-service
   async getCatalog(): Promise<Catalog> {
     return this.request<Catalog>('/api/v1/catalog');
@@ -416,6 +455,10 @@ export class FlakyOllamaSDK {
 
   async getMe(): Promise<ProfileResponse> {
     return this.request<ProfileResponse>('/api/v1/me');
+  }
+
+  async getMeWithToken(token: string): Promise<ProfileResponse> {
+    return this.request<ProfileResponse>('/api/v1/me', {}, token);
   }
 
   // User Management (Admin)
@@ -427,10 +470,16 @@ export class FlakyOllamaSDK {
     return this.request(`/api/v1/users/${id}`, { method: 'DELETE' });
   }
 
-  async updateUserQuota(userId: string, quota: number): Promise<{ status: string }> {
+  async updateUserQuota(userId: string, opts: {
+    quota_tier?: string;
+    quota_limit?: number;
+    daily_quota_limit?: number;
+    weekly_quota_limit?: number;
+    monthly_quota_limit?: number;
+  }): Promise<{ status: string }> {
     return this.request(`/api/v1/users/${userId}/quota`, {
       method: 'POST',
-      body: JSON.stringify({ quota_limit: quota }),
+      body: JSON.stringify(opts),
     });
   }
 
