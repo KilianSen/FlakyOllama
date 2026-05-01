@@ -149,10 +149,10 @@ export const KeysPage: React.FC = () => {
                       </TableCell>
                       <TableCell className="text-center">
                         <Select
-                          value={k.error_format || ''}
+                          value={k.error_format || 'standard'}
                           onValueChange={async (val) => {
                             try {
-                              await sdk.updateClientKeySettings(k.key, { error_format: val });
+                              await sdk.updateClientKeySettings(k.key, { error_format: val === 'standard' ? '' : val });
                               toast.success('Error format updated');
                               load();
                             } catch (err: any) { toast.error(err.message); }
@@ -162,7 +162,7 @@ export const KeysPage: React.FC = () => {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="" className="text-[10px]">Standard</SelectItem>
+                            <SelectItem value="standard" className="text-[10px]">Standard</SelectItem>
                             <SelectItem value="openai" className="text-[10px]">OpenAI</SelectItem>
                           </SelectContent>
                         </Select>
@@ -393,12 +393,12 @@ const CreateClientKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
             </div>
             <div className="grid gap-2">
               <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Error Response Format</Label>
-              <Select value={errorFormat} onValueChange={setErrorFormat}>
+              <Select value={errorFormat || 'standard'} onValueChange={v => setErrorFormat(v === 'standard' ? '' : v)}>
                 <SelectTrigger className="font-bold">
-                  <SelectValue placeholder="Standard (flat JSON)" />
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Standard (flat JSON)</SelectItem>
+                  <SelectItem value="standard">Standard (flat JSON)</SelectItem>
                   <SelectItem value="openai">OpenAI-Compatible (nested)</SelectItem>
                 </SelectContent>
               </Select>
