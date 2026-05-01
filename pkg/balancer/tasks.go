@@ -91,6 +91,7 @@ func (b *Balancer) flushTokenBatch(batch []tokenUsageEntry) {
 		Input, Output                    int
 		Reward, Cost                     float64
 		TTFT, Duration                   int64
+		SelfServed                       bool
 	}, len(batch))
 
 	for i, t := range batch {
@@ -99,7 +100,8 @@ func (b *Balancer) flushTokenBatch(batch []tokenUsageEntry) {
 			Input, Output                    int
 			Reward, Cost                     float64
 			TTFT, Duration                   int64
-		}{t.nodeID, t.model, t.clientKey, t.userID, t.input, t.output, t.reward, t.cost, t.ttft, t.duration}
+			SelfServed                       bool
+		}{t.nodeID, t.model, t.clientKey, t.userID, t.input, t.output, t.reward, t.cost, t.ttft, t.duration, t.selfServed}
 	}
 
 	if err := b.Storage.RecordTokenUsageBatch(entries); err != nil {

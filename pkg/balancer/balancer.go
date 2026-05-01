@@ -24,16 +24,17 @@ type metricEntry struct {
 }
 
 type tokenUsageEntry struct {
-	nodeID    string
-	model     string
-	input     int
-	output    int
-	reward    float64
-	cost      float64
-	ttft      int64
-	duration  int64
-	clientKey string
-	userID    string
+	nodeID     string
+	model      string
+	input      int
+	output     int
+	reward     float64
+	cost       float64
+	ttft       int64
+	duration   int64
+	clientKey  string
+	userID     string
+	selfServed bool // true when the user's own agent served the request
 }
 
 type Balancer struct {
@@ -130,23 +131,29 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	// OpenAI Routes
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(b.AuthMiddleware)
-		r.Post("/chat/completions", b.HandleOpenAIChat)
-		r.Post("/completions", b.HandleGenerate)
 		r.Get("/models", b.HandleV1Models)
-		r.Post("/embeddings", b.HandleOpenAIEmbeddings)
+		r.Group(func(r chi.Router) {
+			r.Use(b.InferenceQuotaMiddleware)
+			r.Post("/chat/completions", b.HandleOpenAIChat)
+			r.Post("/completions", b.HandleGenerate)
+			r.Post("/embeddings", b.HandleOpenAIEmbeddings)
+		})
 	})
 
 	// Ollama Routes
 	r.Route("/api", func(r chi.Router) {
 		r.Use(b.AuthMiddleware)
-		r.Post("/generate", b.HandleGenerate)
-		r.Post("/chat", b.HandleChat)
-		r.Post("/tags", b.HandleV1Tags)
 		r.Get("/tags", b.HandleV1Tags)
+		r.Post("/tags", b.HandleV1Tags)
 		r.Post("/pull", b.HandleV1ModelPull)
 		r.Delete("/delete", b.HandleV1ModelDelete)
-		r.Post("/embeddings", b.HandleOllamaEmbeddings)
 		r.Post("/log/collect", b.HandleV1LogCollect)
+		r.Group(func(r chi.Router) {
+			r.Use(b.InferenceQuotaMiddleware)
+			r.Post("/generate", b.HandleGenerate)
+			r.Post("/chat", b.HandleChat)
+			r.Post("/embeddings", b.HandleOllamaEmbeddings)
+		})
 	})
 
 	// Management API
@@ -244,6 +251,39 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	return r
 }
 
+// InferenceQuotaMiddleware enforces per-key and per-user quotas for inference
+// endpoints only. Agent credits earned by the user are subtracted from their
+// effective usage, so compute contributors can use their own supplied capacity
+// without hitting the quota.
+func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Client key sub-quota
+		if ck, ok := auth.GetClientDataFromContext(r.Context()); ok {
+			if ck.QuotaLimit != -1 && ck.QuotaUsed >= ck.QuotaLimit {
+				b.respondError(w, r, http.StatusTooManyRequests, "API key quota exceeded")
+				return
+			}
+		}
+
+		// 2. User global quota, offset by credits earned via contributed compute
+		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+			if u, ok := val.(models.User); ok && u.QuotaLimit != -1 && u.ID != "" {
+				agentCredits := b.Storage.GetUserAgentCredits(u.ID)
+				effectiveUsed := u.QuotaUsed - int64(agentCredits)
+				if effectiveUsed < 0 {
+					effectiveUsed = 0
+				}
+				if effectiveUsed >= u.QuotaLimit {
+					b.respondError(w, r, http.StatusTooManyRequests, "account quota exceeded")
+					return
+				}
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
@@ -322,7 +362,8 @@ func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, 
 		}
 	}
 
-	// If the requesting user owns the agent serving this request, cost is zero.
+	// If the requesting user owns the agent serving this request:
+	// no cost, no reward, and no quota increment (self-served).
 	var agentOwnerID string
 	b.State.View(func(s ClusterState) {
 		for _, node := range s.Agents {
@@ -332,8 +373,10 @@ func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, 
 			}
 		}
 	})
-	if agentOwnerID != "" && agentOwnerID == targetUserID {
+	selfServed := agentOwnerID != "" && agentOwnerID == targetUserID
+	if selfServed {
 		costFactor = 0
+		rewardFactor = 0
 	}
 
 	reward := float64(input+output) * 0.001 * rewardFactor * b.Config.GlobalRewardMultiplier
@@ -341,16 +384,17 @@ func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, 
 
 	select {
 	case b.TokenCh <- tokenUsageEntry{
-		nodeID:    agentID,
-		model:     model,
-		input:     input,
-		output:    output,
-		reward:    reward,
-		cost:      cost,
-		ttft:      ttft.Milliseconds(),
-		duration:  duration.Milliseconds(),
-		clientKey: clientKey,
-		userID:    targetUserID,
+		nodeID:     agentID,
+		model:      model,
+		input:      input,
+		output:     output,
+		reward:     reward,
+		cost:       cost,
+		ttft:       ttft.Milliseconds(),
+		duration:   duration.Milliseconds(),
+		clientKey:  clientKey,
+		userID:     targetUserID,
+		selfServed: selfServed,
 	}:
 	default:
 		logging.Global.Warnf("TokenCh full, dropping usage metric for %s", model)

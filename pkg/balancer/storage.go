@@ -264,7 +264,8 @@ func (s *SQLiteStorage) RecordTokenUsage(nodeID, model string, input, output int
 		Input, Output                    int
 		Reward, Cost                     float64
 		TTFT, Duration                   int64
-	}{{nodeID, model, clientKey, "", input, output, reward, cost, ttft, duration}})
+		SelfServed                       bool
+	}{{nodeID, model, clientKey, "", input, output, reward, cost, ttft, duration, false}})
 }
 
 func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
@@ -272,6 +273,7 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 	Input, Output                    int
 	Reward, Cost                     float64
 	TTFT, Duration                   int64
+	SelfServed                       bool
 }) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -282,27 +284,37 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 	for _, e := range entries {
 		targetUserID := e.UserID
 
-		// 1. Update Quotas and get UserID if not provided
-		if e.ClientKey != "" {
+		if !e.SelfServed {
+			// 1. Update Quotas and get UserID if not provided
+			if e.ClientKey != "" {
+				var dbUserID sql.NullString
+				err = tx.QueryRow(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ? RETURNING user_id`,
+					int64(e.Input+e.Output), e.Cost, e.ClientKey).Scan(&dbUserID)
+				if err != nil {
+					return err
+				}
+				if targetUserID == "" && dbUserID.Valid && dbUserID.String != "" {
+					targetUserID = dbUserID.String
+				}
+			}
+
+			if targetUserID != "" {
+				_, err = tx.Exec(`UPDATE users SET quota_used = quota_used + ? WHERE id = ?`, int64(e.Input+e.Output), targetUserID)
+				if err != nil {
+					return err
+				}
+			}
+		} else if e.ClientKey != "" {
+			// Still need targetUserID for the token_usage record even when self-served
 			var dbUserID sql.NullString
-			err = tx.QueryRow(`UPDATE client_keys SET quota_used = quota_used + ?, credits = credits - ? WHERE key = ? RETURNING user_id`,
-				int64(e.Input+e.Output), e.Cost, e.ClientKey).Scan(&dbUserID)
-			if err != nil {
-				return err
-			}
-			if targetUserID == "" && dbUserID.Valid && dbUserID.String != "" {
-				targetUserID = dbUserID.String
+			if err2 := tx.QueryRow(`SELECT user_id FROM client_keys WHERE key = ?`, e.ClientKey).Scan(&dbUserID); err2 == nil && dbUserID.Valid {
+				if targetUserID == "" {
+					targetUserID = dbUserID.String
+				}
 			}
 		}
 
-		if targetUserID != "" {
-			_, err = tx.Exec(`UPDATE users SET quota_used = quota_used + ? WHERE id = ?`, int64(e.Input+e.Output), targetUserID)
-			if err != nil {
-				return err
-			}
-		}
-
-		// 2. Record the usage
+		// 2. Record the usage (always, for analytics)
 		_, err = tx.Exec(`
 			INSERT INTO token_usage (timestamp, node_id, model, input_tokens, output_tokens, reward, cost, ttft_ms, duration_ms, client_key, user_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -311,11 +323,13 @@ func (s *SQLiteStorage) RecordTokenUsageBatch(entries []struct {
 			return err
 		}
 
-		// 3. Update Agent Key Reward
-		_, err = tx.Exec(`UPDATE agent_keys SET credits_earned = credits_earned + ? WHERE key = ?`,
-			e.Reward, e.NodeID)
-		if err != nil {
-			return err
+		// 3. Update Agent Key Reward (skip when self-served — no circular rewards)
+		if !e.SelfServed {
+			_, err = tx.Exec(`UPDATE agent_keys SET credits_earned = credits_earned + ? WHERE key = ?`,
+				e.Reward, e.NodeID)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -498,6 +512,12 @@ func (s *SQLiteStorage) ListUsers() ([]models.User, error) {
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+func (s *SQLiteStorage) GetUserAgentCredits(userID string) float64 {
+	var credits float64
+	s.db.QueryRow(`SELECT COALESCE(SUM(credits_earned),0) FROM agent_keys WHERE user_id=?`, userID).Scan(&credits)
+	return credits
 }
 
 func (s *SQLiteStorage) GetUserQuotaUsage(userID string) (models.QuotaUsage, error) {

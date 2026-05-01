@@ -38,12 +38,7 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 			return
 		}
 		if val := r.Context().Value(ContextKeyUser); val != nil {
-			if u, ok := val.(models.User); ok {
-				// Check User-global Quota
-				if u.QuotaLimit != -1 && u.QuotaUsed >= u.QuotaLimit {
-					http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
-					return
-				}
+			if _, ok := val.(models.User); ok {
 				next(w, r)
 				return
 			}
@@ -90,23 +85,6 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 		if km != nil {
 			ck, err := km.GetClientKey(receivedToken)
 			if err == nil && ck.Active {
-				// 1. Check Key-specific Sub-quota
-				if ck.QuotaLimit != -1 && ck.QuotaUsed >= ck.QuotaLimit {
-					http.Error(w, "API Key quota exceeded", http.StatusForbidden)
-					return
-				}
-
-				// 2. Check User-global Quota
-				if ck.UserID != "" {
-					u, err := km.GetUserByID(ck.UserID)
-					if err == nil {
-						if u.QuotaLimit != -1 && u.QuotaUsed >= u.QuotaLimit {
-							http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
-							return
-						}
-					}
-				}
-
 				ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
 				ctx = context.WithValue(ctx, ContextKeyClientData, ck)
 
