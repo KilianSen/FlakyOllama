@@ -179,6 +179,7 @@ export interface User {
   daily_quota_limit: number;
   weekly_quota_limit: number;
   monthly_quota_limit: number;
+  route_preference?: string; // "" or "quality" = 429 on exhaustion; "quality_fallback" = fall back to own node
 }
 
 export interface UserWithKey {
@@ -469,6 +470,13 @@ export class FlakyOllamaSDK {
 
   async myUpdateAgentKeySettings(key: string, settings: { model_visibility: string }): Promise<AgentKey> {
     return this.request<AgentKey>(`/api/v1/user/keys/agents/${key}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
+    });
+  }
+
+  async updateMySettings(settings: { route_preference: string }): Promise<{ route_preference: string }> {
+    return this.request('/api/v1/user/settings', {
       method: 'PATCH',
       body: JSON.stringify(settings),
     });

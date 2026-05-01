@@ -272,6 +272,16 @@ const ProfilePage = () => {
     }
   };
 
+  const handleUpdateRoutePreference = async (preference: string) => {
+    try {
+      await sdk.updateMySettings({ route_preference: preference === 'quality' ? '' : preference });
+      toast.success('Routing preference updated');
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
   const requestAgentKey = async () => {
     setIsApplying(true);
     try {
@@ -377,6 +387,40 @@ const ProfilePage = () => {
                 {quotaBar(usage.weekly_used, user.weekly_quota_limit, creditOffset, 'Weekly')}
                 {quotaBar(usage.monthly_used, user.monthly_quota_limit, creditOffset, 'Monthly')}
                 {quotaBar(user.quota_used, user.quota_limit, creditOffset, 'Total (lifetime)')}
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/40 bg-card/50 backdrop-blur-md">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-black uppercase tracking-tight flex items-center gap-2">
+                  <Server size={14} className="text-primary" /> Routing Preference
+                </CardTitle>
+                <CardDescription className="text-xs font-bold text-muted-foreground">
+                  What happens when your quota is exhausted
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Select
+                  value={user.route_preference === 'quality_fallback' ? 'quality_fallback' : 'quality'}
+                  onValueChange={handleUpdateRoutePreference}
+                >
+                  <SelectTrigger className="h-8 text-xs font-bold">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="quality" className="text-xs font-bold">
+                      <span className="flex items-center gap-2"><Globe size={12} /> Quality — return 429 when quota runs out</span>
+                    </SelectItem>
+                    <SelectItem value="quality_fallback" className="text-xs font-bold">
+                      <span className="flex items-center gap-2"><Lock size={12} /> Quality with Personal Fallback — use own node when quota runs out</span>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {user.route_preference === 'quality_fallback' && (
+                  <p className="text-[10px] text-muted-foreground font-bold mt-2">
+                    When your quota is exhausted, requests will route to your own agent nodes for free (self-served, no quota deduction).
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>

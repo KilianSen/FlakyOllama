@@ -957,6 +957,30 @@ func (b *Balancer) HandleV1UserDelete(w http.ResponseWriter, r *http.Request) {
 	b.jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// HandleV1UserUpdateSettings lets the authenticated user update their own routing preference.
+func (b *Balancer) HandleV1UserUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := b.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		RoutePreference string `json:"route_preference"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if body.RoutePreference != "" && body.RoutePreference != "quality" && body.RoutePreference != "quality_fallback" {
+		b.jsonError(w, http.StatusBadRequest, "route_preference must be '', 'quality', or 'quality_fallback'")
+		return
+	}
+	if err := b.Storage.UpdateUserRoutePreference(user.ID, body.RoutePreference); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, map[string]string{"route_preference": body.RoutePreference})
+}
+
 func (b *Balancer) HandleV1QueueList(w http.ResponseWriter, r *http.Request) {
 	b.jsonResponse(w, http.StatusOK, b.Queue.GetSnapshot())
 }

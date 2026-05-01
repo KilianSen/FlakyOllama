@@ -32,12 +32,13 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 			isAdmin = u.IsAdmin
 		}
 	}
+	forceOwnNode, _ := ctx.Value(ContextKeyForceOwnNode).(bool)
 
 	// Non-hedging fast path: use the parent context directly so that cancelling
 	// the response body (after this function returns) is controlled by the caller,
 	// not by a defer inside here.
 	if !allowHedging || !b.Config.EnableHedging {
-		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority, clientIP, contextHash, userID, isAdmin, ctx)
+		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority, clientIP, contextHash, userID, isAdmin, forceOwnNode, ctx)
 		select {
 		case res := <-resCh:
 			if res.Err != nil {
@@ -71,7 +72,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 
 	sendRequest := func(p int) {
 		reqCtx, cancel := context.WithCancel(ctx)
-		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, p, clientIP, contextHash, userID, isAdmin, reqCtx)
+		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, p, clientIP, contextHash, userID, isAdmin, forceOwnNode, reqCtx)
 		select {
 		case res := <-resCh:
 			if res.Err != nil {

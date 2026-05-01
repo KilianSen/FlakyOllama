@@ -152,6 +152,7 @@ func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
 		`ALTER TABLE users ADD COLUMN quota_tier TEXT DEFAULT 'custom'`,
 		`ALTER TABLE client_keys ADD COLUMN error_format TEXT DEFAULT ''`,
 		`ALTER TABLE agent_keys ADD COLUMN model_visibility TEXT DEFAULT 'public'`,
+		`ALTER TABLE users ADD COLUMN route_preference TEXT DEFAULT ''`,
 	}
 	for _, m := range migrations {
 		if _, err = db.Exec(m); err != nil {
@@ -472,33 +473,38 @@ func (s *SQLiteStorage) ListClientKeys() ([]models.ClientKey, error) {
 
 // User Management
 func (s *SQLiteStorage) CreateUser(u models.User) error {
-	_, err := s.db.Exec(`INSERT INTO users (id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		u.ID, u.Sub, u.Email, u.Name, u.IsAdmin, u.QuotaLimit, u.QuotaUsed, u.DailyQuotaLimit, u.WeeklyQuotaLimit, u.MonthlyQuotaLimit, u.QuotaTier)
+	_, err := s.db.Exec(`INSERT INTO users (id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier, route_preference) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Sub, u.Email, u.Name, u.IsAdmin, u.QuotaLimit, u.QuotaUsed, u.DailyQuotaLimit, u.WeeklyQuotaLimit, u.MonthlyQuotaLimit, u.QuotaTier, u.RoutePreference)
 	return err
 }
 
 func (s *SQLiteStorage) GetUserBySub(sub string) (models.User, error) {
 	var u models.User
-	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier FROM users WHERE sub = ?`, sub).
-		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed, &u.DailyQuotaLimit, &u.WeeklyQuotaLimit, &u.MonthlyQuotaLimit, &u.QuotaTier)
+	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier, route_preference FROM users WHERE sub = ?`, sub).
+		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed, &u.DailyQuotaLimit, &u.WeeklyQuotaLimit, &u.MonthlyQuotaLimit, &u.QuotaTier, &u.RoutePreference)
 	return u, err
 }
 
 func (s *SQLiteStorage) GetUserByID(id string) (models.User, error) {
 	var u models.User
-	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed, &u.DailyQuotaLimit, &u.WeeklyQuotaLimit, &u.MonthlyQuotaLimit, &u.QuotaTier)
+	err := s.db.QueryRow(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier, route_preference FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed, &u.DailyQuotaLimit, &u.WeeklyQuotaLimit, &u.MonthlyQuotaLimit, &u.QuotaTier, &u.RoutePreference)
 	return u, err
 }
 
 func (s *SQLiteStorage) UpdateUser(u models.User) error {
-	_, err := s.db.Exec(`UPDATE users SET email=?, name=?, is_admin=?, quota_limit=?, quota_used=?, daily_quota_limit=?, weekly_quota_limit=?, monthly_quota_limit=?, quota_tier=? WHERE id=?`,
-		u.Email, u.Name, u.IsAdmin, u.QuotaLimit, u.QuotaUsed, u.DailyQuotaLimit, u.WeeklyQuotaLimit, u.MonthlyQuotaLimit, u.QuotaTier, u.ID)
+	_, err := s.db.Exec(`UPDATE users SET email=?, name=?, is_admin=?, quota_limit=?, quota_used=?, daily_quota_limit=?, weekly_quota_limit=?, monthly_quota_limit=?, quota_tier=?, route_preference=? WHERE id=?`,
+		u.Email, u.Name, u.IsAdmin, u.QuotaLimit, u.QuotaUsed, u.DailyQuotaLimit, u.WeeklyQuotaLimit, u.MonthlyQuotaLimit, u.QuotaTier, u.RoutePreference, u.ID)
+	return err
+}
+
+func (s *SQLiteStorage) UpdateUserRoutePreference(userID, preference string) error {
+	_, err := s.db.Exec(`UPDATE users SET route_preference=? WHERE id=?`, preference, userID)
 	return err
 }
 
 func (s *SQLiteStorage) ListUsers() ([]models.User, error) {
-	rows, err := s.db.Query(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier FROM users`)
+	rows, err := s.db.Query(`SELECT id, sub, email, name, is_admin, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, quota_tier, route_preference FROM users`)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +512,7 @@ func (s *SQLiteStorage) ListUsers() ([]models.User, error) {
 	users := make([]models.User, 0)
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed, &u.DailyQuotaLimit, &u.WeeklyQuotaLimit, &u.MonthlyQuotaLimit, &u.QuotaTier); err != nil {
+		if err := rows.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.IsAdmin, &u.QuotaLimit, &u.QuotaUsed, &u.DailyQuotaLimit, &u.WeeklyQuotaLimit, &u.MonthlyQuotaLimit, &u.QuotaTier, &u.RoutePreference); err != nil {
 			return nil, err
 		}
 		users = append(users, u)

@@ -167,6 +167,9 @@ func (b *Balancer) SetupRoutes() http.Handler {
 		r.Get("/nodes", b.HandleV1Nodes)
 		r.Post("/nodes/register", b.HandleV1Register)
 
+		// User self-service settings
+		r.Patch("/user/settings", b.HandleV1UserUpdateSettings)
+
 		// User self-service key management (ownership enforced, no admin required)
 		r.Route("/user/keys", func(r chi.Router) {
 			r.Route("/clients", func(r chi.Router) {
@@ -251,10 +254,18 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	return r
 }
 
+type contextKey string
+
+const ContextKeyForceOwnNode contextKey = "force_own_node"
+
 // InferenceQuotaMiddleware enforces per-key and per-user quotas for inference
 // endpoints only. Agent credits earned by the user are subtracted from their
 // effective usage, so compute contributors can use their own supplied capacity
 // without hitting the quota.
+//
+// If a user's route_preference is "quality_fallback" and their quota is exhausted,
+// a ForceOwnNode flag is set in the context instead of returning 429 — requests
+// then fall back to that user's own agent nodes for free.
 func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Client key sub-quota
@@ -274,6 +285,23 @@ func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
 					effectiveUsed = 0
 				}
 				if effectiveUsed >= u.QuotaLimit {
+					if u.RoutePreference == "quality_fallback" {
+						// Check if the user has at least one active own node before falling back
+						hasOwnNode := false
+						b.State.View(func(s ClusterState) {
+							for _, node := range s.Agents {
+								if node.UserID == u.ID && node.State != models.StateBroken && !node.Draining {
+									hasOwnNode = true
+									break
+								}
+							}
+						})
+						if hasOwnNode {
+							ctx := context.WithValue(r.Context(), ContextKeyForceOwnNode, true)
+							next.ServeHTTP(w, r.WithContext(ctx))
+							return
+						}
+					}
 					b.respondError(w, r, http.StatusTooManyRequests, "account quota exceeded")
 					return
 				}

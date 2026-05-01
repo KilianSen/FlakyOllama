@@ -276,6 +276,7 @@ type User struct {
 	DailyQuotaLimit   int64     `json:"daily_quota_limit"`
 	WeeklyQuotaLimit  int64     `json:"weekly_quota_limit"`
 	MonthlyQuotaLimit int64     `json:"monthly_quota_limit"`
+	RoutePreference   string    `json:"route_preference,omitempty"` // "" or "quality" = 429 on quota; "quality_fallback" = fall back to own node
 }
 
 type UserWithKey struct {

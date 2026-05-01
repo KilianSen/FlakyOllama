@@ -11,18 +11,19 @@ import (
 
 // QueuedRequest represents a request waiting in the queue.
 type QueuedRequest struct {
-	ID          string
-	Request     models.InferenceRequest
-	Priority    int // Higher value means higher priority
-	Sequence    int64
-	ClientIP    string
-	ContextHash string
-	UserID      string
-	IsAdmin     bool
-	Ctx         context.Context
-	QueuedAt    time.Time
-	Response    chan QueuedResponse
-	Index       int // The index of the item in the heap.
+	ID           string
+	Request      models.InferenceRequest
+	Priority     int // Higher value means higher priority
+	Sequence     int64
+	ClientIP     string
+	ContextHash  string
+	UserID       string
+	IsAdmin      bool
+	ForceOwnNode bool // When true, SelectAgent must route only to nodes owned by UserID
+	Ctx          context.Context
+	QueuedAt     time.Time
+	Response     chan QueuedResponse
+	Index        int // The index of the item in the heap.
 }
 
 type QueuedResponse struct {
@@ -84,24 +85,25 @@ func NewRequestQueue() *RequestQueue {
 	return rq
 }
 
-func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP, contextHash, userID string, isAdmin bool, ctx context.Context) chan QueuedResponse {
+func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP, contextHash, userID string, isAdmin, forceOwnNode bool, ctx context.Context) chan QueuedResponse {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
 	resCh := make(chan QueuedResponse, 1)
 	rq.sequence++
 	item := &QueuedRequest{
-		ID:          fmt.Sprintf("req_%d_%d", time.Now().Unix(), rq.sequence),
-		Request:     req,
-		Priority:    priority,
-		Sequence:    rq.sequence,
-		ClientIP:    clientIP,
-		ContextHash: contextHash,
-		UserID:      userID,
-		IsAdmin:     isAdmin,
-		Ctx:         ctx,
-		QueuedAt:    time.Now(),
-		Response:    resCh,
+		ID:           fmt.Sprintf("req_%d_%d", time.Now().Unix(), rq.sequence),
+		Request:      req,
+		Priority:     priority,
+		Sequence:     rq.sequence,
+		ClientIP:     clientIP,
+		ContextHash:  contextHash,
+		UserID:       userID,
+		IsAdmin:      isAdmin,
+		ForceOwnNode: forceOwnNode,
+		Ctx:          ctx,
+		QueuedAt:     time.Now(),
+		Response:     resCh,
 	}
 	heap.Push(&rq.pq, item)
 

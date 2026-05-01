@@ -214,7 +214,7 @@ func (b *Balancer) ProcessQueue() {
 		}
 
 		resolvedModel := b.resolveVirtualModel(req.Request.Model)
-		addr, err := b.SelectAgent(resolvedModel, req.UserID, req.IsAdmin)
+		addr, err := b.SelectAgent(resolvedModel, req.UserID, req.IsAdmin, req.ForceOwnNode)
 		if err != nil {
 			// If we couldn't find a node right now, put it back
 			b.Queue.Requeue(req)

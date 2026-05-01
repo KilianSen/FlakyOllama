@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func (b *Balancer) SelectAgent(modelName, userID string, isAdmin bool) (string, error) {
+func (b *Balancer) SelectAgent(modelName, userID string, isAdmin, forceOwnNode bool) (string, error) {
 	var bestAgent string
 	var bestScore float64 = -1e18 // Use a very small number to handle negative scores
 	var userPolicy models.UserModelPolicy
@@ -57,6 +57,11 @@ func (b *Balancer) SelectAgent(modelName, userID string, isAdmin bool) (string, 
 			continue
 		}
 
+		// When quota is exhausted and preference is "quality_fallback", only use own nodes
+		if forceOwnNode && a.UserID != userID {
+			continue
+		}
+
 		// Satiation check: Skip nodes with too many active workloads relative to cores
 		maxWorkloads := a.CPUCores * 2
 		if a.HasGPU {
@@ -74,6 +79,9 @@ func (b *Balancer) SelectAgent(modelName, userID string, isAdmin bool) (string, 
 		for addr, a := range snap.Agents {
 			if a.State == models.StateHealthy && !a.Draining {
 				if pol, ok := clusterPolicies[a.ID]; ok && pol.Banned {
+					continue
+				}
+				if forceOwnNode && a.UserID != userID {
 					continue
 				}
 				candidates = append(candidates, addr)
