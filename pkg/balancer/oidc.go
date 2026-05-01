@@ -35,31 +35,6 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 				if claims, ok := token.Claims.(*Claims); ok {
 					user, err := b.Storage.GetUserBySub(claims.Sub)
 					if err == nil {
-						// Multi-window quota check with credit offset
-						if usage, err := b.Storage.GetUserQuotaUsage(user.ID); err == nil {
-							creditOffset := int64(usage.AgentCreditsEarned)
-							effectiveOf := func(raw int64) int64 {
-								if e := raw - creditOffset; e > 0 {
-									return e
-								}
-								return 0
-							}
-							var quotaMsg string
-							switch {
-							case user.DailyQuotaLimit != -1 && effectiveOf(usage.DailyUsed) >= user.DailyQuotaLimit:
-								quotaMsg = "Daily quota exceeded"
-							case user.WeeklyQuotaLimit != -1 && effectiveOf(usage.WeeklyUsed) >= user.WeeklyQuotaLimit:
-								quotaMsg = "Weekly quota exceeded"
-							case user.MonthlyQuotaLimit != -1 && effectiveOf(usage.MonthlyUsed) >= user.MonthlyQuotaLimit:
-								quotaMsg = "Monthly quota exceeded"
-							case user.QuotaLimit != -1 && effectiveOf(user.QuotaUsed) >= user.QuotaLimit:
-								quotaMsg = "Total quota exceeded"
-							}
-							if quotaMsg != "" {
-								http.Error(w, quotaMsg, http.StatusForbidden)
-								return
-							}
-						}
 						// Ensure Admin status is synced from JWT if it changed
 						if user.IsAdmin != claims.Admin {
 							user.IsAdmin = claims.Admin
@@ -76,6 +51,53 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 
 		// 2. Fall back to Token Middleware (API Keys / Master Token)
 		auth.Middleware([]string{b.Config.AuthToken, b.Config.RemoteToken}, b.Storage, next.ServeHTTP).ServeHTTP(w, r)
+	})
+}
+
+// InferenceQuotaMiddleware enforces per-key and per-user quota limits.
+// It must only be applied to inference routes, not management routes.
+func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check client key quota
+		if ck, ok := auth.GetClientDataFromContext(r.Context()); ok {
+			if ck.QuotaLimit != -1 && ck.QuotaUsed >= ck.QuotaLimit {
+				http.Error(w, "API key quota exceeded", http.StatusForbidden)
+				return
+			}
+		}
+
+		// Check user quotas with agent-credit offset
+		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+			if user, ok := val.(models.User); ok && !user.IsAdmin {
+				usage, err := b.Storage.GetUserQuotaUsage(user.ID)
+				if err == nil {
+					creditOffset := int64(usage.AgentCreditsEarned)
+					effective := func(raw int64) int64 {
+						if e := raw - creditOffset; e > 0 {
+							return e
+						}
+						return 0
+					}
+					var msg string
+					switch {
+					case user.DailyQuotaLimit != -1 && effective(usage.DailyUsed) >= user.DailyQuotaLimit:
+						msg = "Daily quota exceeded"
+					case user.WeeklyQuotaLimit != -1 && effective(usage.WeeklyUsed) >= user.WeeklyQuotaLimit:
+						msg = "Weekly quota exceeded"
+					case user.MonthlyQuotaLimit != -1 && effective(usage.MonthlyUsed) >= user.MonthlyQuotaLimit:
+						msg = "Monthly quota exceeded"
+					case user.QuotaLimit != -1 && effective(user.QuotaUsed) >= user.QuotaLimit:
+						msg = "Total quota exceeded"
+					}
+					if msg != "" {
+						http.Error(w, msg, http.StatusForbidden)
+						return
+					}
+				}
+			}
+		}
+
+		next.ServeHTTP(w, r)
 	})
 }
 

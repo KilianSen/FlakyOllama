@@ -37,13 +37,10 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 			next(w, r)
 			return
 		}
+
+		// OIDC session already resolved by SessionMiddleware — pass through.
 		if val := r.Context().Value(ContextKeyUser); val != nil {
-			if u, ok := val.(models.User); ok {
-				// Check User-global Quota
-				if u.QuotaLimit != -1 && u.QuotaUsed >= u.QuotaLimit {
-					http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
-					return
-				}
+			if _, ok := val.(models.User); ok {
 				next(w, r)
 				return
 			}
@@ -73,14 +70,10 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 		for _, token := range masterTokens {
 			if token != "" && receivedToken == token {
 				ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
-				// Master admin gets max priority and Admin status
 				masterKey := models.ClientKey{Key: token, Label: "Master Auth", Credits: 999999999, QuotaLimit: -1, Active: true}
 				ctx = context.WithValue(ctx, ContextKeyClientData, masterKey)
-
-				// Inject virtual admin user so AdminOnly middleware passes
 				virtualAdmin := models.User{ID: "system_admin", Email: "admin@system", IsAdmin: true, QuotaLimit: -1}
 				ctx = context.WithValue(ctx, ContextKeyUser, virtualAdmin)
-
 				next(w, r.WithContext(ctx))
 				return
 			}
@@ -90,34 +83,13 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 		if km != nil {
 			ck, err := km.GetClientKey(receivedToken)
 			if err == nil && ck.Active {
-				// 1. Check Key-specific Sub-quota
-				if ck.QuotaLimit != -1 && ck.QuotaUsed >= ck.QuotaLimit {
-					http.Error(w, "API Key quota exceeded", http.StatusForbidden)
-					return
-				}
-
-				// 2. Check User-global Quota
-				if ck.UserID != "" {
-					u, err := km.GetUserByID(ck.UserID)
-					if err == nil {
-						if u.QuotaLimit != -1 && u.QuotaUsed >= u.QuotaLimit {
-							http.Error(w, "Account-wide quota exceeded", http.StatusForbidden)
-							return
-						}
-					}
-				}
-
 				ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
 				ctx = context.WithValue(ctx, ContextKeyClientData, ck)
-
-				// 3. Populate User context if linked
 				if ck.UserID != "" {
-					u, err := km.GetUserByID(ck.UserID)
-					if err == nil {
+					if u, err := km.GetUserByID(ck.UserID); err == nil {
 						ctx = context.WithValue(ctx, ContextKeyUser, u)
 					}
 				}
-
 				next(w, r.WithContext(ctx))
 				return
 			}
@@ -126,7 +98,6 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 			ak, err := km.GetAgentKey(receivedToken)
 			if err == nil && ak.Active {
 				ctx := context.WithValue(r.Context(), ContextKeyToken, receivedToken)
-				// Agents get priority based on their earnings
 				agentAsClient := models.ClientKey{Key: ak.Key, Label: ak.Label, Credits: ak.CreditsEarned, QuotaLimit: -1, Active: true}
 				ctx = context.WithValue(ctx, ContextKeyClientData, agentAsClient)
 				next(w, r.WithContext(ctx))
@@ -147,11 +118,4 @@ func GetTokenFromContext(ctx context.Context) (string, bool) {
 func GetClientDataFromContext(ctx context.Context) (models.ClientKey, bool) {
 	val, ok := ctx.Value(ContextKeyClientData).(models.ClientKey)
 	return val, ok
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

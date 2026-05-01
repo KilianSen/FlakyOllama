@@ -130,6 +130,7 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	// OpenAI Routes
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(b.AuthMiddleware)
+		r.Use(b.InferenceQuotaMiddleware)
 		r.Post("/chat/completions", b.HandleOpenAIChat)
 		r.Post("/completions", b.HandleGenerate)
 		r.Get("/models", b.HandleV1Models)
@@ -139,6 +140,7 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	// Ollama Routes
 	r.Route("/api", func(r chi.Router) {
 		r.Use(b.AuthMiddleware)
+		r.Use(b.InferenceQuotaMiddleware)
 		r.Post("/generate", b.HandleGenerate)
 		r.Post("/chat", b.HandleChat)
 		r.Post("/tags", b.HandleV1Tags)
