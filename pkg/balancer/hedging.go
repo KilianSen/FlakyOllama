@@ -25,9 +25,11 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 	}
 
 	var userID string
+	var isAdmin bool
 	if val := ctx.Value(auth.ContextKeyUser); val != nil {
 		if u, ok := val.(models.User); ok {
 			userID = u.ID
+			isAdmin = u.IsAdmin
 		}
 	}
 
@@ -35,7 +37,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 	// the response body (after this function returns) is controlled by the caller,
 	// not by a defer inside here.
 	if !allowHedging || !b.Config.EnableHedging {
-		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority, clientIP, contextHash, userID, ctx)
+		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, priority, clientIP, contextHash, userID, isAdmin, ctx)
 		select {
 		case res := <-resCh:
 			if res.Err != nil {
@@ -69,7 +71,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 
 	sendRequest := func(p int) {
 		reqCtx, cancel := context.WithCancel(ctx)
-		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, p, clientIP, contextHash, userID, reqCtx)
+		resCh := b.Queue.Push(models.InferenceRequest{Model: model}, p, clientIP, contextHash, userID, isAdmin, reqCtx)
 		select {
 		case res := <-resCh:
 			if res.Err != nil {

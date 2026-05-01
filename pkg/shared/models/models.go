@@ -68,6 +68,7 @@ type NodeStatus struct {
 	Errors          int         `json:"errors"`
 	Message         string      `json:"message"`
 	Draining        bool        `json:"draining"`
+	PrivateNode     bool        `json:"private_node,omitempty"` // True if only the owning user can route here
 	HasGPU          bool        `json:"has_gpu"`
 	LastSeen        time.Time   `json:"last_seen"`
 	CooloffUntil    time.Time   `json:"cooloff_until"`
@@ -252,14 +253,15 @@ type QuotaUsage struct {
 }
 
 type ClientKey struct {
-	Key        string    `json:"key"`
-	Label      string    `json:"label"`
-	QuotaLimit int64     `json:"quota_limit"` // Max tokens/credits allowed (-1 for unlimited)
-	QuotaUsed  int64     `json:"quota_used"`
-	Credits    float64   `json:"credits"` // Balance if using a credit system
-	Active     bool      `json:"active"`
-	UserID     string    `json:"user_id,omitempty"` // ID of the user owning this key
-	Status     KeyStatus `json:"status"`
+	Key         string    `json:"key"`
+	Label       string    `json:"label"`
+	QuotaLimit  int64     `json:"quota_limit"` // Max tokens/credits allowed (-1 for unlimited)
+	QuotaUsed   int64     `json:"quota_used"`
+	Credits     float64   `json:"credits"` // Balance if using a credit system
+	Active      bool      `json:"active"`
+	UserID      string    `json:"user_id,omitempty"` // ID of the user owning this key
+	Status      KeyStatus `json:"status"`
+	ErrorFormat string    `json:"error_format,omitempty"` // "" = default flat, "openai" = OpenAI nested
 }
 
 type User struct {
@@ -347,15 +349,16 @@ type QueuedRequestInfo struct {
 }
 
 type AgentKey struct {
-	Key           string    `json:"key"`
-	Label         string    `json:"label"`
-	NodeID        string    `json:"node_id"`        // Node associated with this key
-	BalancerToken string    `json:"balancer_token"` // Token the balancer sends to this agent
-	CreditsEarned float64   `json:"credits_earned"`
-	Reputation    float64   `json:"reputation"`
-	Active        bool      `json:"active"`
-	UserID        string    `json:"user_id,omitempty"` // ID of the user owning this key
-	Status        KeyStatus `json:"status"`
+	Key             string    `json:"key"`
+	Label           string    `json:"label"`
+	NodeID          string    `json:"node_id"`        // Node associated with this key
+	BalancerToken   string    `json:"balancer_token"` // Token the balancer sends to this agent
+	CreditsEarned   float64   `json:"credits_earned"`
+	Reputation      float64   `json:"reputation"`
+	Active          bool      `json:"active"`
+	UserID          string    `json:"user_id,omitempty"` // ID of the user owning this key
+	Status          KeyStatus `json:"status"`
+	ModelVisibility string    `json:"model_visibility,omitempty"` // "" or "public" = shared, "private" = owner only
 }
 
 type AgentTaskStatus string

@@ -4,6 +4,7 @@ import (
 	"FlakyOllama/pkg/protocols"
 	"FlakyOllama/pkg/shared/models"
 	"net/http"
+	"sort"
 )
 
 func (b *Balancer) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +81,10 @@ func (b *Balancer) HandleV1Models(w http.ResponseWriter, r *http.Request) {
 			OwnedBy: ownedBy,
 		})
 	}
+
+	sort.Slice(list.Data, func(i, j int) bool {
+		return list.Data[i].ID < list.Data[j].ID
+	})
 
 	b.jsonResponse(w, http.StatusOK, list)
 }

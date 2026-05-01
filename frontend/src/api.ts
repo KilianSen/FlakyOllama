@@ -87,6 +87,7 @@ export interface ClientKey {
   active: boolean;
   user_id?: string;
   status?: string;
+  error_format?: string;
 }
 
 export interface AgentKey {
@@ -99,6 +100,7 @@ export interface AgentKey {
   active: boolean;
   user_id?: string;
   status?: string;
+  model_visibility?: string;
 }
 
 export interface LogEntry {
@@ -411,6 +413,20 @@ export class FlakyOllamaSDK {
     return this.request<AgentKey>(`/api/v1/keys/agents/${key}/rotate`, {
       method: 'POST',
       body: JSON.stringify(opts ?? { rotate_agent_token: true, rotate_balancer_token: true }),
+    });
+  }
+
+  async updateClientKeySettings(key: string, settings: { error_format: string }): Promise<ClientKey> {
+    return this.request<ClientKey>(`/api/v1/keys/clients/${key}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
+    });
+  }
+
+  async updateAgentKeySettings(key: string, settings: { model_visibility: string }): Promise<AgentKey> {
+    return this.request<AgentKey>(`/api/v1/keys/agents/${key}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
     });
   }
 

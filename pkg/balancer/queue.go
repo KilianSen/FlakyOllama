@@ -18,6 +18,7 @@ type QueuedRequest struct {
 	ClientIP    string
 	ContextHash string
 	UserID      string
+	IsAdmin     bool
 	Ctx         context.Context
 	QueuedAt    time.Time
 	Response    chan QueuedResponse
@@ -83,7 +84,7 @@ func NewRequestQueue() *RequestQueue {
 	return rq
 }
 
-func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP, contextHash, userID string, ctx context.Context) chan QueuedResponse {
+func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP, contextHash, userID string, isAdmin bool, ctx context.Context) chan QueuedResponse {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
@@ -97,6 +98,7 @@ func (rq *RequestQueue) Push(req models.InferenceRequest, priority int, clientIP
 		ClientIP:    clientIP,
 		ContextHash: contextHash,
 		UserID:      userID,
+		IsAdmin:     isAdmin,
 		Ctx:         ctx,
 		QueuedAt:    time.Now(),
 		Response:    resCh,

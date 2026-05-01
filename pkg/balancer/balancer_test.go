@@ -14,7 +14,7 @@ func TestBalancer_SelectAgent(t *testing.T) {
 	b, _ := NewBalancer(":8080", ":memory:", config.DefaultConfig())
 
 	// Test case 1: No agents
-	_, err := b.SelectAgent("llama2", "")
+	_, err := b.SelectAgent("llama2", "", false)
 	if err == nil {
 		t.Errorf("Expected error when no agents available, got nil")
 	}
@@ -36,7 +36,7 @@ func TestBalancer_SelectAgent(t *testing.T) {
 	// Wait for actor to process
 	time.Sleep(10 * time.Millisecond)
 
-	addr, err := b.SelectAgent("llama2", "")
+	addr, err := b.SelectAgent("llama2", "", false)
 	if err != nil {
 		t.Fatalf("Failed to select agent: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestBalancer_SelectAgent(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	addr, err = b.SelectAgent("llama2", "")
+	addr, err = b.SelectAgent("llama2", "", false)
 	if err != nil {
 		t.Fatalf("Failed to select agent: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestBalancer_SelectAgent(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	addr, err = b.SelectAgent("llama2", "")
+	addr, err = b.SelectAgent("llama2", "", false)
 	if err != nil {
 		t.Fatalf("Failed to select agent: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestBalancer_SelectAgent(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	addr, err = b.SelectAgent("llama2", "rich_user")
+	addr, err = b.SelectAgent("llama2", "rich_user", false)
 	if err != nil {
 		t.Fatalf("Failed to select agent for rich_user: %v", err)
 	}

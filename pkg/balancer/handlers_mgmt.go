@@ -896,6 +896,82 @@ func (b *Balancer) HandleV1LogCollect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+func openAIErrorType(code int) string {
+	switch {
+	case code == http.StatusUnauthorized || code == http.StatusForbidden:
+		return "authentication_error"
+	case code == http.StatusBadRequest:
+		return "invalid_request_error"
+	case code == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	default:
+		return "api_error"
+	}
+}
+
+func (b *Balancer) respondError(w http.ResponseWriter, r *http.Request, code int, message string) {
+	var format string
+	if ck, ok := auth.GetClientDataFromContext(r.Context()); ok {
+		format = ck.ErrorFormat
+	}
+	if format == "openai" {
+		b.jsonResponse(w, code, map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": message,
+				"type":    openAIErrorType(code),
+				"param":   nil,
+				"code":    nil,
+			},
+		})
+		return
+	}
+	b.jsonError(w, code, message)
+}
+
+func (b *Balancer) HandleV1ClientKeyUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var req struct {
+		ErrorFormat string `json:"error_format"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	k, err := b.Storage.GetClientKey(key)
+	if err != nil {
+		b.jsonError(w, http.StatusNotFound, "key not found")
+		return
+	}
+	k.ErrorFormat = req.ErrorFormat
+	if err := b.Storage.UpdateClientKey(k); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, k)
+}
+
+func (b *Balancer) HandleV1AgentKeyUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var req struct {
+		ModelVisibility string `json:"model_visibility"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		b.jsonError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	k, err := b.Storage.GetAgentKey(key)
+	if err != nil {
+		b.jsonError(w, http.StatusNotFound, "key not found")
+		return
+	}
+	k.ModelVisibility = req.ModelVisibility
+	if err := b.Storage.UpdateAgentKey(k); err != nil {
+		b.jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.jsonResponse(w, http.StatusOK, k)
+}
+
 func (b *Balancer) jsonResponse(w http.ResponseWriter, code int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

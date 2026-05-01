@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2, KeyRound, ShieldCheck, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Plus, User, Copy, Zap, Server, Check, X, Clock, Trash2, KeyRound, ShieldCheck, AlertTriangle, RefreshCw, Lock, Globe } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import sdk, { type ClientKey, type AgentKey } from '../api';
 
@@ -110,13 +111,14 @@ export const KeysPage: React.FC = () => {
                     <TableHead className="text-[10px] font-black uppercase py-4 pl-6">Label / Owner</TableHead>
                     <TableHead className="text-[10px] font-black uppercase">API Key</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-center">Quota / Usage</TableHead>
+                    <TableHead className="text-[10px] font-black uppercase text-center">Error Format</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-center">Status</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-right pr-6">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {clients.length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-12 text-muted-foreground text-xs italic">No cluster-wide keys found</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={6} className="text-center py-12 text-muted-foreground text-xs italic">No cluster-wide keys found</TableCell></TableRow>
                   ) : clients.map(k => (
                     <TableRow key={k.key} className="border-border/40 hover:bg-muted/5 transition-colors">
                       <TableCell className="font-bold text-xs pl-6">
@@ -144,6 +146,26 @@ export const KeysPage: React.FC = () => {
                                </div>
                             )}
                          </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Select
+                          value={k.error_format || ''}
+                          onValueChange={async (val) => {
+                            try {
+                              await sdk.updateClientKeySettings(k.key, { error_format: val });
+                              toast.success('Error format updated');
+                              load();
+                            } catch (err: any) { toast.error(err.message); }
+                          }}
+                        >
+                          <SelectTrigger className="h-6 text-[9px] font-black w-28 mx-auto border-border/40 bg-muted/30">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="" className="text-[10px]">Standard</SelectItem>
+                            <SelectItem value="openai" className="text-[10px]">OpenAI</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell className="text-center">
                          {getStatusBadge(k.status || '', k.active)}
@@ -194,13 +216,14 @@ export const KeysPage: React.FC = () => {
                       <div className="flex items-center gap-1.5"><ShieldCheck size={10} className="text-sky-400" /> Balancer Token</div>
                     </TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-center">Credits</TableHead>
+                    <TableHead className="text-[10px] font-black uppercase text-center">Visibility</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-center">Status</TableHead>
                     <TableHead className="text-[10px] font-black uppercase text-right pr-6">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {agents.length === 0 ? (
-                    <TableRow><TableCell colSpan={6} className="text-center py-12 text-muted-foreground text-xs italic">No agent identities registered</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={7} className="text-center py-12 text-muted-foreground text-xs italic">No agent identities registered</TableCell></TableRow>
                   ) : agents.map(k => (
                     <TableRow key={k.key} className="border-border/40 hover:bg-muted/5 transition-colors">
                       <TableCell className="font-bold text-xs pl-6">
@@ -238,6 +261,30 @@ export const KeysPage: React.FC = () => {
                       </TableCell>
                       <TableCell className="text-center font-mono text-xs font-black text-amber-400">
                          {k.credits_earned.toLocaleString(undefined, { minimumFractionDigits: 1 })} φ
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Select
+                          value={k.model_visibility || 'public'}
+                          onValueChange={async (val) => {
+                            try {
+                              await sdk.updateAgentKeySettings(k.key, { model_visibility: val });
+                              toast.success('Visibility updated');
+                              load();
+                            } catch (err: any) { toast.error(err.message); }
+                          }}
+                        >
+                          <SelectTrigger className="h-6 text-[9px] font-black w-24 mx-auto border-border/40 bg-muted/30">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="public" className="text-[10px]">
+                              <div className="flex items-center gap-1.5"><Globe size={10} className="text-emerald-400" /> Public</div>
+                            </SelectItem>
+                            <SelectItem value="private" className="text-[10px]">
+                              <div className="flex items-center gap-1.5"><Lock size={10} className="text-red-400" /> Private</div>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell className="text-center">
                         {getStatusBadge(k.status || '', k.active)}
@@ -302,16 +349,21 @@ const CreateClientKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
   const [quota, setQuota] = useState('-1');
+  const [errorFormat, setErrorFormat] = useState('');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await sdk.createClientKey({ 
-        label, 
-        quota_limit: parseInt(quota)
+      await sdk.createClientKey({
+        label,
+        quota_limit: parseInt(quota),
+        error_format: errorFormat,
       });
       toast.success('Key generated');
       setOpen(false);
+      setLabel('');
+      setQuota('-1');
+      setErrorFormat('');
       onSuccess();
     } catch (err: any) { toast.error(err.message); }
   };
@@ -338,6 +390,19 @@ const CreateClientKeyDialog = ({ onSuccess }: { onSuccess: () => void }) => {
               <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Initial Quota</Label>
               <Input type="number" value={quota} onChange={e => setQuota(e.target.value)} className="font-bold" />
               <p className="text-[9px] text-muted-foreground italic font-medium">-1 for unlimited tokens</p>
+            </div>
+            <div className="grid gap-2">
+              <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Error Response Format</Label>
+              <Select value={errorFormat} onValueChange={setErrorFormat}>
+                <SelectTrigger className="font-bold">
+                  <SelectValue placeholder="Standard (flat JSON)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Standard (flat JSON)</SelectItem>
+                  <SelectItem value="openai">OpenAI-Compatible (nested)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[9px] text-muted-foreground italic font-medium">Use OpenAI format for clients that require structured error objects</p>
             </div>
           </div>
           <DialogFooter>
@@ -422,15 +487,17 @@ const CreateAgentKeyDialog = ({ onSuccess, copy }: { onSuccess: () => void; copy
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
   const [nodeId, setNodeId] = useState('');
+  const [modelVisibility, setModelVisibility] = useState('public');
   const [createdKey, setCreatedKey] = useState<AgentKey | null>(null);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const newKey = await sdk.createAgentKey({ label, node_id: nodeId });
+      const newKey = await sdk.createAgentKey({ label, node_id: nodeId, model_visibility: modelVisibility });
       setOpen(false);
       setLabel('');
       setNodeId('');
+      setModelVisibility('public');
       setCreatedKey(newKey);
       onSuccess();
     } catch (err: any) { toast.error(err.message); }
@@ -460,6 +527,23 @@ const CreateAgentKeyDialog = ({ onSuccess, copy }: { onSuccess: () => void; copy
               <div className="grid gap-2">
                 <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Target Node ID (Optional)</Label>
                 <Input placeholder="swarm-valeria-1" value={nodeId} onChange={e => setNodeId(e.target.value)} className="font-bold" />
+              </div>
+              <div className="grid gap-2">
+                <Label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Model Visibility</Label>
+                <Select value={modelVisibility} onValueChange={setModelVisibility}>
+                  <SelectTrigger className="font-bold">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="public">
+                      <div className="flex items-center gap-2"><Globe size={12} className="text-emerald-400" /> Public — shared with all users</div>
+                    </SelectItem>
+                    <SelectItem value="private">
+                      <div className="flex items-center gap-2"><Lock size={12} className="text-red-400" /> Private — owner only</div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[9px] text-muted-foreground italic font-medium">Private nodes only serve requests from the node owner's account</p>
               </div>
             </div>
             <DialogFooter>

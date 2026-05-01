@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
+func (b *Balancer) SelectAgent(modelName, userID string, isAdmin bool) (string, error) {
 	var bestAgent string
 	var bestScore float64 = -1e18 // Use a very small number to handle negative scores
 	var userPolicy models.UserModelPolicy
@@ -49,6 +49,11 @@ func (b *Balancer) SelectAgent(modelName, userID string) (string, error) {
 
 		// Check Cluster-wide Policy for this node/model
 		if pol, ok := clusterPolicies[a.ID]; ok && pol.Banned {
+			continue
+		}
+
+		// Skip private nodes if the requesting user doesn't own them (admins bypass)
+		if a.PrivateNode && !isAdmin && a.UserID != userID {
 			continue
 		}
 

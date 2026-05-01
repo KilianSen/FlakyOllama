@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -45,7 +46,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	b.configMu.RUnlock()
 
 	if found && vConfig.Type == "pipeline" {
-		http.Error(w, "Pipeline models not supported in generate endpoint", http.StatusBadRequest)
+		b.respondError(w, r, http.StatusBadRequest, "Pipeline models not supported in generate endpoint")
 		return
 	}
 	resolvedModel = req.Model
@@ -53,7 +54,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	req.Model = resolvedModel
 
 	if b.Queue.QueueDepth() >= b.Config.MaxQueueDepth {
-		http.Error(w, "Cluster saturated", http.StatusTooManyRequests)
+		b.respondError(w, r, http.StatusTooManyRequests, "Cluster saturated")
 		return
 	}
 
@@ -75,7 +76,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/api/generate", body, r.RemoteAddr, req.AllowHedging, req.Priority, contextHash)
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		b.respondError(w, r, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -114,7 +115,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	logging.Global.Debugf("HandleChat %s: using balancerToken=%q (empty=%v)", r.RemoteAddr, balancerToken, balancerToken == "")
 
 	if b.Queue.QueueDepth() >= b.Config.MaxQueueDepth {
-		http.Error(w, "Cluster saturated", http.StatusTooManyRequests)
+		b.respondError(w, r, http.StatusTooManyRequests, "Cluster saturated")
 		return
 	}
 
@@ -140,7 +141,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	if found && vConfig.Type == "pipeline" {
 		output, err := b.ExecutePipeline(ctx, req, vConfig, r.RemoteAddr)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			b.respondError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		resp := models.ChatResponse{
@@ -164,7 +165,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	resp, _, agentAddr, err := b.DoHedgedRequest(ctx, req.Model, "/api/chat", body, r.RemoteAddr, req.AllowHedging, req.Priority, contextHash)
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		b.respondError(w, r, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -211,6 +212,15 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		logging.Global.Debugf("Register: agent key %s resolved balancerToken=%q nodeID=%q userID=%q", providedToken, balancerToken, nodeID, userID)
 	}
 
+	// Determine privacy: only individual (non-global) agent keys can be private
+	privateNode := false
+	if !isGlobal {
+		ak, err := b.Storage.GetAgentKey(providedToken)
+		if err == nil {
+			privateNode = ak.ModelVisibility == "private"
+		}
+	}
+
 	// Create/Update State
 	status := models.NodeStatus{
 		ID:            nodeID,
@@ -224,6 +234,7 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 		GPUModel:      req.GPUModel,
 		LastSeen:      time.Now(),
 		State:         models.StateHealthy,
+		PrivateNode:   privateNode,
 	}
 
 	b.State.Do(func(s *ClusterState) {
@@ -272,11 +283,25 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 
+	// Get requesting user for private node filtering
+	var requestingUserID string
+	var requestingIsAdmin bool
+	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+		if u, ok := val.(models.User); ok {
+			requestingUserID = u.ID
+			requestingIsAdmin = u.IsAdmin
+		}
+	}
+
 	// Build best-known size per model across all healthy nodes.
 	modelSizes := make(map[string]int64)
 	uniqueModels := make(map[string]bool)
 	for _, node := range snap.Agents {
 		if node.State != models.StateBroken && !node.Draining {
+			// Skip private nodes for users who don't own them (admins bypass)
+			if node.PrivateNode && !requestingIsAdmin && node.UserID != requestingUserID {
+				continue
+			}
 			for _, m := range node.LocalModels {
 				uniqueModels[m.Name] = true
 				if m.Size > modelSizes[m.Name] {
@@ -304,6 +329,10 @@ func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 		}
 		tags.Models = append(tags.Models, info)
 	}
+
+	sort.Slice(tags.Models, func(i, j int) bool {
+		return tags.Models[i].Name < tags.Models[j].Name
+	})
 
 	b.jsonResponse(w, http.StatusOK, tags)
 }

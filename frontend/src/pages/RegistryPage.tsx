@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { toast } from 'sonner';
 import sdk, { type ModelRequest, type NodeStatus } from '../api';
 import { useCluster } from '../ClusterContext';
-import { computeRoutability, LATENCY_HINTS, deriveVirtualModelMeta, formatBytes, inferCapabilities, CAPABILITY_LABELS } from '../lib/modelUtils';
+import { computeRoutability, LATENCY_HINTS, deriveVirtualModelMeta, formatBytes, CAPABILITY_LABELS } from '../lib/modelUtils';
 
 // Common models for the browser
 const POPULAR_MODELS = [
@@ -44,7 +44,8 @@ export const RegistryPage: React.FC = () => {
     try {
       const data = await sdk.getModelRequests('pending');
       setRequests(data || []);
-    } catch (err) {
+    } catch (e) {
+      console.error(e);
       setRequests([]);
     }
   };
