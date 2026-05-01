@@ -35,31 +35,6 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 				if claims, ok := token.Claims.(*Claims); ok {
 					user, err := b.Storage.GetUserBySub(claims.Sub)
 					if err == nil {
-						// Multi-window quota check with credit offset
-						if usage, err := b.Storage.GetUserQuotaUsage(user.ID); err == nil {
-							creditOffset := int64(usage.AgentCreditsEarned)
-							effectiveOf := func(raw int64) int64 {
-								if e := raw - creditOffset; e > 0 {
-									return e
-								}
-								return 0
-							}
-							var quotaMsg string
-							switch {
-							case user.DailyQuotaLimit != -1 && effectiveOf(usage.DailyUsed) >= user.DailyQuotaLimit:
-								quotaMsg = "Daily quota exceeded"
-							case user.WeeklyQuotaLimit != -1 && effectiveOf(usage.WeeklyUsed) >= user.WeeklyQuotaLimit:
-								quotaMsg = "Weekly quota exceeded"
-							case user.MonthlyQuotaLimit != -1 && effectiveOf(usage.MonthlyUsed) >= user.MonthlyQuotaLimit:
-								quotaMsg = "Monthly quota exceeded"
-							case user.QuotaLimit != -1 && effectiveOf(user.QuotaUsed) >= user.QuotaLimit:
-								quotaMsg = "Total quota exceeded"
-							}
-							if quotaMsg != "" {
-								http.Error(w, quotaMsg, http.StatusForbidden)
-								return
-							}
-						}
 						// Ensure Admin status is synced from JWT if it changed
 						if user.IsAdmin != claims.Admin {
 							user.IsAdmin = claims.Admin
