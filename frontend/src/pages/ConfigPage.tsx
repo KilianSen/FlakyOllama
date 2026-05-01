@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, RefreshCw, Shield, Zap, BarChart2, Clock, Trash2, TrendingUp, Cpu, Layers, Plus } from 'lucide-react';
+import { Save, RefreshCw, Shield, Zap, BarChart2, Clock, Trash2, TrendingUp, Cpu, Layers, Plus, Check, X, ArrowUp, ArrowDown, ChevronDown, ChevronRight } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { api, type Config } from '../api';
 import { useCluster } from '../ClusterContext';
@@ -105,121 +106,420 @@ function FactorTable({ title, factors, onUpdate }: { title: string, factors: Rec
   );
 }
 
-function VirtualModelTable({ 
-    virtualModels, 
-    onUpdate,
-    availableModels 
-  }: { 
-    virtualModels: Record<string, any>, 
-    onUpdate: (f: Record<string, any>) => void,
-    availableModels: string[]
-  }) {
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-           <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Registered Virtual Models</p>
-           <Button
-             variant="outline" size="sm" className="h-8 text-[10px] font-black uppercase tracking-widest gap-2"
-             onClick={() => {
-               const m = prompt('Enter virtual model alias (e.g. auto-coder):');
-               if (m) onUpdate({ ...virtualModels, [m]: { type: 'metric', strategy: 'fastest', targets: [] } });
-             }}
-           ><Plus size={12} /> New Alias</Button>
+// ── Virtual Model sub-components ─────────────────────────────────────────────
+
+function TargetsEditor({
+  targets,
+  availableModels,
+  onChange,
+}: {
+  targets: string[];
+  availableModels: string[];
+  onChange: (t: string[]) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[9px] font-black uppercase opacity-50">Backing Target Models</Label>
+      <div className="flex flex-wrap gap-2 p-2.5 rounded-lg bg-background/50 border border-border/30 min-h-10">
+        {targets.map(t => (
+          <Badge key={t} className="gap-1 pl-2 pr-1 h-6 text-[10px] font-bold font-mono">
+            {t}
+            <button onClick={() => onChange(targets.filter(x => x !== t))} className="hover:text-red-400 p-0.5 ml-0.5">
+              <X size={9} />
+            </button>
+          </Badge>
+        ))}
+        <Select onValueChange={v => { if (!targets.includes(v)) onChange([...targets, v]); }}>
+          <SelectTrigger className="h-6 w-32 text-[9px] font-black uppercase border-dashed bg-transparent">
+            + Add Model
+          </SelectTrigger>
+          <SelectContent>
+            {availableModels.filter(m => !targets.includes(m)).map(m => (
+              <SelectItem key={m} value={m} className="font-mono text-xs">{m}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
+
+function PipelineStepEditor({
+  step, idx, total, availableModels, onChange, onRemove, onMoveUp, onMoveDown,
+}: {
+  step: any;
+  idx: number;
+  total: number;
+  availableModels: string[];
+  onChange: (patch: any) => void;
+  onRemove: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+}) {
+  const [showPrompt, setShowPrompt] = useState(!!step.system_prompt);
+
+  return (
+    <div className="rounded-lg border border-border/40 bg-muted/10 p-3 space-y-3">
+      <div className="flex items-center gap-2">
+        <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-[9px] font-black text-muted-foreground shrink-0">
+          {idx + 1}
         </div>
-        <div className="space-y-3">
-          {Object.entries(virtualModels || {}).map(([name, vConfig]) => (
-            <div key={name} className="rounded-xl border border-border/50 bg-muted/20 p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="font-mono text-[10px] font-black px-2 bg-background">{name}</Badge>
-                  <Select value={vConfig.type} onValueChange={(t) => onUpdate({ ...virtualModels, [name]: { ...vConfig, type: t } })}>
-                    <SelectTrigger className="h-7 w-28 text-[9px] font-black uppercase">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="metric">Metric</SelectItem>
-                      <SelectItem value="arena">Arena</SelectItem>
-                      <SelectItem value="pipeline">Pipeline</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button 
-                  variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                  onClick={() => {
-                    const next = { ...virtualModels };
-                    delete next[name];
-                    onUpdate(next);
-                  }}
-                ><Trash2 size={12} /></Button>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {vConfig.type === 'metric' && (
-                  <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase opacity-50">Selection Strategy</Label>
-                    <Select value={vConfig.strategy} onValueChange={(s) => onUpdate({ ...virtualModels, [name]: { ...vConfig, strategy: s } })}>
-                      <SelectTrigger className="h-8 text-xs font-bold">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="fastest">Fastest (TTFT)</SelectItem>
-                        <SelectItem value="cheapest">Cheapest (Factor)</SelectItem>
-                        <SelectItem value="most_reliable">Most Reliable</SelectItem>
-                        <SelectItem value="random">Random (Canary)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+        <Select value={step.model || ''} onValueChange={v => onChange({ model: v })}>
+          <SelectTrigger className="h-7 flex-1 text-[10px] font-bold font-mono">
+            <SelectValue placeholder="Select model..." />
+          </SelectTrigger>
+          <SelectContent>
+            {availableModels.map(m => <SelectItem key={m} value={m} className="font-mono text-xs">{m}</SelectItem>)}
+          </SelectContent>
+        </Select>
 
-                {vConfig.type === 'pipeline' && (
-                  <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase opacity-50">Judge Model</Label>
-                    <Select value={vConfig.judge_model} onValueChange={(j) => onUpdate({ ...virtualModels, [name]: { ...vConfig, judge_model: j } })}>
-                      <SelectTrigger className="h-8 text-xs font-bold">
-                        <SelectValue placeholder="Select Judge..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+        <Select value={step.action || 'generate'} onValueChange={v => onChange({ action: v })}>
+          <SelectTrigger className="h-7 w-28 text-[9px] font-black uppercase">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="generate">Generate</SelectItem>
+            <SelectItem value="classify">Classify</SelectItem>
+            <SelectItem value="check">Check</SelectItem>
+          </SelectContent>
+        </Select>
 
-                <div className="space-y-1.5 md:col-span-2">
-                  <Label className="text-[9px] font-black uppercase opacity-50">Backing Target Models</Label>
-                  <div className="flex flex-wrap gap-2 p-2 rounded-lg bg-background/50 border border-border/30">
-                    {vConfig.targets?.map((t: string) => (
-                      <Badge key={t} className="gap-1 pl-2 pr-1 h-6 text-[10px] font-bold">
-                        {t}
-                        <button onClick={() => {
-                           const nextTargets = vConfig.targets.filter((target: string) => target !== t);
-                           onUpdate({ ...virtualModels, [name]: { ...vConfig, targets: nextTargets } });
-                        }} className="hover:text-red-400 p-0.5"><Trash2 size={10} /></button>
-                      </Badge>
-                    ))}
-                    <Select onValueChange={(v) => {
-                       if (vConfig.targets?.includes(v)) return;
-                       const nextTargets = [...(vConfig.targets || []), v];
-                       onUpdate({ ...virtualModels, [name]: { ...vConfig, targets: nextTargets } });
-                    }}>
-                      <SelectTrigger className="h-6 w-32 text-[9px] font-black uppercase border-dashed">
-                        + Add Target
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-          {Object.keys(virtualModels || {}).length === 0 && (
-            <p className="py-8 text-center text-xs italic text-muted-foreground/50 border border-dashed rounded-xl">No virtual models defined</p>
-          )}
+        <div className="flex items-center gap-0.5 shrink-0">
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onMoveUp} disabled={!onMoveUp}>
+            <ArrowUp size={11} />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onMoveDown} disabled={!onMoveDown}>
+            <ArrowDown size={11} />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={onRemove}>
+            <Trash2 size={11} />
+          </Button>
         </div>
       </div>
-    );
+
+      <button
+        className="flex items-center gap-1 text-[9px] font-black uppercase text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+        onClick={() => setShowPrompt(p => !p)}
+      >
+        {showPrompt ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        System Prompt {step.system_prompt ? '· set' : '· optional'}
+      </button>
+      {showPrompt && (
+        <Textarea
+          value={step.system_prompt || ''}
+          onChange={e => onChange({ system_prompt: e.target.value })}
+          placeholder="Optional system prompt injected at this step..."
+          className="text-xs font-mono resize-none h-20 bg-background/50"
+        />
+      )}
+
+      <div className="grid grid-cols-3 gap-2">
+        <div className="space-y-1">
+          <Label className="text-[8px] font-black uppercase opacity-40">Max Retries</Label>
+          <Input
+            type="number" min={0} max={10}
+            value={step.max_retries ?? 1}
+            onChange={e => onChange({ max_retries: parseInt(e.target.value) || 0 })}
+            className="h-7 text-[10px] font-mono bg-background/50"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[8px] font-black uppercase opacity-40">On Success</Label>
+          <Select value={step.on_success || 'next'} onValueChange={v => onChange({ on_success: v })}>
+            <SelectTrigger className="h-7 text-[9px] font-black"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="next">Next Step</SelectItem>
+              <SelectItem value="return">Return</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[8px] font-black uppercase opacity-40">On Fail</Label>
+          <Select value={step.on_fail || 'error'} onValueChange={v => onChange({ on_fail: v })}>
+            <SelectTrigger className="h-7 text-[9px] font-black"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="retry">Retry</SelectItem>
+              <SelectItem value="fallback">Fallback</SelectItem>
+              <SelectItem value="error">Error</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VirtualModelEditor({
+  name,
+  config,
+  availableModels,
+  onUpdate,
+  onDelete,
+  onRename,
+}: {
+  name: string;
+  config: any;
+  availableModels: string[];
+  onUpdate: (c: any) => void;
+  onDelete: () => void;
+  onRename: (n: string) => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(name);
+
+  const set = (field: string, val: any) => onUpdate({ ...config, [field]: val });
+
+  const typeColors: Record<string, { bar: string; text: string; bg: string }> = {
+    metric:   { bar: 'bg-blue-500',   text: 'text-blue-400',   bg: 'bg-blue-500/10'   },
+    pipeline: { bar: 'bg-purple-500', text: 'text-purple-400', bg: 'bg-purple-500/10' },
+    arena:    { bar: 'bg-amber-500',  text: 'text-amber-400',  bg: 'bg-amber-500/10'  },
+  };
+  const tc = typeColors[config.type] ?? typeColors.metric;
+
+  const addStep = () => onUpdate({
+    ...config,
+    steps: [...(config.steps || []), { action: 'generate', model: '', system_prompt: '', max_retries: 1, on_success: 'next', on_fail: 'error' }],
+  });
+  const removeStep = (idx: number) =>
+    onUpdate({ ...config, steps: (config.steps || []).filter((_: any, i: number) => i !== idx) });
+  const updateStep = (idx: number, patch: any) =>
+    onUpdate({ ...config, steps: (config.steps || []).map((s: any, i: number) => i === idx ? { ...s, ...patch } : s) });
+  const moveStep = (idx: number, dir: -1 | 1) => {
+    const steps = [...(config.steps || [])];
+    [steps[idx], steps[idx + dir]] = [steps[idx + dir], steps[idx]];
+    onUpdate({ ...config, steps });
+  };
+
+  const commitRename = () => {
+    const trimmed = draftName.trim();
+    if (trimmed && trimmed !== name) onRename(trimmed);
+    setRenaming(false);
+  };
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
+      <div className={`h-0.5 w-full ${tc.bar}`} />
+
+      {/* Header */}
+      <div className="flex items-center gap-3 p-4 border-b border-border/20">
+        <div className={`p-1.5 rounded-md shrink-0 ${tc.bg} ${tc.text}`}>
+          {config.type === 'pipeline' ? <RefreshCw size={14} /> : <Zap size={14} />}
+        </div>
+
+        {renaming ? (
+          <Input
+            autoFocus
+            value={draftName}
+            onChange={e => setDraftName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitRename();
+              if (e.key === 'Escape') { setDraftName(name); setRenaming(false); }
+            }}
+            onBlur={commitRename}
+            className="h-7 text-sm font-mono font-black w-48 bg-background"
+          />
+        ) : (
+          <button
+            className="font-mono text-sm font-black hover:underline underline-offset-2 text-left"
+            onDoubleClick={() => { setDraftName(name); setRenaming(true); }}
+            title="Double-click to rename"
+          >
+            {name}
+          </button>
+        )}
+
+        <Badge variant="outline" className={`text-[8px] h-4 px-1.5 uppercase font-black border-current/20 ${tc.text}`}>
+          {config.type}
+        </Badge>
+
+        <div className="ml-auto flex items-center gap-2">
+          <Select value={config.type} onValueChange={t => set('type', t)}>
+            <SelectTrigger className="h-7 w-28 text-[9px] font-black uppercase">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="metric">Metric</SelectItem>
+              <SelectItem value="pipeline">Pipeline</SelectItem>
+              <SelectItem value="arena">Arena</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={onDelete}>
+            <Trash2 size={12} />
+          </Button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="p-4 space-y-4">
+
+        {/* ── Metric ── */}
+        {config.type === 'metric' && (
+          <>
+            <div className="space-y-1.5">
+              <Label className="text-[9px] font-black uppercase opacity-50">Selection Strategy</Label>
+              <Select value={config.strategy || 'fastest'} onValueChange={s => set('strategy', s)}>
+                <SelectTrigger className="h-8 text-xs font-bold"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fastest">Fastest — lowest TTFT</SelectItem>
+                  <SelectItem value="cheapest">Cheapest — lowest cost factor</SelectItem>
+                  <SelectItem value="most_reliable">Most Reliable — highest reputation</SelectItem>
+                  <SelectItem value="random">Random — canary / A/B split</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <TargetsEditor
+              targets={config.targets || []}
+              availableModels={availableModels}
+              onChange={t => set('targets', t)}
+            />
+          </>
+        )}
+
+        {/* ── Arena ── */}
+        {config.type === 'arena' && (
+          <>
+            <div className="space-y-1.5">
+              <Label className="text-[9px] font-black uppercase opacity-50">Judge Model</Label>
+              <Select value={config.judge_model || ''} onValueChange={j => set('judge_model', j)}>
+                <SelectTrigger className="h-8 text-xs font-bold">
+                  <SelectValue placeholder="Select judge model..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map(m => <SelectItem key={m} value={m} className="font-mono text-xs">{m}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <TargetsEditor
+              targets={config.targets || []}
+              availableModels={availableModels}
+              onChange={t => set('targets', t)}
+            />
+          </>
+        )}
+
+        {/* ── Pipeline ── */}
+        {config.type === 'pipeline' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-[9px] font-black uppercase opacity-50">
+                Pipeline Steps · {(config.steps || []).length}
+              </Label>
+              <Button variant="outline" size="sm" className="h-7 text-[9px] font-black uppercase gap-1" onClick={addStep}>
+                <Plus size={10} /> Add Step
+              </Button>
+            </div>
+
+            {(config.steps || []).length === 0 && (
+              <p className="text-[10px] italic text-muted-foreground/40 text-center py-5 border border-dashed rounded-lg">
+                No steps yet — click "Add Step" to build the pipeline
+              </p>
+            )}
+
+            <div className="space-y-2">
+              {(config.steps || []).map((step: any, idx: number) => (
+                <PipelineStepEditor
+                  key={idx}
+                  step={step}
+                  idx={idx}
+                  total={(config.steps || []).length}
+                  availableModels={availableModels}
+                  onChange={patch => updateStep(idx, patch)}
+                  onRemove={() => removeStep(idx)}
+                  onMoveUp={idx > 0 ? () => moveStep(idx, -1) : undefined}
+                  onMoveDown={idx < (config.steps || []).length - 1 ? () => moveStep(idx, 1) : undefined}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VirtualModelTable({
+  virtualModels,
+  onUpdate,
+  availableModels,
+}: {
+  virtualModels: Record<string, any>;
+  onUpdate: (f: Record<string, any>) => void;
+  availableModels: string[];
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+
+  const handleAdd = () => {
+    const trimmed = newName.trim();
+    if (!trimmed || virtualModels[trimmed]) return;
+    onUpdate({ ...virtualModels, [trimmed]: { type: 'metric', strategy: 'fastest', targets: [] } });
+    setNewName('');
+    setAdding(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+          {Object.keys(virtualModels || {}).length} Virtual Models Registered
+        </p>
+        {!adding && (
+          <Button
+            variant="outline" size="sm" className="h-8 text-[10px] font-black uppercase tracking-widest gap-2"
+            onClick={() => { setAdding(true); setNewName(''); }}
+          >
+            <Plus size={12} /> New Virtual Model
+          </Button>
+        )}
+      </div>
+
+      {adding && (
+        <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3">
+          <Input
+            autoFocus
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') setAdding(false); }}
+            placeholder="virtual-model-alias (e.g. auto-coder)"
+            className="h-8 text-xs font-mono flex-1 bg-background"
+          />
+          <Button size="sm" className="h-8 text-[10px] font-black gap-1" onClick={handleAdd} disabled={!newName.trim() || !!virtualModels[newName.trim()]}>
+            <Check size={12} /> Create
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setAdding(false)}>
+            <X size={12} />
+          </Button>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {Object.entries(virtualModels || {}).map(([name, vConfig]) => (
+          <VirtualModelEditor
+            key={name}
+            name={name}
+            config={vConfig}
+            availableModels={availableModels}
+            onUpdate={next => onUpdate({ ...virtualModels, [name]: next })}
+            onDelete={() => { const next = { ...virtualModels }; delete next[name]; onUpdate(next); }}
+            onRename={newAlias => {
+              if (!newAlias || virtualModels[newAlias]) return;
+              const next: Record<string, any> = {};
+              for (const [k, v] of Object.entries(virtualModels)) {
+                next[k === name ? newAlias : k] = v;
+              }
+              onUpdate(next);
+            }}
+          />
+        ))}
+        {Object.keys(virtualModels || {}).length === 0 && !adding && (
+          <p className="py-10 text-center text-xs italic text-muted-foreground/40 border border-dashed rounded-xl">
+            No virtual models defined — create one above
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export const ConfigPage: React.FC = () => {
