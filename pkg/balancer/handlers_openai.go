@@ -58,9 +58,9 @@ func (b *Balancer) HandleV1Models(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add Virtual Models to OpenAI list
 	b.configMu.RLock()
-	for m := range b.Config.VirtualModels {
+	virtualModels := b.Config.VirtualModels
+	for m := range virtualModels {
 		uniqueModels[m] = true
 	}
 	b.configMu.RUnlock()
@@ -69,11 +69,15 @@ func (b *Balancer) HandleV1Models(w http.ResponseWriter, r *http.Request) {
 	list.Object = "list"
 	list.Data = make([]models.OpenAIModel, 0, len(uniqueModels))
 	for m := range uniqueModels {
+		ownedBy := "flakyollama"
+		if _, isVirtual := virtualModels[m]; isVirtual {
+			ownedBy = "flakyollama/virtual"
+		}
 		list.Data = append(list.Data, models.OpenAIModel{
 			ID:      m,
 			Object:  "model",
 			Created: 1686935002,
-			OwnedBy: "flakyollama",
+			OwnedBy: ownedBy,
 		})
 	}
 

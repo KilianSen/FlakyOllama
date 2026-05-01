@@ -1,4 +1,4 @@
-import type { ClusterStatus, NodeStatus } from '../api';
+import type { ClusterStatus, NodeStatus, VirtualModelConfig } from '../api';
 
 // ─── Model Capability Inference ──────────────────────────────────────────────
 
@@ -90,6 +90,37 @@ export interface ModelRoutability {
 
 export function computeRoutability(modelName: string, status: ClusterStatus): ModelRoutability {
   const nodes = Object.values(status.nodes) as NodeStatus[];
+  const virtualCfg = status.virtual_models?.[modelName];
+
+  if (virtualCfg) {
+    const targetModels = virtualCfg.type === 'pipeline'
+      ? (virtualCfg.steps?.map(s => s.model) ?? virtualCfg.targets ?? [])
+      : (virtualCfg.targets ?? []);
+
+    if (targetModels.length === 0) {
+      return { model: modelName, residency: [], hotCount: 0, warmCount: 0, coldCount: 0, totalNodes: nodes.length, routable: false, syncing: false, latencyHint: 'unavailable' };
+    }
+
+    const targetR = targetModels.map(t => computeRoutability(t, status));
+
+    let routable: boolean;
+    let latencyHint: ModelRoutability['latencyHint'];
+
+    if (virtualCfg.type === 'pipeline') {
+      routable = targetR.every(r => r.routable);
+      latencyHint = targetR.some(r => r.latencyHint === 'unavailable') ? 'unavailable'
+                  : targetR.some(r => r.latencyHint === 'cold-start')  ? 'cold-start'
+                  : 'instant';
+    } else {
+      routable = targetR.some(r => r.routable);
+      latencyHint = targetR.some(r => r.latencyHint === 'instant')     ? 'instant'
+                  : targetR.some(r => r.latencyHint === 'cold-start')  ? 'cold-start'
+                  : 'unavailable';
+    }
+
+    return { model: modelName, residency: [], hotCount: 0, warmCount: 0, coldCount: 0, totalNodes: nodes.length, routable, syncing: false, latencyHint };
+  }
+
   const syncing = !!(status.in_progress_pulls?.[modelName]);
 
   const residency: NodeResidency[] = nodes.map(node => {
@@ -149,4 +180,42 @@ export function formatBytes(bytes: number): string {
 export function parseModelTag(tag: string) {
   const [family, variant = 'latest'] = tag.split(':');
   return { family, variant };
+}
+
+// ─── Virtual Model Derived Metadata ──────────────────────────────────────────
+
+export interface VirtualModelMeta {
+  /** Size per target model name, sourced from any node that has it on disk. */
+  targetSizes: Record<string, number>;
+  /**
+   * Effective size to reserve:
+   * - metric/arena: max of targets (balancer picks one)
+   * - pipeline: sum of distinct step models (all must be available)
+   */
+  effectiveSizeBytes: number;
+  /** Union of inferred capabilities across all target models. */
+  capabilities: ModelCapability[];
+}
+
+export function deriveVirtualModelMeta(cfg: VirtualModelConfig, nodes: NodeStatus[]): VirtualModelMeta {
+  const targetModels = cfg.type === 'pipeline'
+    ? [...new Set(cfg.steps?.map(s => s.model) ?? cfg.targets ?? [])]
+    : [...new Set(cfg.targets ?? [])];
+
+  const targetSizes: Record<string, number> = {};
+  for (const target of targetModels) {
+    for (const node of nodes) {
+      const lm = node.local_models?.find(m => m.model === target);
+      if (lm?.size) { targetSizes[target] = lm.size; break; }
+    }
+  }
+
+  const sizes = Object.values(targetSizes);
+  const effectiveSizeBytes = cfg.type === 'pipeline'
+    ? sizes.reduce((a, b) => a + b, 0)
+    : sizes.length > 0 ? Math.max(...sizes) : 0;
+
+  const capabilities = [...new Set(targetModels.flatMap(t => inferCapabilities(t)))] as ModelCapability[];
+
+  return { targetSizes, effectiveSizeBytes, capabilities };
 }

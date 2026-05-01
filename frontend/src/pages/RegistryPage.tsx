@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { toast } from 'sonner';
 import sdk, { type ModelRequest, type NodeStatus } from '../api';
 import { useCluster } from '../ClusterContext';
+import { computeRoutability, LATENCY_HINTS, deriveVirtualModelMeta, formatBytes, inferCapabilities, CAPABILITY_LABELS } from '../lib/modelUtils';
 
 // Common models for the browser
 const POPULAR_MODELS = [
@@ -307,6 +308,10 @@ export const RegistryPage: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {filteredVirtualModels.map(name => {
               const cfg = virtualModels[name];
+              const routability = status ? computeRoutability(name, status) : null;
+              const hint = routability ? LATENCY_HINTS[routability.latencyHint] : null;
+              const meta = deriveVirtualModelMeta(cfg, nodes);
+              const perf = status?.performance?.[name];
               return (
                 <Card key={name} className="bg-card border-border/50 overflow-hidden group hover:border-primary/30 transition-colors">
                   <div className={`h-1 w-full ${cfg.type === 'pipeline' ? 'bg-purple-500' : cfg.type === 'metric' ? 'bg-blue-500' : 'bg-amber-500'}`} />
@@ -320,13 +325,24 @@ export const RegistryPage: React.FC = () => {
                           <div className="flex items-center gap-2">
                              <h3 className="text-sm font-black tracking-tight">{name}</h3>
                              <Badge variant="outline" className="text-[8px] h-3.5 px-1 uppercase font-black">{cfg.type}</Badge>
+                             <Badge variant="outline" className="text-[8px] h-3.5 px-1 border-violet-500/30 text-violet-400 uppercase font-black">Virtual</Badge>
                           </div>
                           <p className="text-[10px] text-muted-foreground font-bold mt-0.5 uppercase tracking-tighter">
                             {cfg.type === 'metric' ? `Strategy: ${cfg.strategy}` : cfg.type === 'pipeline' ? `${cfg.steps?.length || 0} Steps Pipeline` : 'Arena'}
+                            {meta.effectiveSizeBytes > 0 && (
+                              <span className="ml-2 text-muted-foreground/60">
+                                · {formatBytes(meta.effectiveSizeBytes)}{cfg.type === 'pipeline' ? ' total' : ' max'}
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                         {hint && (
+                           <Badge variant="outline" className={`text-[7px] h-3.5 px-1 uppercase font-black border-transparent ${hint.color}`}>
+                             {hint.label}
+                           </Badge>
+                         )}
                          <Badge variant="outline" className="text-[7px] h-3.5 px-1 border-amber-500/20 text-amber-500 uppercase">
                            R: {(status?.model_reward_factors?.[name] || 1.0).toFixed(1)}x
                          </Badge>
@@ -337,30 +353,70 @@ export const RegistryPage: React.FC = () => {
                     </div>
 
                     <div className="space-y-3">
+                      {/* Capabilities */}
+                      {meta.capabilities.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {meta.capabilities.map(c => {
+                            const capMeta = CAPABILITY_LABELS[c];
+                            return (
+                              <Badge key={c} className={`text-[8px] font-black h-4 px-1.5 border ${capMeta.color}`}>
+                                {capMeta.icon} {capMeta.label}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Target Models */}
                       <div>
                         <p className="text-[9px] font-black uppercase text-muted-foreground mb-1.5 tracking-widest">Target Models</p>
                         <div className="flex flex-wrap gap-1.5">
-                          {cfg.targets?.map(t => (
-                            <Badge key={t} variant="secondary" className="text-[10px] font-mono h-5 px-1.5 bg-muted/50 border-border/50">
-                              {t}
-                            </Badge>
-                          ))}
+                          {cfg.targets?.map(t => {
+                            const sz = meta.targetSizes[t];
+                            const tRoutability = status ? computeRoutability(t, status) : null;
+                            const tHint = tRoutability ? LATENCY_HINTS[tRoutability.latencyHint] : null;
+                            return (
+                              <Badge key={t} variant="secondary" className="text-[10px] font-mono h-5 px-1.5 bg-muted/50 border-border/50 flex items-center gap-1">
+                                {tHint && <span className={`text-[8px] ${tHint.color}`}>●</span>}
+                                {t}
+                                {sz && <span className="text-[8px] text-muted-foreground/60 font-sans">{formatBytes(sz)}</span>}
+                              </Badge>
+                            );
+                          })}
                         </div>
                       </div>
 
+                      {/* Pipeline flow */}
                       {cfg.type === 'pipeline' && cfg.steps && (
                         <div>
                           <p className="text-[9px] font-black uppercase text-muted-foreground mb-1.5 tracking-widest">Flow</p>
                           <div className="space-y-1.5">
-                            {cfg.steps.map((s, idx) => (
-                              <div key={idx} className="flex items-center gap-2 text-[10px] font-bold">
-                                <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center text-[8px] font-black">{idx + 1}</div>
-                                <span className="text-muted-foreground uppercase">{s.action}:</span>
-                                <span className="font-mono">{s.model}</span>
-                                {idx < cfg.steps!.length - 1 && <ChevronRight size={10} className="text-muted-foreground/30" />}
-                              </div>
-                            ))}
+                            {cfg.steps.map((s, idx) => {
+                              const sz = meta.targetSizes[s.model];
+                              const stepR = status ? computeRoutability(s.model, status) : null;
+                              const stepHint = stepR ? LATENCY_HINTS[stepR.latencyHint] : null;
+                              return (
+                                <div key={idx} className="flex items-center gap-2 text-[10px] font-bold">
+                                  <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center text-[8px] font-black">{idx + 1}</div>
+                                  <span className="text-muted-foreground uppercase">{s.action}:</span>
+                                  <span className="font-mono">{s.model}</span>
+                                  {sz && <span className="text-[8px] text-muted-foreground/60 font-sans">{formatBytes(sz)}</span>}
+                                  {stepHint && <span className={`text-[8px] font-black ${stepHint.color}`}>{stepHint.label}</span>}
+                                  {idx < cfg.steps!.length - 1 && <ChevronRight size={10} className="text-muted-foreground/30" />}
+                                </div>
+                              );
+                            })}
                           </div>
+                        </div>
+                      )}
+
+                      {/* Performance stats (if any requests recorded) */}
+                      {perf && perf.requests > 0 && (
+                        <div className="pt-2 border-t border-border/30 flex items-center gap-4">
+                          <span className="text-[9px] font-black uppercase text-muted-foreground tracking-widest">Perf</span>
+                          <span className="text-[9px] font-bold text-muted-foreground">{perf.requests} reqs</span>
+                          <span className="text-[9px] font-bold text-muted-foreground">TTFT {perf.avg_ttft_ms.toFixed(0)} ms</span>
+                          <span className="text-[9px] font-bold text-muted-foreground">Avg {(perf.avg_duration_ms / 1000).toFixed(1)} s</span>
                         </div>
                       )}
                     </div>

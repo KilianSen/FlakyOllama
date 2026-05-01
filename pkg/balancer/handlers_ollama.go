@@ -271,18 +271,24 @@ func (b *Balancer) HandleV1Register(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
+
+	// Build best-known size per model across all healthy nodes.
+	modelSizes := make(map[string]int64)
 	uniqueModels := make(map[string]bool)
 	for _, node := range snap.Agents {
 		if node.State != models.StateBroken && !node.Draining {
 			for _, m := range node.LocalModels {
 				uniqueModels[m.Name] = true
+				if m.Size > modelSizes[m.Name] {
+					modelSizes[m.Name] = m.Size
+				}
 			}
 		}
 	}
 
-	// Add Virtual Models to Tags
 	b.configMu.RLock()
-	for m := range b.Config.VirtualModels {
+	virtualModels := b.Config.VirtualModels
+	for m := range virtualModels {
 		uniqueModels[m] = true
 	}
 	b.configMu.RUnlock()
@@ -290,13 +296,72 @@ func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 	var tags models.TagsResponse
 	tags.Models = make([]models.ModelInfo, 0, len(uniqueModels))
 	for m := range uniqueModels {
-		tags.Models = append(tags.Models, models.ModelInfo{
-			Name:  m,
-			Model: m,
-		})
+		var info models.ModelInfo
+		if vcfg, ok := virtualModels[m]; ok {
+			info = virtualModelInfo(m, vcfg, modelSizes)
+		} else {
+			info = models.ModelInfo{Name: m, Model: m}
+		}
+		tags.Models = append(tags.Models, info)
 	}
 
 	b.jsonResponse(w, http.StatusOK, tags)
+}
+
+// virtualModelInfo builds a ModelInfo for a virtual model, deriving size and
+// details from the backing targets using the known per-model sizes on disk.
+func virtualModelInfo(name string, cfg models.VirtualModelConfig, modelSizes map[string]int64) models.ModelInfo {
+	targets := cfg.Targets
+	if cfg.Type == "pipeline" && len(cfg.Steps) > 0 {
+		targets = make([]string, len(cfg.Steps))
+		for i, s := range cfg.Steps {
+			targets[i] = s.Model
+		}
+	}
+
+	// Deduplicate while preserving order.
+	seen := make(map[string]bool)
+	uniqueTargets := make([]string, 0, len(targets))
+	for _, t := range targets {
+		if !seen[t] {
+			seen[t] = true
+			uniqueTargets = append(uniqueTargets, t)
+		}
+	}
+
+	// Compute effective size: max for metric/arena (picks one), sum for pipeline (needs all).
+	var effectiveSize int64
+	for _, t := range uniqueTargets {
+		sz := modelSizes[t]
+		if cfg.Type == "pipeline" {
+			effectiveSize += sz
+		} else if sz > effectiveSize {
+			effectiveSize = sz
+		}
+	}
+
+	strategy := cfg.Strategy
+	if strategy == "" {
+		strategy = cfg.Type
+	}
+
+	paramSize := strategy
+	if len(uniqueTargets) > 0 {
+		paramSize = strings.Join(uniqueTargets, ",")
+	}
+
+	return models.ModelInfo{
+		Name:  name,
+		Model: name,
+		Size:  effectiveSize,
+		Details: &models.ModelDetails{
+			Format:            "virtual",
+			Family:            cfg.Type,
+			Families:          uniqueTargets,
+			ParameterSize:     paramSize,
+			QuantizationLevel: strategy,
+		},
+	}
 }
 
 func (b *Balancer) HandleOllamaEmbeddings(w http.ResponseWriter, r *http.Request) {
