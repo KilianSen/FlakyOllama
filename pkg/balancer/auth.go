@@ -287,38 +287,47 @@ func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 2. User global quota, offset by credits earned via contributed compute
+		// 2. User global quota, offset by quota earned via contributed compute
 		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-
-			// FIXME: Use different quotas
-
-			if u, ok := val.(models.User); ok && u.QuotaLimit != -1 && u.ID != "" {
-
-				agentCredits := b.Storage.GetUserAgentCredits(u.ID)
-				effectiveUsed := u.QuotaUsed - int64(agentCredits)
-				if effectiveUsed < 0 {
-					effectiveUsed = 0
-				}
-				if effectiveUsed >= u.QuotaLimit {
-					if u.RoutePreference == "quality_fallback" {
-						// Check if the user has at least one active own node before falling back
-						hasOwnNode := false
-						b.State.View(func(s ClusterState) {
-							for _, node := range s.Agents {
-								if node.UserID == u.ID && node.State != models2.StateBroken && !node.Draining {
-									hasOwnNode = true
-									break
-								}
-							}
-						})
-						if hasOwnNode {
-							ctx := context.WithValue(r.Context(), ContextKeyForceOwnNode, true)
-							next.ServeHTTP(w, r.WithContext(ctx))
-							return
-						}
+			if u, ok := val.(models.User); ok && u.ID != "" {
+				usage, err := b.Storage.GetUserQuotaUsage(u.ID)
+				if err != nil {
+					logging.Global.Errorf("InferenceQuotaMiddleware: failed to get quota usage for user %s: %v", u.ID, err)
+					// fail open — don't block requests on a storage error
+				} else {
+					offset := int64(usage.AgentCreditsEarned)
+					exceeded := false
+					var reason string
+					switch {
+					case u.DailyQuotaLimit != -1 && max(0, usage.DailyUsed-offset) >= u.DailyQuotaLimit:
+						exceeded, reason = true, "daily quota exceeded"
+					case u.WeeklyQuotaLimit != -1 && max(0, usage.WeeklyUsed-offset) >= u.WeeklyQuotaLimit:
+						exceeded, reason = true, "weekly quota exceeded"
+					case u.MonthlyQuotaLimit != -1 && max(0, usage.MonthlyUsed-offset) >= u.MonthlyQuotaLimit:
+						exceeded, reason = true, "monthly quota exceeded"
+					case u.QuotaLimit != -1 && max(0, u.QuotaUsed-offset) >= u.QuotaLimit:
+						exceeded, reason = true, "account quota exceeded"
 					}
-					b.respondError(w, r, http.StatusTooManyRequests, "account quota exceeded")
-					return
+					if exceeded {
+						if u.RoutePreference == "quality_fallback" {
+							hasOwnNode := false
+							b.State.View(func(s ClusterState) {
+								for _, node := range s.Agents {
+									if node.UserID == u.ID && node.State != models2.StateBroken && !node.Draining {
+										hasOwnNode = true
+										break
+									}
+								}
+							})
+							if hasOwnNode {
+								ctx := context.WithValue(r.Context(), ContextKeyForceOwnNode, true)
+								next.ServeHTTP(w, r.WithContext(ctx))
+								return
+							}
+						}
+						b.respondError(w, r, http.StatusTooManyRequests, reason)
+						return
+					}
 				}
 			}
 		}
