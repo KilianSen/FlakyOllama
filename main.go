@@ -2,8 +2,9 @@ package main
 
 import (
 	"FlakyOllama/pkg/agent"
+	aConfig "FlakyOllama/pkg/agent"
 	"FlakyOllama/pkg/balancer"
-	"FlakyOllama/pkg/shared/config"
+	bConfig "FlakyOllama/pkg/balancer/config"
 	"FlakyOllama/pkg/shared/logging"
 	"net/http"
 	"os"
@@ -35,52 +36,57 @@ func main() {
 	logging.InitGlobal(nodeID, role)
 
 	cfgPath := os.Getenv("CONFIG_PATH")
-	cfg, err := config.LoadConfig(cfgPath)
-	if err != nil {
-		logging.Global.Infof("Failed to load config, using defaults: %v", err)
-		cfg = config.DefaultConfig()
+	bcfg, berr := bConfig.LoadConfig(cfgPath)
+	acfg, aerr := aConfig.LoadConfig(cfgPath)
+	if aerr != nil {
+		logging.Global.Infof("Failed to load config, using defaults: %v", aerr)
+		acfg = aConfig.DefaultConfig()
+	}
+	if berr != nil {
+		logging.Global.Infof("Failed to load config, using defaults: %v", berr)
+		bcfg = bConfig.DefaultConfig()
 	}
 
 	if role == "balancer" {
-		if cfg.AuthToken == "" {
-			cfg.AuthToken = strings.Trim(os.Getenv("BALANCER_TOKEN"), "\"'")
+		if bcfg.AuthToken == "" {
+			bcfg.AuthToken = strings.Trim(os.Getenv("BALANCER_TOKEN"), "\"'")
 		}
-		if cfg.RemoteToken == "" {
-			cfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
+		if bcfg.RemoteToken == "" {
+			bcfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
 		}
 	} else {
-		if cfg.AuthToken == "" {
-			cfg.AuthToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
+		if acfg.AuthToken == "" {
+			acfg.AuthToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
 		}
-		if cfg.RemoteToken == "" {
-			cfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
+		if acfg.RemoteToken == "" {
+			acfg.RemoteToken = strings.Trim(os.Getenv("AGENT_TOKEN"), "\"'")
 		}
 	}
 
 	// OIDC Env Mappings
 	if os.Getenv("OIDC_ENABLED") == "true" {
-		cfg.OIDC.Enabled = true
+		bcfg.OIDC.Enabled = true
 	}
 	if os.Getenv("OIDC_ENABLE_KEY_APPROVAL") == "true" {
-		cfg.EnableKeyApproval = true
+		bcfg.EnableKeyApproval = true
 	}
 	if v := os.Getenv("OIDC_ISSUER"); v != "" {
-		cfg.OIDC.Issuer = v
+		bcfg.OIDC.Issuer = v
 	}
 	if v := os.Getenv("OIDC_CLIENT_ID"); v != "" {
-		cfg.OIDC.ClientID = v
+		bcfg.OIDC.ClientID = v
 	}
 	if v := os.Getenv("OIDC_CLIENT_SECRET"); v != "" {
-		cfg.OIDC.ClientSecret = v
+		bcfg.OIDC.ClientSecret = v
 	}
 	if v := os.Getenv("OIDC_REDIRECT_URL"); v != "" {
-		cfg.OIDC.RedirectURL = v
+		bcfg.OIDC.RedirectURL = v
 	}
 	if v := os.Getenv("OIDC_ADMIN_CLAIM"); v != "" {
-		cfg.OIDC.AdminClaim = v
+		bcfg.OIDC.AdminClaim = v
 	}
 	if v := os.Getenv("OIDC_ADMIN_VALUE"); v != "" {
-		cfg.OIDC.AdminValue = v
+		bcfg.OIDC.AdminValue = v
 	}
 
 	switch role {
@@ -95,7 +101,7 @@ func main() {
 		}
 
 		logging.Global.Infof("Initializing balancer on %s with DB %s...", addr, dbPath)
-		b, err := balancer.NewBalancer(addr, dbPath, cfg)
+		b, err := balancer.NewBalancer(addr, dbPath, bcfg)
 		if err != nil {
 			logging.Global.Errorf("CRITICAL: Failed to initialize balancer: %v", err)
 			os.Exit(1)
@@ -132,7 +138,7 @@ func main() {
 		}
 		dbPath := os.Getenv("DB_PATH")
 
-		a := agent.NewAgent(id, addr, balancerURL, ollamaURL, cfg)
+		a := agent.NewAgent(id, addr, balancerURL, ollamaURL, acfg)
 		logging.Global.SetSink(a)
 
 		// Signal handling for graceful shutdown

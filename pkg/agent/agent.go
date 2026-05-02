@@ -7,7 +7,6 @@ import (
 	"FlakyOllama/pkg/agent/ollama"
 	"FlakyOllama/pkg/agent/tasks"
 	"FlakyOllama/pkg/shared/auth"
-	"FlakyOllama/pkg/shared/config"
 	sharedLog "FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
@@ -96,7 +95,7 @@ type Agent struct {
 	Monitor          *monitoring.Monitor
 	Metrics          *monitoring.ModelMetricsTracker
 	Ollama           *ollama.Client
-	Config           *config.Config
+	Config           *Config
 	Tasks            *tasks.TaskManager
 	Capabilities     *capabilities.Manager
 	Logs             *agentLogging.DiskQueue
@@ -113,9 +112,9 @@ type Agent struct {
 	persistentMu     sync.RWMutex
 }
 
-func NewAgent(id, address, balancerURL, ollamaURL string, cfg *config.Config) *Agent {
+func NewAgent(id, address, balancerURL, ollamaURL string, cfg *Config) *Agent {
 	if cfg == nil {
-		cfg = config.DefaultConfig()
+		cfg = DefaultConfig()
 	}
 
 	agentToken := os.Getenv("AGENT_TOKEN")
@@ -220,7 +219,7 @@ func (a *Agent) Register() error {
 		a.EffectiveAddress = addressOverride
 	}
 
-	status, _ := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
+	status, _ := a.Monitor.GetStatus()
 
 	req := models.RegisterRequest{
 		ID:       a.ID,
@@ -464,7 +463,7 @@ func (a *Agent) checkCapabilities(w http.ResponseWriter, r *http.Request, model 
 	}
 
 	// 2. Check system load
-	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
+	status, err := a.Monitor.GetStatus()
 	if err == nil {
 		priority := a.Capabilities.GetPriority(model)
 		if a.Capabilities.ShouldRejectLoad(status.CPUUsage, status.MemoryUsage, priority) {
@@ -586,7 +585,7 @@ func (a *Agent) genericProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
-	status, err := a.Monitor.GetStatus(a.Config.MaxVRAMAllocated, a.Config.MaxCPUAllocated)
+	status, err := a.Monitor.GetStatus()
 	if err != nil {
 		sharedLog.Global.Errorf("Failed to get hardware status: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -918,7 +917,7 @@ func (a *Agent) StartLogShipper() {
 	}
 }
 
-func (a *Agent) Ship(entry models.LogEntry) {
+func (a *Agent) Ship(entry sharedLog.LogEntry) {
 	if a.Logs != nil {
 		a.Logs.Ship(entry)
 	}

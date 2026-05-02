@@ -2,111 +2,158 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commands
+## Project Overview
 
-### Go backend (run from project root)
-```bash
-go build ./...                              # Build all packages
-go test ./...                               # Run all tests
-go test ./pkg/balancer/ -run TestSelectAgent  # Run a single test
-go run main.go                             # Run with ROLE=balancer (default)
-ROLE=balancer go run main.go               # Run balancer
-ROLE=agent go run main.go                  # Run agent
-```
+**FlakyOllama** is a distributed orchestration and load-balancing layer for [Ollama](https://ollama.com). It transforms a fleet of individual Ollama nodes (Agents) into a high-availability inference cluster managed by a central coordinator (Balancer).
 
-### Frontend (run from `frontend/`)
-```bash
-npm run dev     # Start Vite dev server
-npm run build   # TypeScript compile + Vite bundle
-npm run lint    # ESLint
-```
+### Core Components
+- **Balancer (Central Brain):** Manages cluster state, routes requests, handles authentication (API keys/OIDC), and executes multi-model pipelines.
+- **Agent (Edge Intelligence):** A sidecar for Ollama that reports hardware telemetry, buffers logs in a local SQLite queue, and autonomously enforces "Edge Guardrails."
+- **Frontend:** A React 19 dashboard using `ClusterContext` for real-time state polling and cluster management.
 
-### Docker development stack
-```bash
-docker compose -f docker-compose.dev.yml up
-```
-This starts balancer on `:8080`, frontend on `:3000`, and a dev agent on `:8081`, all using `dev-token` for auth.
+---
 
-## Architecture
+## Complete File Structure
 
-FlakyOllama is a load balancer and orchestration layer for [Ollama](https://ollama.com). It exposes OpenAI-compatible and Ollama-native APIs and distributes inference requests across a fleet of Ollama nodes.
+### Backend implementation (`pkg/`)
 
-### Single binary, two roles
+- `main.go`: Unified entry point. Switches between `balancer` and `agent` modes via the `ROLE` environment variable.
+- `pkg/balancer/`: The central coordinator (the "Brain").
+    - `balancer.go`: Initializes the `Balancer` struct and registers all HTTP routes (Ollama, OpenAI, Management).
+    - `routing.go`: Implementation of the `SelectAgent` scoring algorithm and virtual model resolution.
+    - `state.go`: Manages the global cluster state (`Actor` pattern) with copy-on-read snapshots.
+    - `storage.go`: SQLite implementation for persisting metrics, logs, users, and keys (uses WAL mode).
+    - `handlers_ollama.go` & `handlers_mgmt.go`: Logic for handling external API requests.
+    - `proxy.go`: Intelligent reverse proxy that tracks active workloads and handles request forwarding.
+    - `hedging.go`: Implements speculative "hedged" requests to reduce P99 latency.
+    - `pipeline.go`: Manages sequential execution of multi-model virtual pipelines.
+    - `stall.go`: Detects and recovers from stalled or hanging inference requests.
+    - `queue/priority_queue.go`: Min-heap based request prioritization logic.
+    - `adapters/openai/`:
+        - `openai.go`: Translates OpenAI Chat/Completion requests to Ollama format.
+        - `handlers.go`: HTTP handlers for OpenAI-compatible endpoints.
+    - `config/config.go`: JSON configuration structures and defaults.
+    - `config/persistence.go`: Handles loading/saving configuration to disk.
+- `pkg/agent/`: The sidecar running alongside Ollama (the "Edge").
+    - `agent.go`: Reverse proxy to the local Ollama API; captures TTFT and token usage metrics.
+    - `monitoring/monitor.go`: Polling logic for CPU, RAM, and NVIDIA GPU telemetry (via NVML).
+    - `capabilities/manager.go`: Enforces local edge policies like load shedding and model blacklisting.
+    - `logging/disk_queue.go`: Buffers structured logs in a local SQLite database before shipping.
+    - `ollama/client.go`: High-level Go client for interacting with the local Ollama service.
+    - `tasks/manager.go`: Tracks long-running operations like model pulls and creates.
+- `pkg/shared/`: Core types and utilities used by both roles.
+    - `models/`: Unified data structures for `NodeStatus`, `ClusterStatus`, and `Request`.
+    - `auth/auth.go`: Shared Bearer token middleware for agent-balancer and client-balancer auth.
+    - `logging/logger.go`: Global structured logging interface with support for pluggable sinks.
 
-`main.go` switches between two modes via the `ROLE` environment variable:
+### Frontend implementation (`frontend/`)
 
-- **`balancer`** — the central coordinator. Accepts client requests, manages the priority queue, selects agents, stores metrics in SQLite, and serves the management API.
-- **`agent`** — a sidecar that runs alongside a local Ollama instance. It proxies inference requests, reports hardware telemetry, and ships logs back to the balancer.
+- `frontend/src/api.ts`: Typed SDK for backend communication.
+- `frontend/src/ClusterContext.tsx`: React context for real-time cluster state polling.
+- `frontend/src/pages/`:
+    - `FleetPage.tsx`: Real-time node monitoring and management.
+    - `ChatPage.tsx`: Interactive chat interface.
+    - `ConfigPage.tsx`: Cluster-wide settings.
+    - `LogsPage.tsx`: Centralized log viewer.
+    - `UsersPage.tsx`: Admin-only user and quota management.
+    - `KeysPage.tsx`: API key management for users and agents.
+- `frontend/src/components/ui/`: Extensive library of shadcn/ui components (30+ components for a rich UI).
 
-### Balancer internals (`pkg/balancer/`)
+---
 
-| File | Responsibility |
-|---|---|
-| `balancer.go` | `Balancer` struct, route setup via chi, lifecycle |
-| `state.go` | `Actor` — goroutine-safe cluster state with copy-on-read snapshot |
-| `queue.go` | `RequestQueue` — min-heap priority queue; higher `Priority` int = dequeued first; ties broken by sequence number |
-| `routing.go` | `SelectAgent` — scores each node (reputation, loaded model bonus, VRAM, CPU, workload) and picks the best |
-| `hedging.go` | `DoHedgedRequest` — sends a speculative second request after a P90 timeout if hedging is enabled |
-| `proxy.go` | Forwards requests to the chosen agent; `workloadBody` wrapper decrements the node workload counter on `Close()` |
-| `pipeline.go` | Executes multi-step `VirtualModel` pipelines (chain of model calls) |
-| `storage.go` | `SQLiteStorage` — SQLite/WAL persistence for metrics, logs, keys, users, policies, model requests |
-| `jobs.go` | `JobManager` — tracks long-running async operations (model pulls etc.) |
-| `stall.go` | Detects stalled/hanging requests and requeues them |
-| `oidc.go` | OIDC login/callback handlers; issues JWT session cookies |
-| `handlers_*.go` | HTTP handlers split by domain: OpenAI, Ollama native, management |
+## Environment Variables
 
-**Request flow:** client → `AuthMiddleware` → `HandleOpenAIChat` / `HandleChat` / `HandleGenerate` → `DoHedgedRequest` → `RequestQueue.Push` → `SelectAgent` → `sendToAgentWithContext`.
-
-### Agent internals (`pkg/agent/`)
-
-- `agent.go` — `Agent` struct; reverse-proxies inference paths directly to Ollama; handles telemetry, registration, log shipping, and the persistent-model maintenance loop.
-- `monitoring/monitor.go` — polls CPU, memory, and VRAM (via go-nvml for NVIDIA GPUs).
-- `ollama/client.go` — typed HTTP client for the local Ollama API.
-- `tasks/manager.go` — tracks async tasks (pull, push, create) running on the agent.
-- `logging/disk_queue.go` — SQLite-backed queue that buffers log entries and ships them to the balancer every 5 s.
-
-### Protocol adapters (`pkg/protocols/`)
-
-`Adapter` interface translates between external API formats and the internal Ollama format. `openai.go` implements the OpenAI Chat Completions ↔ Ollama translation (including SSE streaming).
-
-### Shared packages (`pkg/shared/`)
-
-- `config/config.go` — `Config` struct, JSON file loading, defaults. All routing weights, circuit-breaker settings, OIDC config, virtual-model definitions live here.
-- `models/models.go` — all cross-cutting data types (`NodeStatus`, `ClusterStatus`, `VirtualModelConfig`, etc.).
-- `auth/auth.go` — Bearer-token middleware used by both balancer and agent.
-- `metrics/ema.go` — exponential moving average; `prometheus.go` — Prometheus registry.
-- `logging/logger.go` — structured global logger with a `LogSink` interface (implemented by both `Balancer` and `Agent`).
-
-### Virtual models
-
-Configured in `Config.VirtualModels`, three types are supported:
-- **`metric`** — routes to the backing model with the best metric (`fastest`, `most_reliable`, `cheapest`).
-- **`pipeline`** — chains multiple model calls sequentially, passing output as input to the next step.
-- **`arena`** — (declared in types, routing not yet fully wired).
-
-### Frontend (`frontend/`)
-
-React 19 + Vite + TailwindCSS v4 + shadcn/ui. All API calls go through `src/api.ts` which uses relative paths (proxied by Vite dev server / Nginx in production). Auth token is stored in `localStorage` under `BALANCER_TOKEN` or injected via `VITE_BALANCER_TOKEN`. The `ClusterContext` polls `/api/v1/status` and provides cluster state to the whole app. Pages live in `src/pages/`, each calling the typed SDK in `api.ts`.
-
-### Authentication
-
-Two-layer system:
-1. **API keys** — Bearer tokens for clients (`BALANCER_TOKEN`) and agents (`AGENT_TOKEN`). Keys are stored in SQLite with status (`pending`/`active`/`rejected`) and optional quota/credit limits.
-2. **OIDC** — optional SSO via `OIDC_*` env vars; admin status is derived from a configurable claim/value pair. Session is a signed JWT cookie using `JWT_SECRET`.
-
-### Key environment variables
-
+### Core Configuration
 | Variable | Default | Purpose |
-|---|---|---|
-| `ROLE` | `balancer` | Switch binary mode |
-| `BALANCER_TOKEN` | — | Token clients present to the balancer |
-| `AGENT_TOKEN` | — | Token agents use to register; also sent by balancer to agents |
-| `DB_PATH` | `flakyollama.db` | SQLite file path (balancer) |
-| `BALANCER_ADDR` | `0.0.0.0:8080` | Balancer listen address |
-| `AGENT_ADDR` | `0.0.0.0:8081` | Agent listen address |
-| `BALANCER_URL` | `http://localhost:8080` | Balancer URL seen by agents |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama URL seen by agents |
-| `AGENT_ID` | hostname | Node identifier |
-| `AGENT_ADDRESS` | — | Override address advertised to balancer |
-| `JWT_SECRET` | (insecure default) | Signs OIDC session cookies — must be changed |
-| `CONFIG_PATH` | — | Path to JSON config file |
+| :--- | :--- | :--- |
+| `ROLE` | `balancer` | Switches binary mode between `balancer` and `agent`. |
+| `CONFIG_PATH` | (none) | Path to an optional JSON configuration file. |
+| `DB_PATH` | `flakyollama.db`| Path to the SQLite database (Balancer & Agent log buffer). |
+
+### Balancer Settings
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `BALANCER_ADDR` | `0.0.0.0:8080`| Listen address for the Balancer. |
+| `BALANCER_TOKEN` | (none) | Master token required for client authentication. |
+| `AGENT_TOKEN` | (none) | Token required for agents to register with the balancer. |
+
+### Agent Settings
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `AGENT_ID` | (hostname) | Unique identifier for the agent node. |
+| `AGENT_ADDR` | `0.0.0.0:8081`| Listen address for the Agent sidecar. |
+| `AGENT_ADDRESS` | (none) | Override address advertised to the balancer (useful for NAT/Docker). |
+| `AGENT_TIER` | `dedicated` | Tier designation for the node (`shared` or `dedicated`). |
+| `BALANCER_URL` | (none) | URL of the central Balancer for registration and telemetry. |
+| `OLLAMA_URL` | `http://localhost:11434`| URL of the local Ollama instance. |
+| `AGENT_TOKEN` | (none) | Token used by the agent to authenticate with the balancer. |
+| `AGENT_AUTH_TOKEN` | (none) | Specific token for direct admin access to the agent. |
+| `AGENT_AUTH_TOKEN_DISABLE` | `false` | If `true`, disables authentication on the agent port (INSECURE). |
+
+### Agent Edge Guardrails (Manager)
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `AGENT_ALLOWED_MODELS` | (none) | Comma-separated list of models the agent is allowed to run. |
+| `AGENT_DENY_MODELS` | (none) | Comma-separated list of models to explicitly block. |
+| `AGENT_MODEL_PRIORITIES` | (none) | Key-value pairs (model=priority) for local prioritization. |
+| `AGENT_REJECT_ON_HIGH_LOAD` | `false` | Enable autonomous load shedding. |
+| `AGENT_MAX_CPU_THRESHOLD` | `90.0` | CPU % threshold to start rejecting requests. |
+| `AGENT_MAX_MEM_THRESHOLD` | `90.0` | Memory % threshold to start rejecting requests. |
+| `AGENT_MIN_PRIORITY_UNDER_LOAD`| `0` | Minimum request priority to bypass load shedding. |
+| `AGENT_MIN_TPS` | `0.0` | Minimum Tokens-Per-Second required for a model to be active. |
+| `AGENT_MAX_ERROR_RATE` | `1.0` | Maximum local error rate (0-1) before disabling a model. |
+| `AGENT_MAX_P95_LATENCY` | `0.0` | Maximum P95 latency (seconds) before disabling a model locally. |
+
+### OIDC & Authentication
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `OIDC_ENABLED` | `false` | Enable OIDC-based authentication for the dashboard. |
+| `OIDC_ISSUER` | (none) | OIDC Provider Issuer URL. |
+| `OIDC_CLIENT_ID` | (none) | OIDC Client ID. |
+| `OIDC_CLIENT_SECRET` | (none) | OIDC Client Secret. |
+| `OIDC_REDIRECT_URL` | (none) | OIDC Redirect Callback URL. |
+| `OIDC_ADMIN_CLAIM` | `groups` | Claim to check for admin status. |
+| `OIDC_ADMIN_VALUE` | `admin` | Value in the admin claim that grants admin rights. |
+| `JWT_SECRET` | (none) | Secret used to sign OIDC session cookies. |
+
+---
+
+## Technical Architecture
+
+### 1. Request Lifecycle & Routing
+Requests flow from clients through the Balancer to the Agents:
+- **Prioritization:** Requests enter a min-heap priority queue; higher integers = higher priority.
+- **Scoring:** Agents are scored based on reputation, model residency (VRAM vs. Disk), and hardware load (CPU/Mem/VRAM).
+- **Hedged Requests:** If enabled, the Balancer can send a second "hedged" request after a P90 timeout to minimize latency tails.
+
+### 2. Virtual Models & Pipelines
+Virtual models (defined in `CONFIG_PATH`) provide advanced routing:
+- **Metric-based:** Routes to the `fastest`, `cheapest`, or `most_reliable` backing model.
+- **Pipelines:** Executes a sequential chain of models where the output of one step becomes the input for the next.
+
+### 3. Agent Edge Guardrails
+Agents autonomously protect themselves via `checkCapabilities`:
+- **Load Shedding:** Rejects requests if CPU or Memory thresholds are exceeded.
+- **Performance Blocking:** Locally disables models with low TPS or high error rates.
+- **Maintenance Loop:** Periodically "pre-warms" models designated as **Persistent** by the Balancer.
+
+---
+
+## Development Workflow
+
+### Key Project Patterns
+- **State Management:** The Balancer uses an `Actor` pattern (`pkg/balancer/state.go`) for thread-safe state snapshots.
+- **Reverse Proxying:** The Agent uses `httputil.ReverseProxy` for robust communication with Ollama.
+- **Frontend Polling:** The React app polls `/api/v1/status` every 5 seconds via `ClusterContext.tsx`.
+
+### Testing
+- **Integration Tests:** Located in `pkg/integration_test.go`. Verifies the full end-to-end request flow.
+- **Backend Tests:** Run with `go test ./pkg/...`.
+- **Frontend Linting:** Run `npm run lint` in the `frontend/` directory.
+
+---
+
+## API Integration
+- **Ollama Compatible:** `/api/chat`, `/api/generate`, `/api/embeddings`, `/api/tags`.
+- **OpenAI Compatible:** `/v1/chat/completions`, `/v1/completions`.
+- **Management:** `/api/v1/status`, `/api/v1/nodes`, `/api/v1/keys`, `/api/v1/logs`.

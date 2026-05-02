@@ -1187,7 +1187,7 @@ func (b *Balancer) respondError(w http.ResponseWriter, r *http.Request, code int
 				"message": message,
 				"type":    openAIErrorType(code),
 				"param":   nil,
-				"code":    nil,
+				"code":    code,
 			},
 		})
 		return

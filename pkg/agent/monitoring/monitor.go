@@ -79,19 +79,8 @@ func (m *Monitor) pollLoop() {
 }
 
 // GetStatus returns the current hardware status instantly from cache.
-func (m *Monitor) GetStatus(maxVRAM uint64, maxCPU int) (models.NodeStatus, error) {
+func (m *Monitor) GetStatus() (models.NodeStatus, error) {
 	status := m.status.Load().(models.NodeStatus)
-
-	// Apply caps if provided
-	if maxCPU > 0 && status.CPUCores > maxCPU {
-		status.CPUCores = maxCPU
-	}
-	if maxVRAM > 0 && status.VRAMTotal > maxVRAM {
-		status.VRAMTotal = maxVRAM
-		if status.VRAMUsed > status.VRAMTotal {
-			status.VRAMUsed = status.VRAMTotal
-		}
-	}
 
 	return status, nil
 }
@@ -142,7 +131,7 @@ func (m *Monitor) refreshStatus() {
 
 func (m *Monitor) collectNVMLMetrics(status *models.NodeStatus) error {
 	count, ret := nvml.DeviceGetCount()
-	if ret != nvml.SUCCESS {
+	if !errors.Is(ret, nvml.SUCCESS) {
 		return fmt.Errorf("failed to get device count: %v", nvml.ErrorString(ret))
 	}
 
@@ -158,26 +147,26 @@ func (m *Monitor) collectNVMLMetrics(status *models.NodeStatus) error {
 
 	for i := 0; i < count; i++ {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
-		if ret != nvml.SUCCESS {
+		if !errors.Is(ret, nvml.SUCCESS) {
 			continue
 		}
 
 		// Model Name
 		name, ret := device.GetName()
-		if ret == nvml.SUCCESS {
+		if errors.Is(ret, nvml.SUCCESS) {
 			modelsList = append(modelsList, name)
 		}
 
 		// Memory
 		memory, ret := device.GetMemoryInfo()
-		if ret == nvml.SUCCESS {
+		if errors.Is(ret, nvml.SUCCESS) {
 			totalVRAM += memory.Total
 			usedVRAM += memory.Used
 		}
 
 		// Temperature
 		temp, ret := device.GetTemperature(nvml.TEMPERATURE_GPU)
-		if ret == nvml.SUCCESS {
+		if errors.Is(ret, nvml.SUCCESS) {
 			if float64(temp) > maxTemp {
 				maxTemp = float64(temp)
 			}
