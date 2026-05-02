@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -15,6 +16,50 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
 )
+
+// formatDuration renders a duration as a human-readable approximate string,
+// e.g. "~45m", "~3h 12m", "~2d 4h".
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "soon"
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	mins := int(d.Minutes()) % 60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("~%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("~%dh %dm", hours, mins)
+	default:
+		return fmt.Sprintf("~%dm", mins+1)
+	}
+}
+
+// quotaResetHint returns a short "resets in ~X" or "resets on DATE" string for
+// the given quota window. Called only when a quota limit has been exceeded.
+func (b *Balancer) quotaResetHint(userID, window string) string {
+	now := time.Now().UTC()
+	switch window {
+	case "daily":
+		oldest := b.Storage.GetWindowOldestTimestamp(userID, "daily")
+		if oldest.IsZero() {
+			return "resets within 24h"
+		}
+		return "resets in " + formatDuration(time.Until(oldest.Add(24*time.Hour)))
+	case "weekly":
+		oldest := b.Storage.GetWindowOldestTimestamp(userID, "weekly")
+		if oldest.IsZero() {
+			return "resets within 7 days"
+		}
+		return "resets in " + formatDuration(time.Until(oldest.Add(7*24*time.Hour)))
+	case "monthly":
+		nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+		return "resets on " + nextMonth.Format("Jan 2")
+	default:
+		return ""
+	}
+}
 
 type Claims struct {
 	Sub   string `json:"sub"`
@@ -297,16 +342,16 @@ func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
 				} else {
 					offset := int64(usage.AgentCreditsEarned)
 					exceeded := false
-					var reason string
+					var reason, window string
 					switch {
 					case u.DailyQuotaLimit != -1 && max(0, usage.DailyUsed-offset) >= u.DailyQuotaLimit:
-						exceeded, reason = true, "daily quota exceeded"
+						exceeded, reason, window = true, "daily quota exceeded", "daily"
 					case u.WeeklyQuotaLimit != -1 && max(0, usage.WeeklyUsed-offset) >= u.WeeklyQuotaLimit:
-						exceeded, reason = true, "weekly quota exceeded"
+						exceeded, reason, window = true, "weekly quota exceeded", "weekly"
 					case u.MonthlyQuotaLimit != -1 && max(0, usage.MonthlyUsed-offset) >= u.MonthlyQuotaLimit:
-						exceeded, reason = true, "monthly quota exceeded"
+						exceeded, reason, window = true, "monthly quota exceeded", "monthly"
 					case u.QuotaLimit != -1 && max(0, u.QuotaUsed-offset) >= u.QuotaLimit:
-						exceeded, reason = true, "account quota exceeded"
+						exceeded, reason, window = true, "account quota exceeded", ""
 					}
 					if exceeded {
 						if u.RoutePreference == "quality_fallback" {
@@ -324,6 +369,9 @@ func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
 								next.ServeHTTP(w, r.WithContext(ctx))
 								return
 							}
+						}
+						if hint := b.quotaResetHint(u.ID, window); hint != "" {
+							reason = reason + " (" + hint + ")"
 						}
 						b.respondError(w, r, http.StatusTooManyRequests, reason)
 						return

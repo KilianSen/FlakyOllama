@@ -544,6 +544,31 @@ func (s *SQLiteStorage) GetUserQuotaUsage(userID string) (models.QuotaUsage, err
 	return u, nil
 }
 
+// GetWindowOldestTimestamp returns the oldest token_usage timestamp within a
+// rolling window for a user. window must be "daily" (24 h) or "weekly" (7 d).
+// Returns zero time if there is no usage in the window.
+func (s *SQLiteStorage) GetWindowOldestTimestamp(userID, window string) time.Time {
+	var cutoff string
+	switch window {
+	case "daily":
+		cutoff = "'-1 day'"
+	case "weekly":
+		cutoff = "'-7 days'"
+	default:
+		return time.Time{}
+	}
+	var raw string
+	err := s.db.QueryRow(
+		`SELECT COALESCE(MIN(timestamp),'') FROM token_usage WHERE user_id=? AND timestamp > datetime('now',`+cutoff+`)`,
+		userID,
+	).Scan(&raw)
+	if err != nil || raw == "" {
+		return time.Time{}
+	}
+	t, _ := time.Parse("2006-01-02 15:04:05", raw)
+	return t
+}
+
 func (s *SQLiteStorage) GetClientKeysByUserID(userID string) ([]models.ClientKey, error) {
 	rows, err := s.db.Query(`SELECT key, label, quota_limit, quota_used, credits, active, user_id, status, error_format FROM client_keys WHERE user_id = ?`, userID)
 	if err != nil {
