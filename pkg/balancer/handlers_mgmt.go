@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -132,6 +133,10 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 			CostFactor:   cf,
 		})
 	}
+
+	sort.Slice(catalog.Models, func(i, j int) bool {
+		return catalog.Models[i].Name < catalog.Models[j].Name
+	})
 
 	b.jsonResponse(w, http.StatusOK, catalog)
 }
