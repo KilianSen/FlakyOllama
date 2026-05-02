@@ -289,7 +289,11 @@ func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
 
 		// 2. User global quota, offset by credits earned via contributed compute
 		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+
+			// FIXME: Use different quotas
+
 			if u, ok := val.(models.User); ok && u.QuotaLimit != -1 && u.ID != "" {
+
 				agentCredits := b.Storage.GetUserAgentCredits(u.ID)
 				effectiveUsed := u.QuotaUsed - int64(agentCredits)
 				if effectiveUsed < 0 {

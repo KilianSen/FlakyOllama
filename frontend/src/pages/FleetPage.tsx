@@ -154,7 +154,7 @@ export const FleetPage: React.FC = () => {
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <span className="text-[10px] font-black text-amber-400">{node.token_reward?.toLocaleString(undefined, { maximumFractionDigits: 1 }) || 0} φ</span>
+                    <span className="text-[10px] font-black text-emerald-400">{node.token_reward?.toLocaleString(undefined, { maximumFractionDigits: 1 }) || 0} tok offset</span>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1 max-w-[160px]">
@@ -276,8 +276,8 @@ export const FleetPage: React.FC = () => {
                          </p>
                       </div>
                       <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                         <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Earned Credits</p>
-                         <p className="text-xs font-black text-amber-400">{selectedNode.token_reward?.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) || 0} φ</p>
+                         <p className="text-[8px] font-black uppercase tracking-widest text-muted-foreground mb-1">Quota Offset</p>
+                         <p className="text-xs font-black text-emerald-400">{(selectedNode.token_reward || 0) >= 1_000_000 ? `${(selectedNode.token_reward / 1_000_000).toFixed(2)}M` : (selectedNode.token_reward || 0) >= 1_000 ? `${(selectedNode.token_reward / 1_000).toFixed(1)}k` : (selectedNode.token_reward || 0).toLocaleString()} tokens</p>
                       </div>
                     </div>
                   </div>

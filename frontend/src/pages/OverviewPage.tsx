@@ -114,7 +114,7 @@ export const OverviewPage: React.FC = () => {
     {
       title: 'Cluster Earnings',
       value: (status?.total_reward || 0).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
-      sub: 'total reward credits φ',
+      sub: 'tokens contributed by agents',
       icon: Coins,
       color: 'text-emerald-400',
     },

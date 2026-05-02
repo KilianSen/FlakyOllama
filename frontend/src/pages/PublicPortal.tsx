@@ -125,10 +125,10 @@ export const PublicPortal: React.FC = () => {
                 <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 space-y-2">
                   <div className="flex items-center gap-2 text-[10px] font-black uppercase text-emerald-400">
                     <Coins size={12} />
-                    Current Balance
+                    Quota Offset
                   </div>
                   <p className="text-sm font-black text-emerald-400">
-                    {(profile.client_keys?.[0]?.credits || 0).toLocaleString()} φ
+                    {(profile.client_keys?.[0]?.credits || 0).toLocaleString()} tokens
                   </p>
                 </div>
               </div>
@@ -199,11 +199,10 @@ export const PublicPortal: React.FC = () => {
       <div className="p-6 rounded-2xl bg-muted/20 border border-border/30 flex gap-4">
         <Info className="text-muted-foreground shrink-0" size={20} />
         <div className="space-y-1">
-          <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">About Credits (φ)</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">About Quota</p>
           <p className="text-[11px] text-muted-foreground/80 leading-relaxed">
-            Credits are earned by providing compute power to the cluster via an Agent. 
-            Consumers use credits to access high-performance models.
-            The exchange rate is determined by the specific model's complexity factors and the current cluster multipliers.
+            Quota is measured in tokens. Each request consumes input + output tokens toward your daily, weekly, and monthly limits.
+            Contributing compute power via an Agent earns a quota offset, reducing your effective token consumption.
           </p>
         </div>
       </div>

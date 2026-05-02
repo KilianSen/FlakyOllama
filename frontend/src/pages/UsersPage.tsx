@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Shield, Coins, Search, RefreshCw, MoreHorizontal, UserCog, Trash2, Zap } from 'lucide-react';
+import { User, Shield, Search, RefreshCw, MoreHorizontal, UserCog, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -134,15 +134,14 @@ export const UsersPage: React.FC = () => {
               <TableHead className="text-[10px] font-black uppercase tracking-widest py-4 pl-6">User</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Role</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Tier</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Tokens Used</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Spent / Earned</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-widest py-4">Quota Usage</TableHead>
               <TableHead className="text-right text-[10px] font-black uppercase tracking-widest py-4 pr-6">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground font-bold text-xs uppercase tracking-widest">
+                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground font-bold text-xs uppercase tracking-widest">
                   {loading ? 'Loading users...' : 'No users found'}
                 </TableCell>
               </TableRow>
@@ -179,24 +178,10 @@ export const UsersPage: React.FC = () => {
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
-                      <span className="text-[11px] font-black">{(u.user.quota_used / 1e6).toFixed(2)}M</span>
+                      <span className="text-[11px] font-black">{(u.user.quota_used / 1e6).toFixed(2)}M tokens</span>
                       <span className="text-[9px] text-muted-foreground font-bold uppercase">
                         / {u.user.quota_limit === -1 ? '∞' : `${(u.user.quota_limit / 1e6).toFixed(1)}M`} total
                       </span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col gap-0.5">
-                      <div className="flex items-center gap-1 text-red-400">
-                        <Coins size={10} />
-                        <span className="text-[10px] font-black">{Math.abs(u.key?.credits || 0).toFixed(2)} φ spent</span>
-                      </div>
-                      {(u.agent_earnings || 0) > 0 && (
-                        <div className="flex items-center gap-1 text-amber-400">
-                          <Zap size={10} />
-                          <span className="text-[10px] font-black">{u.agent_earnings.toFixed(2)} φ earned</span>
-                        </div>
-                      )}
                     </div>
                   </TableCell>
                   <TableCell className="text-right pr-6">

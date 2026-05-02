@@ -259,8 +259,8 @@ export const KeysPage: React.FC = () => {
                            <span className="text-[9px] text-muted-foreground/40 italic">—</span>
                          )}
                       </TableCell>
-                      <TableCell className="text-center font-mono text-xs font-black text-amber-400">
-                         {k.credits_earned.toLocaleString(undefined, { minimumFractionDigits: 1 })} φ
+                      <TableCell className="text-center font-mono text-xs font-black text-emerald-400">
+                         {k.credits_earned >= 1_000_000 ? `${(k.credits_earned / 1_000_000).toFixed(2)}M` : k.credits_earned >= 1_000 ? `${(k.credits_earned / 1_000).toFixed(1)}k` : Math.floor(k.credits_earned).toLocaleString()} tokens
                       </TableCell>
                       <TableCell className="text-center">
                         <Select

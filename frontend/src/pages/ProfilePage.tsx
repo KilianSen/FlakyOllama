@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Key, User as UserIcon, Shield, Copy, Check, AlertTriangle,
-  Zap, RefreshCw, Server, Plus, KeyRound, ShieldCheck, Trash2, Globe, Lock
+  Zap, RefreshCw, Server, Plus, KeyRound, ShieldCheck, Trash2, Globe, Lock, TrendingUp
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -310,7 +310,6 @@ const ProfilePage = () => {
   const { user, client_keys: rawKeys, agent_keys: rawAgents } = profile;
   const keys = rawKeys || [];
   const agents = rawAgents || [];
-  const totalEarned = agents.reduce((sum: number, ak: AgentKey) => sum + (ak.credits_earned || 0), 0);
   const usage = profile.quota_usage ?? { daily_used: 0, weekly_used: 0, monthly_used: 0, agent_credits_earned: 0 };
   const creditOffset = Math.floor(usage.agent_credits_earned);
   const tier = (user.quota_tier || 'custom') as QuotaTier;
@@ -354,22 +353,20 @@ const ProfilePage = () => {
                   </div>
                 </div>
                 <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-muted/30 border border-border/50">
-                  <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Compute Usage</span>
-                  <div className="flex items-center gap-1.5 text-amber-400">
-                     <Zap size={14} />
-                     <span className="text-sm font-black">{(user.quota_used / 100).toFixed(2)} φ spent</span>
+                  <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Tokens Used</span>
+                  <div className="flex items-center gap-1.5 text-foreground">
+                     <Zap size={14} className="text-primary" />
+                     <span className="text-sm font-black">{user.quota_used >= 1_000_000 ? `${(user.quota_used / 1_000_000).toFixed(2)}M` : `${(user.quota_used / 1_000).toFixed(1)}k`}</span>
                   </div>
                 </div>
-                {totalEarned > 0 && (
+                {creditOffset > 0 && (
                   <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
-                    <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Total Earned</span>
+                    <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Quota Offset</span>
                     <div className="flex items-center gap-1.5 text-emerald-400">
-                       <Zap size={14} />
-                       <span className="text-sm font-black">{totalEarned.toFixed(2)} φ</span>
+                       <TrendingUp size={14} />
+                       <span className="text-sm font-black">-{creditOffset >= 1_000_000 ? `${(creditOffset / 1_000_000).toFixed(2)}M` : `${(creditOffset / 1_000).toFixed(1)}k`} tokens</span>
                     </div>
-                    {totalEarned > (user.quota_used / 100) && (
-                      <span className="text-[9px] text-emerald-400/70 font-bold">Net positive contributor</span>
-                    )}
+                    <span className="text-[9px] text-emerald-400/70 font-bold">Earned by contributing compute</span>
                   </div>
                 )}
               </CardContent>
@@ -380,7 +377,7 @@ const ProfilePage = () => {
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-[10px] font-black uppercase text-primary tracking-widest">Quota — {TIER_LABELS[tier]}</label>
                   {creditOffset > 0 && (
-                    <span className="text-[9px] font-black text-emerald-400">-{creditOffset.toLocaleString()} credit offset</span>
+                    <span className="text-[9px] font-black text-emerald-400">-{creditOffset.toLocaleString()} offset</span>
                   )}
                 </div>
                 {quotaBar(usage.daily_used, user.daily_quota_limit, creditOffset, 'Daily')}
@@ -622,8 +619,10 @@ const ProfilePage = () => {
                   {/* Stats */}
                   <div className="flex justify-between items-center bg-muted/20 p-2 rounded-lg border border-border/50 mt-1">
                     <div className="flex flex-col">
-                      <span className="text-[8px] font-black uppercase text-muted-foreground">Earnings</span>
-                      <span className="text-xs font-black text-amber-400">{ak.credits_earned.toFixed(2)} φ</span>
+                      <span className="text-[8px] font-black uppercase text-muted-foreground">Quota Offset</span>
+                      <span className="text-xs font-black text-emerald-400">
+                        {ak.credits_earned >= 1_000_000 ? `${(ak.credits_earned / 1_000_000).toFixed(2)}M` : ak.credits_earned >= 1_000 ? `${(ak.credits_earned / 1_000).toFixed(1)}k` : Math.floor(ak.credits_earned).toLocaleString()} tokens
+                      </span>
                     </div>
                     <div className="flex flex-col items-end">
                       <span className="text-[8px] font-black uppercase text-muted-foreground">Reputation</span>
