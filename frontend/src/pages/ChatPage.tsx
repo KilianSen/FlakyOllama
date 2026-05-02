@@ -251,11 +251,13 @@ export const ChatPage: React.FC = () => {
               <SelectValue placeholder="Model..." />
             </SelectTrigger>
             <SelectContent>
-              {models.filter(m => m).map(m => {
+              {models.sort((a,b) => {
+                return a.localeCompare(b, undefined, { numeric: true });
+              }).filter(m => m).map(m => {
                 const r = status ? computeRoutability(m, status) : null;
                 const hint = r ? LATENCY_HINTS[r.latencyHint] : null;
                 return (
-                  <SelectItem key={m} value={m} className="font-bold text-xs py-1.5" disabled={r?.latencyHint === 'unavailable'}>
+                  <SelectItem key={m} value={m} className="font-bold text-xs py-1.5" disabled={r ? !r.routable : false}>
                     <div className="flex items-center gap-2">
                        <span className="truncate">{m}</span>
                        {hint && <span className={`text-[8px] font-black uppercase shrink-0 ${hint.color}`}>{hint.label}</span>}
