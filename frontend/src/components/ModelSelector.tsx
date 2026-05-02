@@ -40,7 +40,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 const r = status ? computeRoutability(m, status) : null;
                 const hint = r ? LATENCY_HINTS[r.latencyHint] : null;
                 return (
-                  <SelectItem key={m} value={m} className="pr-2">
+                  <SelectItem key={m} value={m} className="pr-2" disabled={!r?.routable}>
                     <div className="flex items-center gap-2 w-full min-w-0">
                       <span className="font-bold text-xs font-mono truncate flex-1">{m}</span>
                       {hint && (

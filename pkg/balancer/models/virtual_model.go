@@ -8,6 +8,11 @@ type VirtualModelConfig struct {
 	Steps      []PipelineStep `json:"steps"`       // Execution flow
 }
 
+// IsRoutable returns true if the model is routable (has at least one target)
+func (vm *VirtualModelConfig) IsRoutable() bool {
+	return len(vm.Targets) > 0
+}
+
 type PipelineStep struct {
 	Action       string            `json:"action"` // "generate", "classify", "check"
 	Model        string            `json:"model"`

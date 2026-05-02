@@ -255,7 +255,7 @@ export const ChatPage: React.FC = () => {
                 const r = status ? computeRoutability(m, status) : null;
                 const hint = r ? LATENCY_HINTS[r.latencyHint] : null;
                 return (
-                  <SelectItem key={m} value={m} className="font-bold text-xs py-1.5">
+                  <SelectItem key={m} value={m} className="font-bold text-xs py-1.5" disabled={r?.latencyHint === 'unavailable'}>
                     <div className="flex items-center gap-2">
                        <span className="truncate">{m}</span>
                        {hint && <span className={`text-[8px] font-black uppercase shrink-0 ${hint.color}`}>{hint.label}</span>}

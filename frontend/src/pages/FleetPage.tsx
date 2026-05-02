@@ -127,7 +127,7 @@ export const FleetPage: React.FC = () => {
                       ) : (
                         <>
                           <div className="flex justify-between text-[9px] font-black text-muted-foreground">
-                            <span>MEM</span><span>{(node.memory_usage || 0).toFixed(0)}%</span>
+                            <span>RAM</span><span>{formatBytes(node.memory_usage*node.memory_total || 0)}/{formatBytes(node.memory_total || 0)}</span>
                           </div>
                           <Progress value={node.memory_usage || 0} className="h-1" />
                         </>

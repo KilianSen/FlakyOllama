@@ -325,6 +325,14 @@ func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 		var info models.ModelInfo
 		if vcfg, ok := virtualModels[m]; ok {
 			info = virtualModelInfo(m, vcfg, modelSizes)
+
+			if !vcfg.IsRoutable() {
+				// Skip virtual models that are not routable (e.g., pipelines with no valid targets), since we don't want to advertise them in the tag endpoint and then have requests fail later at routing.
+				// They will still be "available" when generating, but will either fail or use a different available model at routing time, which is arguably better than advertising them and then having all requests for that model fail.
+				// This way, v models with issues will gracefully be handled without being advertised as available, and operators can fix them without causing a flood of failed requests.
+				continue
+			}
+
 		} else {
 			info = models.ModelInfo{Name: m, Model: m}
 		}
