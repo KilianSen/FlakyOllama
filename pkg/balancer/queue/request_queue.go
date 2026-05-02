@@ -1,4 +1,4 @@
-package balancer
+package queue
 
 import (
 	"FlakyOllama/pkg/shared/models"
@@ -8,65 +8,6 @@ import (
 	"sync"
 	"time"
 )
-
-// QueuedRequest represents a request waiting in the queue.
-type QueuedRequest struct {
-	ID           string
-	Request      models.InferenceRequest
-	Priority     int // Higher value means higher priority
-	Sequence     int64
-	ClientIP     string
-	ContextHash  string
-	UserID       string
-	IsAdmin      bool
-	ForceOwnNode bool // When true, SelectAgent must route only to nodes owned by UserID
-	Ctx          context.Context
-	QueuedAt     time.Time
-	Response     chan QueuedResponse
-	Index        int // The index of the item in the heap.
-}
-
-type QueuedResponse struct {
-	AgentID       string
-	AgentAddr     string
-	ResolvedModel string
-	Err           error
-}
-
-// PriorityQueue implements heap.Interface and holds QueuedRequests.
-type PriorityQueue []*QueuedRequest
-
-func (pq PriorityQueue) Len() int { return len(pq) }
-
-func (pq PriorityQueue) Less(i, j int) bool {
-	if pq[i].Priority != pq[j].Priority {
-		return pq[i].Priority > pq[j].Priority
-	}
-	return pq[i].Sequence < pq[j].Sequence
-}
-
-func (pq PriorityQueue) Swap(i, j int) {
-	pq[i], pq[j] = pq[j], pq[i]
-	pq[i].Index = i
-	pq[j].Index = j
-}
-
-func (pq *PriorityQueue) Push(x interface{}) {
-	n := len(*pq)
-	item := x.(*QueuedRequest)
-	item.Index = n
-	*pq = append(*pq, item)
-}
-
-func (pq *PriorityQueue) Pop() interface{} {
-	old := *pq
-	n := len(old)
-	item := old[n-1]
-	old[n-1] = nil
-	item.Index = -1
-	*pq = old[0 : n-1]
-	return item
-}
 
 // RequestQueue handles thread-safe priority queuing.
 type RequestQueue struct {

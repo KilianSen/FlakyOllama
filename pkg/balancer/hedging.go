@@ -137,7 +137,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 			}
 
 			// Remember the cancel of the first failed attempt; if a second attempt
-			// comes back as a winner we don't need it, but if it also fails we're done.
+			// comes back as a winner, we don't need it, but if it also fails, we're done.
 			if loserCancel == nil && res.cancel != nil {
 				loserCancel = res.cancel
 			}

@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"FlakyOllama/pkg/shared/auth"
+	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/rand"
@@ -38,7 +39,9 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 						// Ensure Admin status is synced from JWT if it changed
 						if user.IsAdmin != claims.Admin {
 							user.IsAdmin = claims.Admin
-							_ = b.Storage.UpdateUser(user)
+							if updateErr := b.Storage.UpdateUser(user); updateErr != nil {
+								logging.Global.Errorf("Failed to update user admin status: %v", updateErr)
+							}
 						}
 
 						ctx := context.WithValue(r.Context(), auth.ContextKeyUser, user)
@@ -54,13 +57,30 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func (b *Balancer) getOIDCProvider(ctx context.Context) (*oidc.Provider, error) {
+	b.oidcMu.Lock()
+	defer b.oidcMu.Unlock()
+
+	if b.oidcProvider != nil {
+		return b.oidcProvider, nil
+	}
+
+	provider, err := oidc.NewProvider(ctx, b.Config.OIDC.Issuer)
+	if err != nil {
+		return nil, err
+	}
+
+	b.oidcProvider = provider
+	return provider, nil
+}
+
 func (b *Balancer) HandleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	if !b.Config.OIDC.Enabled {
 		http.Error(w, "OIDC disabled", http.StatusForbidden)
 		return
 	}
 
-	provider, err := oidc.NewProvider(r.Context(), b.Config.OIDC.Issuer)
+	provider, err := b.getOIDCProvider(r.Context())
 	if err != nil {
 		http.Error(w, "Failed to get provider: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -94,7 +114,12 @@ func (b *Balancer) HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, _ := oidc.NewProvider(r.Context(), b.Config.OIDC.Issuer)
+	provider, err := b.getOIDCProvider(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to get provider: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	oauth2Config := oauth2.Config{
 		ClientID:     b.Config.OIDC.ClientID,
 		ClientSecret: b.Config.OIDC.ClientSecret,
@@ -127,9 +152,19 @@ func (b *Balancer) HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sub := rawClaims["sub"].(string)
-	email, _ := rawClaims["email"].(string)
-	name, _ := rawClaims["name"].(string)
+	sub, ok := rawClaims["sub"].(string)
+	if !ok {
+		http.Error(w, "Missing or invalid sub claim", http.StatusInternalServerError)
+		return
+	}
+
+	var email, name string
+	if e, ok := rawClaims["email"].(string); ok {
+		email = e
+	}
+	if n, ok := rawClaims["name"].(string); ok {
+		name = n
+	}
 
 	// Check Admin Status
 	isAdmin := false
@@ -163,13 +198,20 @@ func (b *Balancer) HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			WeeklyQuotaLimit:  models.DefaultTiers[models.QuotaTierFree].Weekly,
 			MonthlyQuotaLimit: models.DefaultTiers[models.QuotaTierFree].Monthly,
 		}
-		b.Storage.CreateUser(user)
+		err := b.Storage.CreateUser(user)
+		if err != nil {
+			logging.Global.Errorf("Failed to create user on login: %v", err)
+			http.Error(w, "Failed to create user", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		// Update existing user info
 		user.Email = email
 		user.Name = name
 		user.IsAdmin = isAdmin
-		_ = b.Storage.UpdateUser(user)
+		if updateErr := b.Storage.UpdateUser(user); updateErr != nil {
+			logging.Global.Errorf("Failed to update user on login: %v", updateErr)
+		}
 	}
 
 	// Issue Signed Session Token
@@ -215,6 +257,9 @@ func (b *Balancer) HandleOIDCLogout(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) generateState() string {
 	b2 := make([]byte, 16)
-	rand.Read(b2)
+	_, err := rand.Read(b2)
+	if err != nil {
+		panic(err)
+	}
 	return base64.URLEncoding.EncodeToString(b2)
 }

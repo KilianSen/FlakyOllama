@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/queue"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/hash"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -44,7 +46,7 @@ type Balancer struct {
 	configMu  sync.RWMutex
 	Storage   *SQLiteStorage
 	State     *Actor
-	Queue     *RequestQueue
+	Queue     *queue.RequestQueue
 	Jobs      *JobManager
 
 	// Caches
@@ -64,6 +66,9 @@ type Balancer struct {
 
 	logMu  sync.RWMutex
 	logChs map[chan string]bool
+
+	oidcProvider *oidc.Provider
+	oidcMu       sync.Mutex
 }
 
 func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
@@ -78,7 +83,7 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		Config:    cfg,
 		Storage:   s,
 		State:     NewActor(),
-		Queue:     NewRequestQueue(),
+		Queue:     queue.NewRequestQueue(),
 		Jobs:      NewJobManager(),
 		httpClient: &http.Client{
 			Transport: &http.Transport{

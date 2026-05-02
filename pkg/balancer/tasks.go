@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/queue"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -225,7 +226,7 @@ func (b *Balancer) ProcessQueue() {
 
 		// Non-blocking send to the waiting request
 		select {
-		case req.Response <- QueuedResponse{AgentAddr: addr, ResolvedModel: resolvedModel}:
+		case req.Response <- queue.QueuedResponse{AgentAddr: addr, ResolvedModel: resolvedModel}:
 		default:
 			// If no one is listening anymore (client disconnected), decrement the workload
 			b.decrementWorkload(addr)
