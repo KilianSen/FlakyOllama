@@ -14,7 +14,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=1 GOOS=linux go build -o flakyollama main.go --ldflags="-s -w"
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o flakyollama main.go
 
 # Final stage
 FROM debian:bookworm-slim
