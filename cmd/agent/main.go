@@ -2,7 +2,7 @@ package main
 
 import (
 	"FlakyOllama/pkg/agent"
-	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/balancer/config"
 	"FlakyOllama/pkg/shared/logging"
 	"os"
 	"strings"
@@ -16,7 +16,7 @@ func main() {
 		if hostname != "" {
 			id = hostname
 		} else {
-			id = "agent-1"
+			id = "agent"
 		}
 	}
 	logging.InitGlobal(id, "agent")
@@ -36,6 +36,7 @@ func main() {
 	dbPath := os.Getenv("DB_PATH")
 
 	cfgPath := os.Getenv("CONFIG_PATH")
+
 	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		logging.Global.Infof("Failed to load config, using defaults: %v", err)

@@ -1,26 +1,42 @@
-package protocols
+package openai
 
 import (
-	"FlakyOllama/pkg/shared/hash"
-	"FlakyOllama/pkg/shared/models"
+	"FlakyOllama/pkg/balancer/adapters"
+	"FlakyOllama/pkg/balancer/hash"
+	"FlakyOllama/pkg/balancer/models"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
-type OpenAIAdapter struct {
+type Adapter struct {
 	streaming bool
 }
 
-func NewOpenAIAdapter() *OpenAIAdapter {
-	return &OpenAIAdapter{}
+func (a *Adapter) RegisterRoutes(r *chi.Mux, d adapters.Dispatcher) {
+	r.Route("/v1", func(r chi.Router) {
+		r.Use(d.AuthMiddleware)
+		r.Get("/models", handleModels(d))
+		r.Group(func(r chi.Router) {
+			r.Use(d.InferenceQuotaMiddleware)
+			r.Post("/chat/completions", handleChat(d))
+			r.Post("/completions", handleCompletions(d))
+			r.Post("/embeddings", handleEmbeddings(d))
+		})
+	})
 }
 
-func (a *OpenAIAdapter) TranslateRequest(r *http.Request) ([]byte, string, string, error) {
-	var openAIReq models.OpenAIChatRequest
+func NewOpenAIAdapter() *Adapter {
+	return &Adapter{}
+}
+
+func (a *Adapter) TranslateRequest(r *http.Request) ([]byte, string, string, error) {
+	var openAIReq ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&openAIReq); err != nil {
 		return nil, "", "", err
 	}
@@ -53,7 +69,7 @@ func (a *OpenAIAdapter) TranslateRequest(r *http.Request) ([]byte, string, strin
 	return body, model, contextHash, err
 }
 
-func (a *OpenAIAdapter) TranslateResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
+func (a *Adapter) TranslateResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
 	if a.streaming {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -67,7 +83,7 @@ func (a *OpenAIAdapter) TranslateResponse(w http.ResponseWriter, agentBody io.Re
 	return a.translateNonStreamingResponse(w, agentBody)
 }
 
-func (a *OpenAIAdapter) translateStreamingResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
+func (a *Adapter) translateStreamingResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
 	decoder := json.NewDecoder(agentBody)
 	var lastInput, lastOutput int
 	reqID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
@@ -88,15 +104,15 @@ func (a *OpenAIAdapter) translateStreamingResponse(w http.ResponseWriter, agentB
 			lastOutput = ollamaResp.EvalCount
 		}
 
-		openAIResp := models.OpenAIChatResponse{
+		openAIResp := ChatResponse{
 			ID:      reqID,
 			Object:  "chat.completion.chunk",
 			Created: ollamaResp.CreatedAt.Unix(),
 			Model:   ollamaResp.Model,
-			Choices: []models.OpenAIChoice{
+			Choices: []Choice{
 				{
 					Index: 0,
-					Delta: &models.OpenAIMessage{
+					Delta: &Message{
 						Role:    ollamaResp.Message.Role,
 						Content: ollamaResp.Message.Content,
 					},
@@ -124,7 +140,7 @@ func (a *OpenAIAdapter) translateStreamingResponse(w http.ResponseWriter, agentB
 	return lastInput, lastOutput, nil
 }
 
-func (a *OpenAIAdapter) translateNonStreamingResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
+func (a *Adapter) translateNonStreamingResponse(w http.ResponseWriter, agentBody io.Reader) (int, int, error) {
 	decoder := json.NewDecoder(agentBody)
 	var lastInput, lastOutput int
 	var fullContent strings.Builder
@@ -167,22 +183,22 @@ func (a *OpenAIAdapter) translateNonStreamingResponse(w http.ResponseWriter, age
 		lastCreated = time.Now().Unix()
 	}
 
-	openAIResp := models.OpenAIChatResponse{
+	openAIResp := ChatResponse{
 		ID:      reqID,
 		Object:  "chat.completion",
 		Created: lastCreated,
 		Model:   lastModel,
-		Choices: []models.OpenAIChoice{
+		Choices: []Choice{
 			{
 				Index: 0,
-				Message: &models.OpenAIMessage{
+				Message: &Message{
 					Role:    "assistant",
 					Content: fullContent.String(),
 				},
 				FinishReason: strPtr("stop"),
 			},
 		},
-		Usage: &models.OpenAIUsage{
+		Usage: &Usage{
 			PromptTokens:     lastInput,
 			CompletionTokens: lastOutput,
 			TotalTokens:      lastInput + lastOutput,
@@ -204,7 +220,7 @@ func NewOpenAIEmbeddingAdapter() *OpenAIEmbeddingAdapter {
 }
 
 func (a *OpenAIEmbeddingAdapter) TranslateRequest(r *http.Request) ([]byte, string, string, error) {
-	var openAIReq models.OpenAIEmbeddingRequest
+	var openAIReq EmbeddingRequest
 	if err := json.NewDecoder(r.Body).Decode(&openAIReq); err != nil {
 		return nil, "", "", err
 	}
@@ -244,14 +260,14 @@ func (a *OpenAIEmbeddingAdapter) TranslateResponse(w http.ResponseWriter, agentB
 		return 0, 0, err
 	}
 
-	openAIResp := models.OpenAIEmbeddingResponse{
+	openAIResp := EmbeddingResponse{
 		Object: "list",
 		Model:  ollamaResp.Model,
-		Data:   make([]models.OpenAIEmbeddingData, len(ollamaResp.Embeddings)),
+		Data:   make([]EmbeddingData, len(ollamaResp.Embeddings)),
 	}
 
 	for i, emb := range ollamaResp.Embeddings {
-		openAIResp.Data[i] = models.OpenAIEmbeddingData{
+		openAIResp.Data[i] = EmbeddingData{
 			Object:    "embedding",
 			Embedding: emb,
 			Index:     i,
@@ -262,7 +278,7 @@ func (a *OpenAIEmbeddingAdapter) TranslateResponse(w http.ResponseWriter, agentB
 	if inputTokens == 0 && len(a.inputText) > 0 {
 		inputTokens = 1
 	}
-	openAIResp.Usage = models.OpenAIUsage{
+	openAIResp.Usage = Usage{
 		PromptTokens: inputTokens,
 		TotalTokens:  inputTokens,
 	}

@@ -303,27 +303,27 @@ func (a *Agent) NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("/telemetry", auth.Middleware(masterTokens, nil, a.HandleTelemetry))
-	mux.HandleFunc("/capabilities", auth.Middleware(masterTokens, nil, a.HandleCapabilities))
-	mux.HandleFunc("/tasks", auth.Middleware(masterTokens, nil, a.HandleTasks))
+	mux.HandleFunc("/telemetry", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleTelemetry))
+	mux.HandleFunc("/capabilities", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleCapabilities))
+	mux.HandleFunc("/tasks", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleTasks))
 
 	// Proxy routes using ReverseProxy
-	mux.HandleFunc("/v1/", auth.Middleware(masterTokens, nil, a.genericProxy))
-	mux.HandleFunc("/api/generate", auth.Middleware(masterTokens, nil, a.metricsProxy))
-	mux.HandleFunc("/api/chat", auth.Middleware(masterTokens, nil, a.metricsProxy))
-	mux.HandleFunc("/api/embeddings", auth.Middleware(masterTokens, nil, a.genericProxy))
+	mux.HandleFunc("/v1/", auth.BearerAuthMiddleware(masterTokens, nil, a.genericProxy))
+	mux.HandleFunc("/api/generate", auth.BearerAuthMiddleware(masterTokens, nil, a.metricsProxy))
+	mux.HandleFunc("/api/chat", auth.BearerAuthMiddleware(masterTokens, nil, a.metricsProxy))
+	mux.HandleFunc("/api/embeddings", auth.BearerAuthMiddleware(masterTokens, nil, a.genericProxy))
 
 	// Direct handlers for more control
-	mux.HandleFunc("/show", auth.Middleware(masterTokens, nil, a.HandleShow))
-	mux.HandleFunc("/version", auth.Middleware(masterTokens, nil, a.HandleVersion))
+	mux.HandleFunc("/show", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleShow))
+	mux.HandleFunc("/version", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleVersion))
 
 	// Async Task handlers
-	mux.HandleFunc("/api/models/pull", auth.Middleware(masterTokens, nil, a.HandlePull))
-	mux.HandleFunc("/api/models/unload", auth.Middleware(masterTokens, nil, a.HandleUnload))
-	mux.HandleFunc("/api/models/delete", auth.Middleware(masterTokens, nil, a.HandleDelete))
-	mux.HandleFunc("/api/models/create", auth.Middleware(masterTokens, nil, a.HandleCreate))
-	mux.HandleFunc("/api/models/copy", auth.Middleware(masterTokens, nil, a.HandleCopy))
-	mux.HandleFunc("/api/models/push", auth.Middleware(masterTokens, nil, a.HandlePush))
+	mux.HandleFunc("/api/models/pull", auth.BearerAuthMiddleware(masterTokens, nil, a.HandlePull))
+	mux.HandleFunc("/api/models/unload", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleUnload))
+	mux.HandleFunc("/api/models/delete", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleDelete))
+	mux.HandleFunc("/api/models/create", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleCreate))
+	mux.HandleFunc("/api/models/copy", auth.BearerAuthMiddleware(masterTokens, nil, a.HandleCopy))
+	mux.HandleFunc("/api/models/push", auth.BearerAuthMiddleware(masterTokens, nil, a.HandlePush))
 
 	return mux
 }

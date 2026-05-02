@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	models2 "FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/models"
 	"fmt"
 	"math/rand"
@@ -11,7 +12,7 @@ import (
 func (b *Balancer) SelectAgent(modelName, userID string, isAdmin, forceOwnNode bool) (string, error) {
 	var bestAgent string
 	var bestScore float64 = -1e18 // Use a very small number to handle negative scores
-	var userPolicy models.UserModelPolicy
+	var userPolicy models2.UserModelPolicy
 
 	// Strip common prefixes for compatibility
 	modelName = strings.TrimPrefix(modelName, "a.")
@@ -27,7 +28,7 @@ func (b *Balancer) SelectAgent(modelName, userID string, isAdmin, forceOwnNode b
 		}
 	} else {
 		// Default policy
-		userPolicy = models.UserModelPolicy{RewardFactor: 1.0, CostFactor: 1.0}
+		userPolicy = models2.UserModelPolicy{RewardFactor: 1.0, CostFactor: 1.0}
 	}
 
 	snap := b.State.GetSnapshot()
@@ -121,7 +122,7 @@ func (b *Balancer) SelectAgent(modelName, userID string, isAdmin, forceOwnNode b
 
 		// Penalize workload
 		workload := float64(snap.NodeWorkloads[addr])
-		score -= (workload * b.Config.Weights.WorkloadPenalty * 50.0)
+		score -= workload * b.Config.Weights.WorkloadPenalty * 50.0
 
 		// Bonus for locally available model (on disk)
 		hasModel := false

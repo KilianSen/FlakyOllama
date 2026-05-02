@@ -1,7 +1,7 @@
 package logging
 
 import (
-	"FlakyOllama/pkg/shared/models"
+	"FlakyOllama/pkg/shared/logging"
 	"database/sql"
 	"encoding/json"
 	"sync"
@@ -38,7 +38,7 @@ func NewDiskQueue(path string) (*DiskQueue, error) {
 	}, nil
 }
 
-func (q *DiskQueue) Ship(entry models.LogEntry) {
+func (q *DiskQueue) Ship(entry logging.LogEntry) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -53,7 +53,7 @@ func (q *DiskQueue) Ship(entry models.LogEntry) {
 
 func (q *DiskQueue) FetchLogs(limit int) ([]struct {
 	ID    int64
-	Entry models.LogEntry
+	Entry logging.LogEntry
 }, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -66,7 +66,7 @@ func (q *DiskQueue) FetchLogs(limit int) ([]struct {
 
 	var logs []struct {
 		ID    int64
-		Entry models.LogEntry
+		Entry logging.LogEntry
 	}
 	var corruptIDs []int64
 	for rows.Next() {
@@ -76,14 +76,14 @@ func (q *DiskQueue) FetchLogs(limit int) ([]struct {
 			corruptIDs = append(corruptIDs, id)
 			continue
 		}
-		var entry models.LogEntry
+		var entry logging.LogEntry
 		if err := json.Unmarshal([]byte(payload), &entry); err != nil {
 			corruptIDs = append(corruptIDs, id)
 			continue
 		}
 		logs = append(logs, struct {
 			ID    int64
-			Entry models.LogEntry
+			Entry logging.LogEntry
 		}{id, entry})
 	}
 	rows.Close()

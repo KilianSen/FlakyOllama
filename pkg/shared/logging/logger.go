@@ -1,7 +1,6 @@
 package logging
 
 import (
-	"FlakyOllama/pkg/shared/models"
 	"fmt"
 	"log"
 	"os"
@@ -10,7 +9,7 @@ import (
 )
 
 type LogSink interface {
-	Ship(entry models.LogEntry)
+	Ship(entry LogEntry)
 }
 
 type Logger struct {
@@ -33,8 +32,8 @@ func (l *Logger) SetSink(s LogSink) {
 	l.Sink = s
 }
 
-func (l *Logger) Log(level models.LogLevel, msg string) {
-	entry := models.LogEntry{
+func (l *Logger) Log(level LogLevel, msg string) {
+	entry := LogEntry{
 		Timestamp: time.Now(),
 		NodeID:    l.NodeID,
 		Level:     level,
@@ -43,12 +42,15 @@ func (l *Logger) Log(level models.LogLevel, msg string) {
 	}
 
 	// Local print
-	fmt.Fprintf(os.Stderr, "[%s] %s [%s] %s: %s\n",
+	_, err := fmt.Fprintf(os.Stderr, "[%s] %s [%s] %s: %s\n",
 		entry.Timestamp.Format("2006-01-02 15:04:05"),
 		entry.Level,
 		entry.NodeID,
 		entry.Component,
 		entry.Message)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to write log: %v", err))
+	}
 
 	// Ship to sink
 	l.mu.Lock()
@@ -61,19 +63,19 @@ func (l *Logger) Log(level models.LogLevel, msg string) {
 }
 
 func (l *Logger) Infof(format string, v ...interface{}) {
-	l.Log(models.LevelInfo, fmt.Sprintf(format, v...))
+	l.Log(LevelInfo, fmt.Sprintf(format, v...))
 }
 
 func (l *Logger) Warnf(format string, v ...interface{}) {
-	l.Log(models.LevelWarn, fmt.Sprintf(format, v...))
+	l.Log(LevelWarn, fmt.Sprintf(format, v...))
 }
 
 func (l *Logger) Errorf(format string, v ...interface{}) {
-	l.Log(models.LevelError, fmt.Sprintf(format, v...))
+	l.Log(LevelError, fmt.Sprintf(format, v...))
 }
 
 func (l *Logger) Debugf(format string, v ...interface{}) {
-	l.Log(models.LevelDebug, fmt.Sprintf(format, v...))
+	l.Log(LevelDebug, fmt.Sprintf(format, v...))
 }
 
 // Global logger for convenience (initialized in main)
@@ -91,6 +93,6 @@ type lwriter struct {
 }
 
 func (w lwriter) Write(p []byte) (n int, err error) {
-	w.l.Log(models.LevelInfo, string(p))
+	w.l.Log(LevelInfo, string(p))
 	return len(p), nil
 }

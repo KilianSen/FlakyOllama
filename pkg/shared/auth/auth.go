@@ -1,8 +1,8 @@
 package auth
 
 import (
+	"FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/logging"
-	"FlakyOllama/pkg/shared/models"
 	"context"
 	"net/http"
 	"strings"
@@ -22,9 +22,9 @@ type KeyManager interface {
 	GetUserByID(id string) (models.User, error)
 }
 
-// Middleware checks for a Bearer token in the Authorization header or query param.
+// BearerAuthMiddleware checks for a Bearer token in the Authorization header or query param.
 // It prioritizes OIDC sessions from SessionMiddleware if present.
-func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) http.HandlerFunc {
+func BearerAuthMiddleware(masterTokens []string, km KeyManager, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Always allow OPTIONS to pass through (CORS)
 		if r.Method == "OPTIONS" {
@@ -117,19 +117,14 @@ func Middleware(masterTokens []string, km KeyManager, next http.HandlerFunc) htt
 	}
 }
 
+// GetTokenFromContext returns the token from the context, if present.
 func GetTokenFromContext(ctx context.Context) (string, bool) {
 	val, ok := ctx.Value(ContextKeyToken).(string)
 	return val, ok
 }
 
+// GetClientDataFromContext returns the client data from the context, if present.
 func GetClientDataFromContext(ctx context.Context) (models.ClientKey, bool) {
 	val, ok := ctx.Value(ContextKeyClientData).(models.ClientKey)
 	return val, ok
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

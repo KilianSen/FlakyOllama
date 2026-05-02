@@ -1,8 +1,9 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/config"
+	models2 "FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/auth"
-	"FlakyOllama/pkg/shared/config"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
 	"encoding/json"
@@ -15,6 +16,36 @@ import (
 
 	"github.com/go-chi/chi/v5"
 )
+
+type ClusterStatus struct {
+	Nodes             map[string]*models.NodeStatus `json:"nodes"`
+	ActiveWorkloads   int                           `json:"active_workloads"`
+	AvgCPUUsage       float64                       `json:"avg_cpu_usage"`
+	AvgMemUsage       float64                       `json:"avg_mem_usage"`
+	PendingRequests   map[string]int                `json:"pending_requests"`
+	AllModels         []string                      `json:"all_models"`
+	TotalInputTokens  int64                         `json:"total_input_tokens"`
+	TotalOutputTokens int64                         `json:"total_output_tokens"`
+	TotalReward       float64                       `json:"total_reward"`
+	TotalCost         float64                       `json:"total_cost"`
+	UptimeSeconds     int64                         `json:"uptime_seconds"`
+	TotalVRAM         uint64                        `json:"total_vram"`
+	UsedVRAM          uint64                        `json:"used_vram"`
+	Performance       map[string]struct {
+		AvgTTFT     float64 `json:"avg_ttft_ms"`
+		AvgDuration float64 `json:"avg_duration_ms"`
+		Requests    int     `json:"requests"`
+	} `json:"performance"`
+
+	ModelRewardFactors     map[string]float64                    `json:"model_reward_factors"`
+	ModelCostFactors       map[string]float64                    `json:"model_cost_factors"`
+	GlobalRewardMultiplier float64                               `json:"global_reward_multiplier"`
+	GlobalCostMultiplier   float64                               `json:"global_cost_multiplier"`
+	VirtualModels          map[string]models2.VirtualModelConfig `json:"virtual_models"`
+	OIDCEnabled            bool                                  `json:"oidc_enabled"`
+	QueueDepth             int                                   `json:"queue_depth"`
+	NodeWorkloads          map[string]int                        `json:"node_workloads"`
+}
 
 func (b *Balancer) HandlePublicInfo(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
@@ -42,6 +73,16 @@ func (b *Balancer) HandlePublicInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type Catalog struct {
+	GlobalRewardMultiplier float64 `json:"global_reward_multiplier"`
+	GlobalCostMultiplier   float64 `json:"global_cost_multiplier"`
+	Models                 []struct {
+		Name         string  `json:"name"`
+		RewardFactor float64 `json:"reward_factor"`
+		CostFactor   float64 `json:"cost_factor"`
+	} `json:"models"`
+}
+
 func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 	uniqueModels := make(map[string]bool)
@@ -62,7 +103,7 @@ func (b *Balancer) HandleV1Catalog(w http.ResponseWriter, r *http.Request) {
 	}
 	b.configMu.RUnlock()
 
-	catalog := models.Catalog{
+	catalog := Catalog{
 		GlobalRewardMultiplier: b.Config.GlobalRewardMultiplier,
 		GlobalCostMultiplier:   b.Config.GlobalCostMultiplier,
 		Models: make([]struct {
@@ -101,21 +142,21 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 		b.jsonError(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
-	user := val.(models.User)
+	user := val.(models2.User)
 
 	cks, err := b.Storage.GetClientKeysByUserID(user.ID)
 	if err != nil {
-		cks = []models.ClientKey{}
+		cks = []models2.ClientKey{}
 	}
 
 	aks, err := b.Storage.GetAgentKeysByUserID(user.ID)
 	if err != nil {
-		aks = []models.AgentKey{}
+		aks = []models2.AgentKey{}
 	}
 
 	usage, _ := b.Storage.GetUserQuotaUsage(user.ID)
 
-	b.jsonResponse(w, http.StatusOK, models.ProfileResponse{
+	b.jsonResponse(w, http.StatusOK, models2.ProfileResponse{
 		User:       user,
 		ClientKeys: cks,
 		AgentKeys:  aks,
@@ -126,7 +167,7 @@ func (b *Balancer) HandleV1Me(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request) {
 	snap := b.State.GetSnapshot()
 
-	status := models.ClusterStatus{
+	status := ClusterStatus{
 		Nodes:                  snap.Agents,
 		ActiveWorkloads:        snap.ActiveWorkloads,
 		AvgCPUUsage:            snap.AvgCPUUsage,
@@ -170,7 +211,7 @@ func (b *Balancer) HandleV1ClusterStatus(w http.ResponseWriter, r *http.Request)
 	// Mask Node IPs for non-admins
 	isAdmin := false
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		if u, ok := val.(models.User); ok && u.IsAdmin {
+		if u, ok := val.(models2.User); ok && u.IsAdmin {
 			isAdmin = true
 		}
 	}
@@ -244,7 +285,7 @@ func (b *Balancer) HandleV1Nodes(w http.ResponseWriter, r *http.Request) {
 
 	isAdmin := false
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		if u, ok := val.(models.User); ok && u.IsAdmin {
+		if u, ok := val.(models2.User); ok && u.IsAdmin {
 			isAdmin = true
 		}
 	}
@@ -362,12 +403,12 @@ func (b *Balancer) HandleV1ModelPull(w http.ResponseWriter, r *http.Request) {
 	job := b.Jobs.CreateJob("pull")
 	go func() {
 		// Just record the request for now, actual pull is handled by tasks.go background loop
-		b.Storage.CreateModelRequest(models.ModelRequest{
+		b.Storage.CreateModelRequest(models2.ModelRequest{
 			ID:          job.ID,
-			Type:        models.RequestPull,
+			Type:        models2.RequestPull,
 			Model:       req.Model,
 			NodeID:      req.NodeID,
-			Status:      models.StatusPending,
+			Status:      models2.StatusPending,
 			RequestedAt: time.Now(),
 		})
 	}()
@@ -379,11 +420,11 @@ func (b *Balancer) HandleV1ModelDelete(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	job := b.Jobs.CreateJob("delete")
 
-	b.Storage.CreateModelRequest(models.ModelRequest{
+	b.Storage.CreateModelRequest(models2.ModelRequest{
 		ID:          job.ID,
-		Type:        models.RequestDelete,
+		Type:        models2.RequestDelete,
 		Model:       name,
-		Status:      models.StatusPending,
+		Status:      models2.StatusPending,
 		RequestedAt: time.Now(),
 	})
 
@@ -433,7 +474,7 @@ func (b *Balancer) HandleV1ModelUnload(w http.ResponseWriter, r *http.Request) {
 
 func (b *Balancer) HandleV1ModelRequestsList(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	reqs, err := b.Storage.ListModelRequests(models.ModelRequestStatus(status))
+	reqs, err := b.Storage.ListModelRequests(models2.ModelRequestStatus(status))
 	if err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -443,7 +484,7 @@ func (b *Balancer) HandleV1ModelRequestsList(w http.ResponseWriter, r *http.Requ
 
 func (b *Balancer) HandleV1ModelRequestApprove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := b.Storage.UpdateModelRequestStatus(id, models.StatusApproved); err != nil {
+	if err := b.Storage.UpdateModelRequestStatus(id, models2.StatusApproved); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -452,7 +493,7 @@ func (b *Balancer) HandleV1ModelRequestApprove(w http.ResponseWriter, r *http.Re
 
 func (b *Balancer) HandleV1ModelRequestDecline(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := b.Storage.UpdateModelRequestStatus(id, models.StatusRejected); err != nil {
+	if err := b.Storage.UpdateModelRequestStatus(id, models2.StatusRejected); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -484,7 +525,7 @@ func (b *Balancer) HandleV1ModelPolicySet(w http.ResponseWriter, r *http.Request
 }
 
 func (b *Balancer) HandleV1UserModelPolicySet(w http.ResponseWriter, r *http.Request) {
-	var p models.UserModelPolicy
+	var p models2.UserModelPolicy
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
@@ -525,7 +566,7 @@ func (b *Balancer) HandleV1KeySetStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	active := req.Status == "active"
-	if err := b.Storage.SetKeyStatus(req.Type, req.Key, models.KeyStatus(req.Status), active); err != nil {
+	if err := b.Storage.SetKeyStatus(req.Type, req.Key, models2.KeyStatus(req.Status), active); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -542,7 +583,7 @@ func (b *Balancer) HandleV1ClientKeysList(w http.ResponseWriter, r *http.Request
 }
 
 func (b *Balancer) HandleV1ClientKeyCreate(w http.ResponseWriter, r *http.Request) {
-	var k models.ClientKey
+	var k models2.ClientKey
 	if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
@@ -550,7 +591,7 @@ func (b *Balancer) HandleV1ClientKeyCreate(w http.ResponseWriter, r *http.Reques
 
 	// If it's an OIDC user creating a key
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		u := val.(models.User)
+		u := val.(models2.User)
 		k.UserID = u.ID
 	}
 
@@ -558,7 +599,7 @@ func (b *Balancer) HandleV1ClientKeyCreate(w http.ResponseWriter, r *http.Reques
 		k.Key = "ck_" + b.computeHash(fmt.Sprintf("%d_%s", time.Now().UnixNano(), k.Label))[:24]
 	}
 	k.Active = true
-	k.Status = models.KeyStatusActive
+	k.Status = models2.KeyStatusActive
 
 	if err := b.Storage.CreateClientKey(k); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
@@ -577,14 +618,14 @@ func (b *Balancer) HandleV1AgentKeysList(w http.ResponseWriter, r *http.Request)
 }
 
 func (b *Balancer) HandleV1AgentKeyCreate(w http.ResponseWriter, r *http.Request) {
-	var k models.AgentKey
+	var k models2.AgentKey
 	if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		u := val.(models.User)
+		u := val.(models2.User)
 		k.UserID = u.ID
 	}
 
@@ -595,7 +636,7 @@ func (b *Balancer) HandleV1AgentKeyCreate(w http.ResponseWriter, r *http.Request
 		k.BalancerToken = "bt_" + b.computeHash(fmt.Sprintf("%d_%s_bt", time.Now().UnixNano(), k.Label))[:24]
 	}
 	k.Active = true
-	k.Status = models.KeyStatusActive
+	k.Status = models2.KeyStatusActive
 	k.Reputation = 1.0
 
 	if err := b.Storage.CreateAgentKey(k); err != nil {
@@ -612,10 +653,10 @@ func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := make([]models.UserWithKey, 0, len(users))
+	res := make([]models2.UserWithKey, 0, len(users))
 	for _, u := range users {
 		cks, _ := b.Storage.GetClientKeysByUserID(u.ID)
-		var key models.ClientKey
+		var key models2.ClientKey
 		if len(cks) > 0 {
 			key = cks[0]
 		}
@@ -624,7 +665,7 @@ func (b *Balancer) HandleV1UsersList(w http.ResponseWriter, r *http.Request) {
 		for _, ak := range aks {
 			agentEarnings += ak.CreditsEarned
 		}
-		res = append(res, models.UserWithKey{User: u, Key: key, AgentEarnings: agentEarnings})
+		res = append(res, models2.UserWithKey{User: u, Key: key, AgentEarnings: agentEarnings})
 	}
 	b.jsonResponse(w, http.StatusOK, res)
 }
@@ -648,8 +689,8 @@ func (b *Balancer) HandleV1UserUpdateQuota(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if req.QuotaTier != nil {
-		tier := models.QuotaTier(*req.QuotaTier)
-		if limits, ok := models.DefaultTiers[tier]; ok {
+		tier := models2.QuotaTier(*req.QuotaTier)
+		if limits, ok := models2.DefaultTiers[tier]; ok {
 			u.QuotaTier = tier
 			u.QuotaLimit = limits.Total
 			u.DailyQuotaLimit = limits.Daily
@@ -669,8 +710,8 @@ func (b *Balancer) HandleV1UserUpdateQuota(w http.ResponseWriter, r *http.Reques
 	if req.MonthlyQuotaLimit != nil {
 		u.MonthlyQuotaLimit = *req.MonthlyQuotaLimit
 	}
-	if req.QuotaTier == nil || models.QuotaTier(*req.QuotaTier) == models.QuotaTierCustom {
-		u.QuotaTier = models.QuotaTierCustom
+	if req.QuotaTier == nil || models2.QuotaTier(*req.QuotaTier) == models2.QuotaTierCustom {
+		u.QuotaTier = models2.QuotaTierCustom
 	}
 	if err := b.Storage.UpdateUser(u); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, "failed to update quota: "+err.Error())
@@ -748,16 +789,16 @@ func (b *Balancer) HandleV1AgentKeyDelete(w http.ResponseWriter, r *http.Request
 
 // ─── User-scoped key management (ownership enforced, no admin required) ───────
 
-func (b *Balancer) requireUser(w http.ResponseWriter, r *http.Request) (models.User, bool) {
+func (b *Balancer) requireUser(w http.ResponseWriter, r *http.Request) (models2.User, bool) {
 	val := r.Context().Value(auth.ContextKeyUser)
 	if val == nil {
 		b.jsonError(w, http.StatusUnauthorized, "authentication required")
-		return models.User{}, false
+		return models2.User{}, false
 	}
-	u, ok := val.(models.User)
+	u, ok := val.(models2.User)
 	if !ok {
 		b.jsonError(w, http.StatusUnauthorized, "authentication required")
-		return models.User{}, false
+		return models2.User{}, false
 	}
 	return u, true
 }
@@ -767,7 +808,7 @@ func (b *Balancer) HandleV1UserClientKeyCreate(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	var k models.ClientKey
+	var k models2.ClientKey
 	if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
@@ -777,7 +818,7 @@ func (b *Balancer) HandleV1UserClientKeyCreate(w http.ResponseWriter, r *http.Re
 		k.Key = "ck_" + b.computeHash(fmt.Sprintf("%d_%s", time.Now().UnixNano(), k.Label))[:24]
 	}
 	k.Active = true
-	k.Status = models.KeyStatusActive
+	k.Status = models2.KeyStatusActive
 	if err := b.Storage.CreateClientKey(k); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -834,7 +875,7 @@ func (b *Balancer) HandleV1UserAgentKeyCreate(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	var k models.AgentKey
+	var k models2.AgentKey
 	if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid request")
 		return
@@ -847,7 +888,7 @@ func (b *Balancer) HandleV1UserAgentKeyCreate(w http.ResponseWriter, r *http.Req
 		k.BalancerToken = "bt_" + b.computeHash(fmt.Sprintf("%d_%s_bt", time.Now().UnixNano(), k.Label))[:24]
 	}
 	k.Active = true
-	k.Status = models.KeyStatusActive
+	k.Status = models2.KeyStatusActive
 	k.Reputation = 1.0
 	if err := b.Storage.CreateAgentKey(k); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, err.Error())
@@ -1074,7 +1115,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 	clientKey, _ := auth.GetTokenFromContext(r.Context())
 	var userID string
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		if u, ok := val.(models.User); ok {
+		if u, ok := val.(models2.User); ok {
 			userID = u.ID
 		}
 	}
@@ -1087,7 +1128,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var result models.InferenceResponse
+	var result models2.InferenceResponse
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		b.jsonError(w, http.StatusInternalServerError, "failed to decode response: "+string(bodyBytes))
 		return
@@ -1100,7 +1141,7 @@ func (b *Balancer) HandleV1TestInference(w http.ResponseWriter, r *http.Request)
 }
 
 func (b *Balancer) HandleV1LogCollect(w http.ResponseWriter, r *http.Request) {
-	var entry models.LogEntry
+	var entry logging.LogEntry
 	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
 		b.jsonError(w, http.StatusBadRequest, "invalid log entry")
 		return

@@ -1,7 +1,8 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/shared/models"
+	"FlakyOllama/pkg/balancer/models"
+	"FlakyOllama/pkg/shared/logging"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -832,7 +833,7 @@ func (s *SQLiteStorage) GetRecentLogs(limit int) ([]struct {
 	return logs, nil
 }
 
-func (s *SQLiteStorage) SearchLogs(limit int, nodeID, level, query string) ([]models.LogEntry, error) {
+func (s *SQLiteStorage) SearchLogs(limit int, nodeID, level, query string) ([]logging.LogEntry, error) {
 	sqlStr := "SELECT timestamp, node_id, level, component, message FROM logs WHERE 1=1"
 	var args []interface{}
 
@@ -858,9 +859,9 @@ func (s *SQLiteStorage) SearchLogs(limit int, nodeID, level, query string) ([]mo
 	}
 	defer rows.Close()
 
-	logs := make([]models.LogEntry, 0)
+	logs := make([]logging.LogEntry, 0)
 	for rows.Next() {
-		var l models.LogEntry
+		var l logging.LogEntry
 		if err := rows.Scan(&l.Timestamp, &l.NodeID, &l.Level, &l.Component, &l.Message); err != nil {
 			return nil, err
 		}

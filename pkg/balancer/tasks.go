@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	models2 "FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/balancer/queue"
 	"context"
 	"encoding/json"
@@ -19,7 +20,7 @@ func (b *Balancer) StartLogBroadcaster() {
 		for {
 			select {
 			case entry := <-b.LogCh:
-				go func(e models.LogEntry) {
+				go func(e logging.LogEntry) {
 					if err := b.Storage.RecordLog(e.NodeID, string(e.Level), e.Component, e.Message); err != nil {
 						logging.Global.Debugf("Failed to record log to DB: %v", err)
 					}
@@ -29,10 +30,10 @@ func (b *Balancer) StartLogBroadcaster() {
 				msg := string(data)
 				b.broadcastLog(msg)
 			case <-ticker.C:
-				heartbeat, _ := json.Marshal(models.LogEntry{
+				heartbeat, _ := json.Marshal(logging.LogEntry{
 					Timestamp: time.Now(),
 					NodeID:    "balancer",
-					Level:     models.LevelDebug,
+					Level:     logging.LevelDebug,
 					Component: "system",
 					Message:   "heartbeat",
 				})
@@ -234,8 +235,16 @@ func (b *Balancer) ProcessQueue() {
 	}
 }
 
+func (b *Balancer) decrementWorkload(addr string) {
+	b.State.Do(func(s *ClusterState) {
+		if s.NodeWorkloads[addr] > 0 {
+			s.NodeWorkloads[addr]--
+		}
+	})
+}
+
 func (b *Balancer) ProcessBackgroundRequests() {
-	reqs, err := b.Storage.ListModelRequests(models.StatusApproved)
+	reqs, err := b.Storage.ListModelRequests(models2.StatusApproved)
 	if err != nil || len(reqs) == 0 {
 		return
 	}
@@ -245,7 +254,7 @@ func (b *Balancer) ProcessBackgroundRequests() {
 
 		// Map to correct endpoint (using the new Agent paths)
 		path := "/api/models/pull"
-		if r.Type == models.RequestDelete {
+		if r.Type == models2.RequestDelete {
 			path = "/api/models/delete"
 		}
 
@@ -263,7 +272,7 @@ func (b *Balancer) ProcessBackgroundRequests() {
 			})
 			if addr != "" {
 				// Transition to Processing immediately
-				b.Storage.UpdateModelRequestStatus(r.ID, models.StatusProcessing)
+				b.Storage.UpdateModelRequestStatus(r.ID, models2.StatusProcessing)
 				b.Jobs.UpdateJob(r.ID, JobRunning, 10, "Request sent to agent")
 
 				go func(requestID, a, p string, d []byte) {
@@ -278,20 +287,20 @@ func (b *Balancer) ProcessBackgroundRequests() {
 						resp.Body.Close()
 					} else {
 						// On failure, revert to approved so it can be retried
-						b.Storage.UpdateModelRequestStatus(requestID, models.StatusApproved)
+						b.Storage.UpdateModelRequestStatus(requestID, models2.StatusApproved)
 						b.Jobs.UpdateJob(requestID, JobFailed, 0, "Failed to reach agent: "+err.Error())
 					}
 				}(r.ID, addr, path, body)
 			}
 		} else {
-			b.Storage.UpdateModelRequestStatus(r.ID, models.StatusFailed)
+			b.Storage.UpdateModelRequestStatus(r.ID, models2.StatusFailed)
 			b.Jobs.UpdateJob(r.ID, JobFailed, 0, "No target node specified")
 		}
 	}
 }
 
 func (b *Balancer) pollAgentTasks() {
-	reqs, err := b.Storage.ListModelRequests(models.StatusProcessing)
+	reqs, err := b.Storage.ListModelRequests(models2.StatusProcessing)
 	if err != nil || len(reqs) == 0 {
 		return
 	}
@@ -318,7 +327,7 @@ func (b *Balancer) pollAgentTasks() {
 			continue
 		}
 
-		go func(req models.ModelRequest, agentAddr string, bToken string) {
+		go func(req models2.ModelRequest, agentAddr string, bToken string) {
 			scheme := "http"
 			if b.Config.TLS.Enabled {
 				scheme = "https"
@@ -350,13 +359,13 @@ func (b *Balancer) pollAgentTasks() {
 			for _, t := range tasks {
 				if t.ID == req.AgentTaskID {
 					if t.Status == models.TaskCompleted {
-						b.Storage.UpdateModelRequestStatus(req.ID, models.StatusCompleted)
+						b.Storage.UpdateModelRequestStatus(req.ID, models2.StatusCompleted)
 						b.Jobs.UpdateJob(req.ID, JobCompleted, 100, "Task completed by agent")
 
 						// Force a telemetry poll to update local models list
 						go b.pollAgent(agentAddr)
 					} else if t.Status == models.TaskFailed {
-						b.Storage.UpdateModelRequestStatus(req.ID, models.StatusFailed)
+						b.Storage.UpdateModelRequestStatus(req.ID, models2.StatusFailed)
 						b.Jobs.UpdateJob(req.ID, JobFailed, 0, "Agent task failed: "+t.Error)
 					}
 					break

@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	models2 "FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
@@ -35,7 +36,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Check Virtual Models
 	var resolvedModel string
-	var vConfig models.VirtualModelConfig
+	var vConfig models2.VirtualModelConfig
 	found := false
 
 	b.configMu.RLock()
@@ -85,7 +86,7 @@ func (b *Balancer) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
-	var req models.ChatRequest
+	var req models2.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -128,7 +129,7 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Check Virtual Models
-	var vConfig models.VirtualModelConfig
+	var vConfig models2.VirtualModelConfig
 	found := false
 
 	b.configMu.RLock()
@@ -144,10 +145,10 @@ func (b *Balancer) HandleChat(w http.ResponseWriter, r *http.Request) {
 			b.respondError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
-		resp := models.ChatResponse{
+		resp := models2.ChatResponse{
 			Model:     req.Model,
 			CreatedAt: time.Now(),
-			Message:   models.ChatMessage{Role: "assistant", Content: output},
+			Message:   models2.ChatMessage{Role: "assistant", Content: output},
 			Done:      true,
 		}
 		b.jsonResponse(w, http.StatusOK, resp)
@@ -287,7 +288,7 @@ func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 	var requestingUserID string
 	var requestingIsAdmin bool
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		if u, ok := val.(models.User); ok {
+		if u, ok := val.(models2.User); ok {
 			requestingUserID = u.ID
 			requestingIsAdmin = u.IsAdmin
 		}
@@ -318,7 +319,7 @@ func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 	}
 	b.configMu.RUnlock()
 
-	var tags models.TagsResponse
+	var tags models2.TagsResponse
 	tags.Models = make([]models.ModelInfo, 0, len(uniqueModels))
 	for m := range uniqueModels {
 		var info models.ModelInfo
@@ -339,7 +340,7 @@ func (b *Balancer) HandleV1Tags(w http.ResponseWriter, r *http.Request) {
 
 // virtualModelInfo builds a ModelInfo for a virtual model, deriving size and
 // details from the backing targets using the known per-model sizes on disk.
-func virtualModelInfo(name string, cfg models.VirtualModelConfig, modelSizes map[string]int64) models.ModelInfo {
+func virtualModelInfo(name string, cfg models2.VirtualModelConfig, modelSizes map[string]int64) models.ModelInfo {
 	targets := cfg.Targets
 	if cfg.Type == "pipeline" && len(cfg.Steps) > 0 {
 		targets = make([]string, len(cfg.Steps))
@@ -422,12 +423,12 @@ func (b *Balancer) HandleOllamaEmbeddings(w http.ResponseWriter, r *http.Request
 
 func (b *Balancer) getRequestPriority(r *http.Request) int {
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		if user, ok := val.(models.User); ok && user.IsAdmin {
+		if user, ok := val.(models2.User); ok && user.IsAdmin {
 			return 100
 		}
 	}
 	if val := r.Context().Value(auth.ContextKeyClientData); val != nil {
-		if ck, ok := val.(models.ClientKey); ok && ck.Credits > 1000 {
+		if ck, ok := val.(models2.ClientKey); ok && ck.Credits > 1000 {
 			return 50
 		}
 	}

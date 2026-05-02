@@ -1,10 +1,10 @@
 package balancer
 
 import (
-	"FlakyOllama/pkg/protocols"
+	"FlakyOllama/pkg/balancer/adapters"
+	models2 "FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
-	"FlakyOllama/pkg/shared/metrics"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"compress/gzip"
@@ -145,13 +145,13 @@ func (b *Balancer) finalizeProxy(w http.ResponseWriter, resp *http.Response, age
 	b.finalizeProxyWithAdapter(w, resp, agentAddr, modelName, r, surge, nil)
 }
 
-func (b *Balancer) finalizeProxyWithAdapter(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64, adapter protocols.Adapter) {
+func (b *Balancer) finalizeProxyWithAdapter(w http.ResponseWriter, resp *http.Response, agentAddr, modelName string, r *http.Request, surge float64, adapter adapters.Translator) {
 	start := time.Now()
 
 	clientKey, _ := auth.GetTokenFromContext(r.Context())
 	var userID string
 	if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-		if u, ok := val.(models.User); ok {
+		if u, ok := val.(models2.User); ok {
 			userID = u.ID
 		}
 	}
@@ -226,12 +226,10 @@ func (b *Balancer) finalizeProxyWithAdapter(w http.ResponseWriter, resp *http.Re
 		return
 	}
 
-	agentID := agentAddr
 	var providerKey string
 
 	b.State.Do(func(s *ClusterState) {
 		if a, ok := s.Agents[agentAddr]; ok {
-			agentID = a.ID
 			providerKey = a.AgentKey
 		}
 		s.ModelLastUsed[agentAddr+":"+modelName] = time.Now()
@@ -250,8 +248,6 @@ func (b *Balancer) finalizeProxyWithAdapter(w http.ResponseWriter, resp *http.Re
 	default:
 	}
 
-	metrics.InferenceRequestsTotal.WithLabelValues(modelName, agentID, "success").Inc()
-	metrics.InferenceLatency.WithLabelValues(modelName, agentID).Observe(duration.Seconds())
 }
 
 func extractUsage(body []byte) (input, output int) {
@@ -331,4 +327,69 @@ func (b *Balancer) recordSuccess(addr string) {
 			a.Message = "Ready"
 		}
 	})
+}
+
+func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, duration time.Duration, clientKey, userID string, surge float64) {
+	rewardFactor := 1.0
+	if f, ok := b.Config.ModelRewardFactors[model]; ok {
+		rewardFactor = f
+	}
+	costFactor := 1.0
+	if f, ok := b.Config.ModelCostFactors[model]; ok {
+		costFactor = f
+	}
+
+	targetUserID := userID
+	if clientKey != "" {
+		ck, err := b.Storage.GetClientKey(clientKey)
+		if err == nil && ck.UserID != "" {
+			targetUserID = ck.UserID
+		}
+	}
+
+	if targetUserID != "" {
+		p, err := b.Storage.GetUserModelPolicy(targetUserID, model)
+		if err == nil {
+			rewardFactor *= p.RewardFactor
+			costFactor *= p.CostFactor
+		}
+	}
+
+	// If the requesting user owns the agent serving this request:
+	// no cost, no reward, and no quota increment (self-served).
+	var agentOwnerID string
+	b.State.View(func(s ClusterState) {
+		for _, node := range s.Agents {
+			if node.AgentKey == agentID {
+				agentOwnerID = node.UserID
+				break
+			}
+		}
+	})
+	selfServed := agentOwnerID != "" && agentOwnerID == targetUserID
+	if selfServed {
+		costFactor = 0
+		rewardFactor = 0
+	}
+
+	reward := float64(input+output) * 0.001 * rewardFactor * b.Config.GlobalRewardMultiplier
+	cost := float64(input+output) * 0.001 * costFactor * b.Config.GlobalCostMultiplier * surge
+
+	select {
+	case b.TokenCh <- tokenUsageEntry{
+		nodeID:     agentID,
+		model:      model,
+		input:      input,
+		output:     output,
+		reward:     reward,
+		cost:       cost,
+		ttft:       ttft.Milliseconds(),
+		duration:   duration.Milliseconds(),
+		clientKey:  clientKey,
+		userID:     targetUserID,
+		selfServed: selfServed,
+	}:
+	default:
+		logging.Global.Warnf("TokenCh full, dropping usage metric for %s", model)
+	}
 }

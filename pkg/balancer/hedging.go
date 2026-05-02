@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	models2 "FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
 	"FlakyOllama/pkg/shared/models"
@@ -27,7 +28,7 @@ func (b *Balancer) DoHedgedRequest(ctx context.Context, model, path string, body
 	var userID string
 	var isAdmin bool
 	if val := ctx.Value(auth.ContextKeyUser); val != nil {
-		if u, ok := val.(models.User); ok {
+		if u, ok := val.(models2.User); ok {
 			userID = u.ID
 			isAdmin = u.IsAdmin
 		}

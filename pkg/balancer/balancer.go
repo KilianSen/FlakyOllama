@@ -1,12 +1,12 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/adapters"
+	"FlakyOllama/pkg/balancer/adapters/openai"
+	"FlakyOllama/pkg/balancer/config"
+	"FlakyOllama/pkg/balancer/hash"
 	"FlakyOllama/pkg/balancer/queue"
-	"FlakyOllama/pkg/shared/auth"
-	"FlakyOllama/pkg/shared/config"
-	"FlakyOllama/pkg/shared/hash"
 	"FlakyOllama/pkg/shared/logging"
-	"FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/tls"
 	"net/http"
@@ -61,7 +61,7 @@ type Balancer struct {
 	httpClient *http.Client
 	MetricCh   chan metricEntry
 	TokenCh    chan tokenUsageEntry
-	LogCh      chan models.LogEntry
+	LogCh      chan logging.LogEntry
 	stopCh     chan struct{}
 
 	logMu  sync.RWMutex
@@ -95,7 +95,7 @@ func NewBalancer(addr, dbPath string, cfg *config.Config) (*Balancer, error) {
 		},
 		MetricCh: make(chan metricEntry, 1000),
 		TokenCh:  make(chan tokenUsageEntry, 1000),
-		LogCh:    make(chan models.LogEntry, 1000),
+		LogCh:    make(chan logging.LogEntry, 1000),
 		stopCh:   make(chan struct{}),
 		logChs:   make(map[chan string]bool),
 		perfCache: make(map[string]struct {
@@ -132,18 +132,6 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
-
-	// OpenAI Routes
-	r.Route("/v1", func(r chi.Router) {
-		r.Use(b.AuthMiddleware)
-		r.Get("/models", b.HandleV1Models)
-		r.Group(func(r chi.Router) {
-			r.Use(b.InferenceQuotaMiddleware)
-			r.Post("/chat/completions", b.HandleOpenAIChat)
-			r.Post("/completions", b.HandleGenerate)
-			r.Post("/embeddings", b.HandleOpenAIEmbeddings)
-		})
-	})
 
 	// Ollama Routes
 	r.Route("/api", func(r chi.Router) {
@@ -256,82 +244,16 @@ func (b *Balancer) SetupRoutes() http.Handler {
 	r.Get("/api/public/info", b.HandlePublicInfo)
 	r.Get("/api/public/catalog", b.HandleV1Catalog)
 
+	// Adapter Routes
+	for _, adapter := range []adapters.Adapter{
+		openai.NewOpenAIAdapter(),
+		// Register more adapters here
+	} {
+		adapter.RegisterRoutes(r, b)
+	}
+
 	return r
 }
-
-type contextKey string
-
-const ContextKeyForceOwnNode contextKey = "force_own_node"
-
-// InferenceQuotaMiddleware enforces per-key and per-user quotas for inference
-// endpoints only. Agent credits earned by the user are subtracted from their
-// effective usage, so compute contributors can use their own supplied capacity
-// without hitting the quota.
-//
-// If a user's route_preference is "quality_fallback" and their quota is exhausted,
-// a ForceOwnNode flag is set in the context instead of returning 429 — requests
-// then fall back to that user's own agent nodes for free.
-func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. Client key sub-quota
-		if ck, ok := auth.GetClientDataFromContext(r.Context()); ok {
-			if ck.QuotaLimit != -1 && ck.QuotaUsed >= ck.QuotaLimit {
-				b.respondError(w, r, http.StatusTooManyRequests, "API key quota exceeded")
-				return
-			}
-		}
-
-		// 2. User global quota, offset by credits earned via contributed compute
-		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-			if u, ok := val.(models.User); ok && u.QuotaLimit != -1 && u.ID != "" {
-				agentCredits := b.Storage.GetUserAgentCredits(u.ID)
-				effectiveUsed := u.QuotaUsed - int64(agentCredits)
-				if effectiveUsed < 0 {
-					effectiveUsed = 0
-				}
-				if effectiveUsed >= u.QuotaLimit {
-					if u.RoutePreference == "quality_fallback" {
-						// Check if the user has at least one active own node before falling back
-						hasOwnNode := false
-						b.State.View(func(s ClusterState) {
-							for _, node := range s.Agents {
-								if node.UserID == u.ID && node.State != models.StateBroken && !node.Draining {
-									hasOwnNode = true
-									break
-								}
-							}
-						})
-						if hasOwnNode {
-							ctx := context.WithValue(r.Context(), ContextKeyForceOwnNode, true)
-							next.ServeHTTP(w, r.WithContext(ctx))
-							return
-						}
-					}
-					b.respondError(w, r, http.StatusTooManyRequests, "account quota exceeded")
-					return
-				}
-			}
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
-			if user, ok := val.(models.User); ok {
-				if user.IsAdmin {
-					next.ServeHTTP(w, r)
-					return
-				}
-				logging.Global.Warnf("AdminOnly: Access denied for user %s (Not an Admin)", user.Email)
-			}
-		}
-		http.Error(w, "Administrator privileges required", http.StatusForbidden)
-	})
-}
-
 func (b *Balancer) Serve() error {
 	b.server = &http.Server{
 		Addr:    b.addr,
@@ -353,84 +275,11 @@ func (b *Balancer) Stop() {
 	}
 }
 
-// LogSink implementation
-func (b *Balancer) Ship(entry models.LogEntry) {
+// Ship LogSink implementation
+func (b *Balancer) Ship(entry logging.LogEntry) {
 	select {
 	case b.LogCh <- entry:
 	default:
-	}
-}
-
-func (b *Balancer) decrementWorkload(addr string) {
-	b.State.Do(func(s *ClusterState) {
-		if s.NodeWorkloads[addr] > 0 {
-			s.NodeWorkloads[addr]--
-		}
-	})
-}
-
-func (b *Balancer) captureUsage(agentID, model string, input, output int, ttft, duration time.Duration, clientKey, userID string, surge float64) {
-	rewardFactor := 1.0
-	if f, ok := b.Config.ModelRewardFactors[model]; ok {
-		rewardFactor = f
-	}
-	costFactor := 1.0
-	if f, ok := b.Config.ModelCostFactors[model]; ok {
-		costFactor = f
-	}
-
-	targetUserID := userID
-	if clientKey != "" {
-		ck, err := b.Storage.GetClientKey(clientKey)
-		if err == nil && ck.UserID != "" {
-			targetUserID = ck.UserID
-		}
-	}
-
-	if targetUserID != "" {
-		p, err := b.Storage.GetUserModelPolicy(targetUserID, model)
-		if err == nil {
-			rewardFactor *= p.RewardFactor
-			costFactor *= p.CostFactor
-		}
-	}
-
-	// If the requesting user owns the agent serving this request:
-	// no cost, no reward, and no quota increment (self-served).
-	var agentOwnerID string
-	b.State.View(func(s ClusterState) {
-		for _, node := range s.Agents {
-			if node.AgentKey == agentID {
-				agentOwnerID = node.UserID
-				break
-			}
-		}
-	})
-	selfServed := agentOwnerID != "" && agentOwnerID == targetUserID
-	if selfServed {
-		costFactor = 0
-		rewardFactor = 0
-	}
-
-	reward := float64(input+output) * 0.001 * rewardFactor * b.Config.GlobalRewardMultiplier
-	cost := float64(input+output) * 0.001 * costFactor * b.Config.GlobalCostMultiplier * surge
-
-	select {
-	case b.TokenCh <- tokenUsageEntry{
-		nodeID:     agentID,
-		model:      model,
-		input:      input,
-		output:     output,
-		reward:     reward,
-		cost:       cost,
-		ttft:       ttft.Milliseconds(),
-		duration:   duration.Milliseconds(),
-		clientKey:  clientKey,
-		userID:     targetUserID,
-		selfServed: selfServed,
-	}:
-	default:
-		logging.Global.Warnf("TokenCh full, dropping usage metric for %s", model)
 	}
 }
 

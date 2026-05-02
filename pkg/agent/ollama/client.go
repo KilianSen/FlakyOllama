@@ -1,6 +1,7 @@
 package ollama
 
 import (
+	models2 "FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/models"
 	"bytes"
 	"context"
@@ -99,7 +100,7 @@ func (c *Client) GenerateStream(ctx context.Context, req models.InferenceRequest
 }
 
 // ChatStream sends a chat request and returns the streaming response body.
-func (c *Client) ChatStream(ctx context.Context, req models.ChatRequest) (io.ReadCloser, int, error) {
+func (c *Client) ChatStream(ctx context.Context, req models2.ChatRequest) (io.ReadCloser, int, error) {
 	resp, err := c.doRequest(ctx, "POST", "/api/chat", req)
 	if err != nil {
 		return nil, 0, err

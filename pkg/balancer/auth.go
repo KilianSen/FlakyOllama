@@ -1,9 +1,10 @@
 package balancer
 
 import (
+	"FlakyOllama/pkg/balancer/models"
 	"FlakyOllama/pkg/shared/auth"
 	"FlakyOllama/pkg/shared/logging"
-	"FlakyOllama/pkg/shared/models"
+	models2 "FlakyOllama/pkg/shared/models"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -53,7 +54,7 @@ func (b *Balancer) AuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 2. Fall back to Token Middleware (API Keys / Master Token)
-		auth.Middleware([]string{b.Config.AuthToken, b.Config.RemoteToken}, b.Storage, next.ServeHTTP).ServeHTTP(w, r)
+		auth.BearerAuthMiddleware([]string{b.Config.AuthToken, b.Config.RemoteToken}, b.Storage, next.ServeHTTP).ServeHTTP(w, r)
 	})
 }
 
@@ -262,4 +263,77 @@ func (b *Balancer) generateState() string {
 		panic(err)
 	}
 	return base64.URLEncoding.EncodeToString(b2)
+}
+
+type contextKey string
+
+const ContextKeyForceOwnNode contextKey = "force_own_node"
+
+// InferenceQuotaMiddleware enforces per-key and per-user quotas for inference
+// endpoints only. Agent credits earned by the user are subtracted from their
+// effective usage, so compute contributors can use their own supplied capacity
+// without hitting the quota.
+//
+// If a user's route_preference is "quality_fallback" and their quota is exhausted,
+// a ForceOwnNode flag is set in the context instead of returning 429 — requests
+// then fall back to that user's own agent nodes for free.
+func (b *Balancer) InferenceQuotaMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Client key sub-quota
+		if ck, ok := auth.GetClientDataFromContext(r.Context()); ok {
+			if ck.QuotaLimit != -1 && ck.QuotaUsed >= ck.QuotaLimit {
+				b.respondError(w, r, http.StatusTooManyRequests, "API key quota exceeded")
+				return
+			}
+		}
+
+		// 2. User global quota, offset by credits earned via contributed compute
+		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+			if u, ok := val.(models.User); ok && u.QuotaLimit != -1 && u.ID != "" {
+				agentCredits := b.Storage.GetUserAgentCredits(u.ID)
+				effectiveUsed := u.QuotaUsed - int64(agentCredits)
+				if effectiveUsed < 0 {
+					effectiveUsed = 0
+				}
+				if effectiveUsed >= u.QuotaLimit {
+					if u.RoutePreference == "quality_fallback" {
+						// Check if the user has at least one active own node before falling back
+						hasOwnNode := false
+						b.State.View(func(s ClusterState) {
+							for _, node := range s.Agents {
+								if node.UserID == u.ID && node.State != models2.StateBroken && !node.Draining {
+									hasOwnNode = true
+									break
+								}
+							}
+						})
+						if hasOwnNode {
+							ctx := context.WithValue(r.Context(), ContextKeyForceOwnNode, true)
+							next.ServeHTTP(w, r.WithContext(ctx))
+							return
+						}
+					}
+					b.respondError(w, r, http.StatusTooManyRequests, "account quota exceeded")
+					return
+				}
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (b *Balancer) AdminOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if val := r.Context().Value(auth.ContextKeyUser); val != nil {
+			if user, ok := val.(models.User); ok {
+				if user.IsAdmin {
+					next.ServeHTTP(w, r)
+					return
+				}
+				logging.Global.Warnf("AdminOnly: Access denied for user %s (Not an Admin)", user.Email)
+			}
+		}
+		http.Error(w, "Administrator privileges required", http.StatusForbidden)
+	})
 }

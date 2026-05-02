@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// QueuedRequestInfo is a simplified struct for API responses, omitting sensitive fields.
+type QueuedRequestInfo struct {
+	ID          string    `json:"id"`
+	Model       string    `json:"model"`
+	Priority    int       `json:"priority"`
+	ClientIP    string    `json:"client_ip"`
+	ContextHash string    `json:"context_hash"`
+	QueuedAt    time.Time `json:"queued_at"`
+}
+
 // RequestQueue handles thread-safe priority queuing.
 type RequestQueue struct {
 	pq       PriorityQueue
@@ -85,13 +95,13 @@ func (rq *RequestQueue) Pop() *QueuedRequest {
 	return nil
 }
 
-func (rq *RequestQueue) GetSnapshot() []models.QueuedRequestInfo {
+func (rq *RequestQueue) GetSnapshot() []QueuedRequestInfo {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
-	var snapshot []models.QueuedRequestInfo
+	var snapshot []QueuedRequestInfo
 	for _, item := range rq.pq {
-		snapshot = append(snapshot, models.QueuedRequestInfo{
+		snapshot = append(snapshot, QueuedRequestInfo{
 			ID:          item.ID,
 			Model:       item.Request.Model,
 			Priority:    item.Priority,

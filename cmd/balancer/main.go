@@ -2,7 +2,7 @@ package main
 
 import (
 	"FlakyOllama/pkg/balancer"
-	"FlakyOllama/pkg/shared/config"
+	"FlakyOllama/pkg/balancer/config"
 	"FlakyOllama/pkg/shared/logging"
 	"os"
 	"strings"
